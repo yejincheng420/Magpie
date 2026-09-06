@@ -553,6 +553,47 @@
   <ItemGroup>
     <CopyFileToFolders Include="XeSS\XeSS_SR.hlsl"><FileType>Document</FileType></CopyFileToFolders>
   </ItemGroup>
+  <!--
+    排除未编入或实测不可用的效果。
+
+    原因：UI 按 effects\ 目录列举全部效果，不检查对应的原生后端是否编入。选中一个
+    没有后端的效果会导致 NativeEffectBackendFactory 创建失败 → EffectDrawer
+    Initialize 失败 → Renderer::_BuildEffects 直接 return nullptr → 整个缩放启动
+    失败并报错，不是静默降级。
+
+    这里用 Remove 而不是删除上面的条目，好处是可逆：把对应的 Enable* 开关打开
+    （或注释掉这一段）就能恢复，不需要重新整理全部列表。
+
+    每一项的排除条件都与其编译开关绑定，所以将来补上 SDK 打开开关后会自动恢复打包。
+  -->
+  <ItemGroup>
+    <!--
+      注意条件写法：用 '$(X)' != 'true' 而不是 !$(X)。这些开关默认值是空字符串或
+      false，MSBuild 对空字符串求 ! 会报 MSB4086，而字符串比较总是安全的。
+    -->
+    <!-- FSR2/FSR3 Zero-MV upscaler：缺 AMD FidelityFX SDK（MP_ENABLE_FSR2/3_ZEROMV） -->
+    <CopyFileToFolders Remove="FSR2\*.hlsl" Condition="'$(EnableFSR2ZeroMV)' != 'true'" />
+    <CopyFileToFolders Remove="FSR3\*.hlsl" Condition="'$(EnableFSR3ZeroMV)' != 'true'" />
+    <!--
+      FSR4：源码里没有对应的 Enable 开关，也没有 FSR4 的原生后端实现，
+      而且 FSR4 需要 RDNA4 硬件，在 NVIDIA 卡上无论如何都跑不了。无条件排除。
+    -->
+    <CopyFileToFolders Remove="FSR4\*.hlsl" />
+    <!-- RTX Video VSR / Denoise：缺 NVIDIA MAXINE VFX SDK 头文件（$(VFXSdkDir)） -->
+    <CopyFileToFolders Remove="RTXVideo\*.hlsl" Condition="'$(EnableRTXVideoDenoise)' != 'true'" />
+    <!--
+      Frame Guidance 诊断效果：需要 DepthAnythingV2（ORT 头文件）提供深度数据，
+      否则 Depth / DepthResidual / Confidence 无数据源。
+    -->
+    <CopyFileToFolders Remove="Diagnostics\*.hlsl" Condition="'$(EnableDepthAnythingV2)' != 'true'" />
+    <!--
+      DLSS 帧生成：代码已编入且 NGX 创建可能成功，但 DLSSFG 要求 Ada (RTX 40) 的
+      光流加速器。用户在 RTX 2080 Ti 上实测为「选中即报错或黑屏」，所以即使
+      EnableDLSSFrameGeneration=true 也默认从 UI 移除；要打包这个效果需显式设置
+      PackDLSSFrameGenerationEffect=true（例如将来在 40 系机器上测试）。
+    -->
+    <CopyFileToFolders Remove="DLSSFG\*.hlsl" Condition="'$(PackDLSSFrameGenerationEffect)' != 'true'" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="RemoveRetiredSrEffects" BeforeTargets="Build">
     <Delete Files="$(OutDir)effects\DLSS\DLSS_ZeroMV.hlsl;$(OutDir)effects\DLSS\DLSS_ZeroMV_Jitter.hlsl;$(OutDir)effects\DLSS\DLSS_OpticalFlow.hlsl;$(OutDir)effects\FSR2\FSR2_ZeroMV.hlsl;$(OutDir)effects\FSR2\FSR2_ZeroMV_Jitter.hlsl;$(OutDir)effects\FSR2\FSR2_OpticalFlow.hlsl;$(OutDir)effects\FSR3\FSR3_ZeroMV.hlsl;$(OutDir)effects\FSR3\FSR3_ZeroMV_Jitter.hlsl;$(OutDir)effects\FSR3\FSR3_OpticalFlow.hlsl;$(OutDir)effects\FSR4\FSR4_ZeroMV.hlsl;$(OutDir)effects\FSR4\FSR4_ZeroMV_Jitter.hlsl;$(OutDir)effects\FSR4\FSR4_OpticalFlow.hlsl;$(OutDir)effects\XeSS\XeSS_ZeroMV.hlsl;$(OutDir)effects\XeSS\XeSS_ZeroMV_Jitter.hlsl;$(OutDir)effects\XeSS\XeSS_OpticalFlow.hlsl" />

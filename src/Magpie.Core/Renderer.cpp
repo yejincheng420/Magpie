@@ -201,11 +201,12 @@ static DXGI_ADAPTER_DESC1 LogAdapter(IDXGIAdapter4* adapter) noexcept {
 }
 
 static void SetGpuPriority() noexcept {
-	// 来自 https://github.com/obsproject/obs-studio/blob/16cb051a57bb357fe866252c1360ce2c38e2deec/libobs-d3d11/d3d11-subsystem.cpp#L429
-	// 使用 REALTIME 避免与游戏同时运行时 Magpie 的 GPU 工作被持续抢占。
+	// 保持上游 Magpie 的 HIGH，不要用 REALTIME。REALTIME 下 Magpie 的 GPU 工作会
+	// 抢占被缩放的游戏本身，游戏掉帧后缩放窗口只是在重复呈现旧帧，净效果是负的。
+	// RTX 2080 Ti 上实测改回 HIGH 后缩放开销回到官方上游水平。
 	// 这里只更改 GPU 调度类，不会更改 Windows 的 CPU 进程优先级。
 	NTSTATUS status = D3DKMTSetProcessSchedulingPriorityClass(
-		GetCurrentProcess(), D3DKMT_SCHEDULINGPRIORITYCLASS_REALTIME);
+		GetCurrentProcess(), D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH);
 	if (status != STATUS_SUCCESS) {
 		Logger::Get().NTError("D3DKMTSetProcessSchedulingPriorityClass 失败", status);
 	}

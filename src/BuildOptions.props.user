@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    自建构建配置：20/30 系适配 + GPU 调度优先级修复（REALTIME -> HIGH）。
+
+    纯 HLSL 效果（FSR1、Lanczos、Anime4K、CuNNy、RAVU、SMAA…）不需要任何
+    SDK，始终会被打包，无需开关。
+
+    实测结论：开不开这些特性对帧率没有影响（L0 全关版与官方全开版帧数完全一致），
+    特性都在 #ifdef + 运行时空指针判断之后。开关只决定功能是否可用。
+  -->
+  <PropertyGroup>
+    <!-- DLSSNR 同分辨率 AI 滤镜（主要目标） -->
+    <EnableDLSSNR>true</EnableDLSSNR>
+    <!-- DLSS 放大 -->
+    <EnableDLSSSR>true</EnableDLSSSR>
+
+    <!-- NGX 头文件与静态库来自 NVIDIA 公开的 DLSS SDK -->
+    <DLSSSdkDir>C:\Users\yejin\Desktop\Magpie-perf\dlss-sdk\DLSS-main</DLSSSdkDir>
+    <!-- nvngx_dlssnr.dll 直接取现有 Release 包里已验证能在 2080 Ti 跑通的 310.8.SF 变体 -->
+    <DLSSNRRuntimeDir>C:\Users\yejin\Desktop\Magpie-Experimental-x64</DLSSNRRuntimeDir>
+
+    <!-- XeSS 放大 + XeSS 帧生成（通用显卡 x2 Zero-MV 路径，Turing 可用） -->
+    <EnableXeSSZeroMV>true</EnableXeSSZeroMV>
+    <EnableXeSSFrameGeneration>true</EnableXeSSFrameGeneration>
+    <XeSSSdkDir>C:\Users\yejin\Desktop\Magpie-perf\xess-sdk\xess-main</XeSSSdkDir>
+
+    <!--
+      NVIDIA Optical Flow（Turing+ 硬件光流加速器）：给 DLSSNR 的 Frame Guidance
+      Motion Only 档提供真实运动矢量。纯头文件，运行时走驱动自带的 nvofapi64.dll。
+      头文件来自官方 Optical Flow SDK 5.0.7。
+    -->
+    <EnableNvidiaOpticalFlow>true</EnableNvidiaOpticalFlow>
+    <NvidiaOpticalFlowSdkDir>C:\Users\yejin\Desktop\Magpie-perf\nvof-sdk</NvidiaOpticalFlowSdkDir>
+  </PropertyGroup>
+
+</Project>
