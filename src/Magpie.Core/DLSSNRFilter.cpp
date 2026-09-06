@@ -31,7 +31,9 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept {
 	return DLSSNRSettings{
 		.enableInputResolutionScaling =
 			getParameter("enableInputResolutionScaling", 0.0f) >= 0.5f,
-		.samplingQuality = getParameter("samplingQuality", 0.0f) >= 0.5f ? 1u : 0u,
+		.samplingQuality = static_cast<uint32_t>(std::clamp(
+			static_cast<int>(std::lround(
+				getParameter("samplingQuality", 0.0f))), 0, 2)),
 		.inputResolutionPercent = static_cast<uint32_t>(std::clamp(
 			static_cast<int>(std::lround(
 				getParameter("inputResolutionPercent", 100.0f))), 25, 100)),
@@ -293,6 +295,50 @@ void DownsampleColorHorizontal(uint3 tid : SV_DispatchThreadID) {
         totalWeight += weight;
     }
     OutputColor[tid.xy] = total / (abs(totalWeight) > 1e-6 ? totalWeight : 1.0);
+}
+)";
+
+// UltraPerformance 档（samplingQuality=2）的单趟降采样：每输出像素直接对源做
+// 4-tap bilinear（源像素步长 = 放大比的整数近似），合并水平与垂直两趟，
+// 无中间暂存纹理。面向 inputResolutionPercent < 35% 的极端低分辨率场景——
+// 此时源图像本身噪声主导，插值核的锐度差异无意义，追求最小 GPU 开销。
+constexpr char COLOR_DOWNSAMPLE_BILINEAR_HLSL[] = R"(
+Texture2D<float4> InputColor : register(t0);
+RWTexture2D<float4> OutputColor : register(u0);
+
+cbuffer ResampleParams : register(b0) {
+    uint2 SourceExtent;
+    uint2 TargetExtent;
+    uint Padding0;
+    float2 MotionScale;
+    float ResidualMultiplier;
+    float ResidualSaturation;
+    float ResidualLightness;
+    float ShadowStructureMultiplier;
+    float ReflectionGlowMultiplier;
+};
+
+[numthreads(8, 8, 1)]
+void DownsampleColorBilinear(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= TargetExtent)) return;
+    // 目标像素中心映射到源坐标。
+    float2 position = (float2(tid.xy) + 0.5) * float2(SourceExtent) /
+        float2(TargetExtent) - 0.5;
+    int2 p0 = int2(floor(position));
+    float2 fracPos = position - float2(p0);
+    // 源步长至少 1 像素；当放大比大于 2 时相邻 tap 之间会跳过源像素，
+    // 这是刻意的稀疏 4-tap 采样（最低成本），不是完整盒滤波。
+    int2 step = max(int2(1, 1), int2(round(float2(SourceExtent) /
+        float2(TargetExtent))));
+    int2 p1 = min(p0 + step, int2(SourceExtent) - 1);
+    p0 = clamp(p0, int2(0, 0), int2(SourceExtent) - 1);
+    float4 c00 = InputColor.Load(int3(p0, 0));
+    float4 c10 = InputColor.Load(int3(int2(p1.x, p0.y), 0));
+    float4 c01 = InputColor.Load(int3(int2(p0.x, p1.y), 0));
+    float4 c11 = InputColor.Load(int3(int2(p1.x, p1.y), 0));
+    float4 top = lerp(c00, c10, fracPos.x);
+    float4 bottom = lerp(c01, c11, fracPos.x);
+    OutputColor[tid.xy] = lerp(top, bottom, fracPos.y);
 }
 )";
 
@@ -709,6 +755,43 @@ void CompositeResidualVertical(uint3 tid : SV_DispatchThreadID) {
 }
 )";
 
+// UltraPerformance 档（samplingQuality=2）的残差合成：跳过水平中间趟，
+// 直接用硬件 LinearClamp 采样器直读低分辨率 controlledResidual（归一化 UV，
+// SampleLevel 双线性），一趟完成上采样 + 合成。残差图在该档位下本就是超模糊
+// 的 delta，硬件 bilinear 的画质差异无意义。
+constexpr char RESIDUAL_COMPOSITE_BILINEAR_HLSL[] = R"(
+Texture2D<float4> OriginalColor : register(t0);
+Texture2D<float4> ControlledResidual : register(t1);
+RWTexture2D<float4> OutputColor : register(u0);
+SamplerState LinearClampSampler : register(s0);
+
+cbuffer ResampleParams : register(b0) {
+    uint2 SourceExtent;
+    uint2 TargetExtent;
+    uint Padding0;
+    float2 MotionScale;
+    float ResidualMultiplier;
+    float ResidualSaturation;
+    float ResidualLightness;
+    float ShadowStructureMultiplier;
+    float ReflectionGlowMultiplier;
+};
+
+[numthreads(8, 8, 1)]
+void CompositeResidualBilinear(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= SourceExtent)) return;
+    float4 storedOriginal = OriginalColor.Load(int3(tid.xy, 0));
+    float3 original = storedOriginal.rgb;
+    // 目标（全分辨率）像素中心映射回低分辨率残差纹理的归一化 UV。
+    float2 uv = (float2(tid.xy) + 0.5) * float2(TargetExtent) /
+        float2(SourceExtent) / float2(TargetExtent);
+    float3 residual = ControlledResidual.SampleLevel(
+        LinearClampSampler, uv, 0.0).rgb;
+    OutputColor[tid.xy] = float4(
+        saturate(original + residual), storedOriginal.a);
+}
+)";
+
 struct ResampleConstants {
 	uint32_t sourceWidth = 0;
 	uint32_t sourceHeight = 0;
@@ -819,6 +902,10 @@ struct DLSSNRFilter::Impl {
 	// Sampling Quality 档（Lanczos3）的可选 shader。为空表示未启用该档。
 	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleVerticalLanczos3Shader11;
 	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleHorizontalLanczos3Shader11;
+	// UltraPerformance 档（单趟 bilinear）的可选 shader 与采样器。为空表示未启用。
+	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleBilinearShader11;
+	winrt::com_ptr<ID3D11ComputeShader> residualCompositeBilinearShader11;
+	winrt::com_ptr<ID3D11SamplerState> linearClampSampler11;
 	winrt::com_ptr<ID3D11ComputeShader> guidanceDownsampleShader11;
 	winrt::com_ptr<ID3D11ComputeShader> residualPrepareShader11;
 	winrt::com_ptr<ID3D11ComputeShader> residualHorizontalShader11;
@@ -889,9 +976,10 @@ struct DLSSNRFilter::Impl {
 	uint32_t height = 0;
 	bool convertInputToRgba = false;
 	bool useResolutionScaling = false;
-	// Sampling Quality 档（0=Performance Lanczos2/Catmull-Rom, 1=Quality Lanczos3）。
-	// 只影响降采样与残差上采样的插值核，不改变管线结构与 NGX feature。
-	bool qualitySampling = false;
+	// Sampling Quality 档（0=Performance Lanczos2/Catmull-Rom,
+	// 1=Quality Lanczos3/MN, 2=UltraPerformance 单趟 bilinear）。
+	// 只影响降采样与残差上采样的插值方式，不改变管线结构与 NGX feature。
+	uint32_t samplingTier = 0;
 	bool coreRegistered = false;
 	bool snippetInitialized = false;
 	bool snippetCallerHookInstalled = false;
@@ -1501,7 +1589,7 @@ static bool CreateResolutionScalingResources(
 			impl.residualVerticalCompositeShader11)) {
 		return false;
 	}
-	if (impl.qualitySampling) {
+	if (impl.samplingTier == 1) {
 		if (!CreateComputeShader(
 				impl, COLOR_DOWNSAMPLE_LANCZOS3_HLSL, "DownsampleColorVertical",
 				"DLSSNRColorDownsampleVerticalL3",
@@ -1520,6 +1608,32 @@ static bool CreateResolutionScalingResources(
 				impl.residualVerticalCompositeMNShader11)) {
 			Logger::Get().ComError(
 				"Create DLSSNR quality sampling shaders failed", S_OK);
+			return false;
+		}
+	} else if (impl.samplingTier == 2) {
+		D3D11_SAMPLER_DESC samplerDesc{};
+		samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+		samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW =
+			D3D11_TEXTURE_ADDRESS_CLAMP;
+		samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+		samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		const HRESULT samplerHr = impl.device11->CreateSamplerState(
+			&samplerDesc, impl.linearClampSampler11.put());
+		if (FAILED(samplerHr)) {
+			Logger::Get().ComError(
+				"Create DLSSNR linear clamp sampler failed", samplerHr);
+			return false;
+		}
+		if (!CreateComputeShader(
+				impl, COLOR_DOWNSAMPLE_BILINEAR_HLSL, "DownsampleColorBilinear",
+				"DLSSNRColorDownsampleBilinear",
+				impl.colorDownsampleBilinearShader11) ||
+			!CreateComputeShader(
+				impl, RESIDUAL_COMPOSITE_BILINEAR_HLSL, "CompositeResidualBilinear",
+				"DLSSNRResidualCompositeBilinear",
+				impl.residualCompositeBilinearShader11)) {
+			Logger::Get().ComError(
+				"Create DLSSNR ultra-performance sampling shaders failed", S_OK);
 			return false;
 		}
 	}
@@ -1698,6 +1812,37 @@ static bool PrepareInput(
 ) noexcept {
 	if (impl.useResolutionScaling &&
 		(impl.width != impl.sourceWidth || impl.height != impl.sourceHeight)) {
+		if (impl.samplingTier == 2 && impl.colorDownsampleBilinearShader11) {
+			// UltraPerformance：单趟 4-tap bilinear，无中间纹理。
+			const ResampleConstants constants{
+				.sourceWidth = impl.sourceWidth,
+				.sourceHeight = impl.sourceHeight,
+				.targetWidth = impl.width,
+				.targetHeight = impl.height,
+				.motionScaleX = float(impl.width) / float(impl.sourceWidth),
+				.motionScaleY = float(impl.height) / float(impl.sourceHeight)
+			};
+			impl.context11->UpdateSubresource(
+				impl.resampleConstants11.get(), 0, nullptr, &constants, 0, 0);
+			ID3D11ShaderResourceView* srv = impl.inputSrv11.get();
+			ID3D11UnorderedAccessView* uav = impl.sharedInputUav11.get();
+			ID3D11Buffer* constantBuffer = impl.resampleConstants11.get();
+			impl.context11->CSSetShader(
+				impl.colorDownsampleBilinearShader11.get(), nullptr, 0);
+			impl.context11->CSSetShaderResources(0, 1, &srv);
+			impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			impl.context11->CSSetConstantBuffers(0, 1, &constantBuffer);
+			impl.context11->Dispatch(
+				(impl.width + 7) / 8, (impl.height + 7) / 8, 1);
+			ID3D11ShaderResourceView* nullSrv = nullptr;
+			ID3D11UnorderedAccessView* nullUav = nullptr;
+			ID3D11Buffer* nullBuffer = nullptr;
+			impl.context11->CSSetShaderResources(0, 1, &nullSrv);
+			impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+			impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
+			impl.context11->CSSetShader(nullptr, nullptr, 0);
+			return true;
+		}
 		const ResampleConstants constants{
 			.sourceWidth = impl.sourceWidth,
 			.sourceHeight = impl.sourceHeight,
@@ -1712,7 +1857,7 @@ static bool PrepareInput(
 		ID3D11UnorderedAccessView* uav = impl.resampleIntermediateUav11.get();
 		ID3D11Buffer* constantBuffer = impl.resampleConstants11.get();
 		impl.context11->CSSetShader(
-			impl.qualitySampling
+			impl.samplingTier == 1
 				? impl.colorDownsampleVerticalLanczos3Shader11.get()
 				: impl.colorDownsampleVerticalShader11.get(), nullptr, 0);
 		impl.context11->CSSetShaderResources(0, 1, &srv);
@@ -1729,7 +1874,7 @@ static bool PrepareInput(
         srv = impl.resampleIntermediateSrv11.get();
         uav = impl.sharedInputUav11.get();
         impl.context11->CSSetShader(
-            impl.qualitySampling
+            impl.samplingTier == 1
                 ? impl.colorDownsampleHorizontalLanczos3Shader11.get()
                 : impl.colorDownsampleHorizontalShader11.get(), nullptr, 0);
         impl.context11->CSSetShaderResources(0, 1, &srv);
@@ -1944,11 +2089,42 @@ static bool CompositeResidual(
 	impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 
 	ID3D11ShaderResourceView* verticalResidual = impl.controlledResidualSrv11.get();
+	if (impl.samplingTier == 2 && impl.residualCompositeBilinearShader11) {
+		// UltraPerformance：跳过水平中间趟，硬件 bilinear 直读合成。
+		ID3D11ShaderResourceView* srvs[]{
+			impl.inputSrv11.get(), impl.controlledResidualSrv11.get()
+		};
+		ID3D11UnorderedAccessView* compositeUav =
+			impl.compositeOutputUav11.get();
+		ID3D11SamplerState* sampler = impl.linearClampSampler11.get();
+		ID3D11Buffer* bilinearConstants = impl.resampleConstants11.get();
+		impl.context11->CSSetShader(
+			impl.residualCompositeBilinearShader11.get(), nullptr, 0);
+		impl.context11->CSSetShaderResources(
+			0, ARRAYSIZE(srvs), srvs);
+		impl.context11->CSSetSamplers(0, 1, &sampler);
+		impl.context11->CSSetUnorderedAccessViews(
+			0, 1, &compositeUav, nullptr);
+		impl.context11->CSSetConstantBuffers(0, 1, &bilinearConstants);
+		impl.context11->Dispatch(
+			(impl.sourceWidth + 7) / 8, (impl.sourceHeight + 7) / 8, 1);
+		ID3D11ShaderResourceView* nullSrvs[ARRAYSIZE(srvs)]{};
+		ID3D11SamplerState* nullSampler = nullptr;
+		ID3D11UnorderedAccessView* bilinearNullUav = nullptr;
+		ID3D11Buffer* bilinearNullBuffer = nullptr;
+		impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		impl.context11->CSSetSamplers(0, 1, &nullSampler);
+		impl.context11->CSSetUnorderedAccessViews(0, 1, &bilinearNullUav, nullptr);
+		impl.context11->CSSetConstantBuffers(0, 1, &bilinearNullBuffer);
+		impl.context11->CSSetShader(nullptr, nullptr, 0);
+		impl.context11->CopyResource(output, impl.compositeOutput11.get());
+		return true;
+	}
 	if (impl.sourceWidth != impl.width) {
 		ID3D11ShaderResourceView* horizontalSrv = impl.controlledResidualSrv11.get();
 		ID3D11UnorderedAccessView* horizontalUav = impl.resampleIntermediateUav11.get();
 		impl.context11->CSSetShader(
-			impl.qualitySampling
+			impl.samplingTier == 1
 				? impl.residualHorizontalMNShader11.get()
 				: impl.residualHorizontalShader11.get(), nullptr, 0);
 		impl.context11->CSSetShaderResources(0, 1, &horizontalSrv);
@@ -1965,7 +2141,7 @@ static bool CompositeResidual(
 	ID3D11UnorderedAccessView* compositeUav =
 		impl.compositeOutputUav11.get();
 	impl.context11->CSSetShader(
-		impl.qualitySampling
+		impl.samplingTier == 1
 			? impl.residualVerticalCompositeMNShader11.get()
 			: impl.residualVerticalCompositeShader11.get(), nullptr, 0);
 	impl.context11->CSSetShaderResources(
@@ -2057,12 +2233,17 @@ bool DLSSNRFilter::ApplyLiveParameters(
 			name == "reflectionGlowMultiplier") {
 			residualChanged = true;
 		} else if (name == "samplingQuality") {
-			// Quality 档 shader 在 Initialize 时按需创建；若初始化时是 Performance
-			// 档（未编译 Lanczos3 shader），这里无法热切换，退回要求重启。
-			if (_impl->qualitySampling != (candidate.samplingQuality != 0) &&
-				candidate.samplingQuality != 0 && !_impl->colorDownsampleVerticalLanczos3Shader11) {
-				// Quality 档的 Lanczos3 降采样 shader 未编译（Performance 启动），无法热切换
-				return false;
+			// 档位 shader 在 Initialize 时按需创建；若目标档的 shader 未编译
+			//（如 Performance 启动后热切 Quality/UltraPerformance），无法热切换，
+			// 返回 false 让框架要求重启缩放。降档（任何档 → Performance）总是可行。
+			const uint32_t target = candidate.samplingQuality;
+			if (target != _impl->samplingTier) {
+				if (target == 1 && !_impl->colorDownsampleVerticalLanczos3Shader11) {
+					return false;
+				}
+				if (target == 2 && !_impl->colorDownsampleBilinearShader11) {
+					return false;
+				}
 			}
 			samplingChanged = true;
 		} else {
@@ -2072,7 +2253,7 @@ bool DLSSNRFilter::ApplyLiveParameters(
 
 	if (samplingChanged) {
 		_settings.samplingQuality = candidate.samplingQuality;
-		_impl->qualitySampling = candidate.samplingQuality != 0;
+		_impl->samplingTier = candidate.samplingQuality;
 	}
 	_settings.style = candidate.style;
 	_settings.intensity = candidate.intensity;
@@ -2150,7 +2331,7 @@ bool DLSSNRFilter::Initialize(
 	impl->sourceWidth = inputDesc.Width;
 	impl->sourceHeight = inputDesc.Height;
 	impl->useResolutionScaling = settings.enableInputResolutionScaling;
-	impl->qualitySampling = settings.samplingQuality != 0;
+	impl->samplingTier = settings.samplingQuality;
 	const uint32_t resolutionPercent = std::clamp(
 		settings.inputResolutionPercent, 25u, 100u);
 	impl->width = impl->useResolutionScaling ? std::max(
@@ -2368,9 +2549,11 @@ bool DLSSNRFilter::Initialize(
 		"motionVectorQuality={} autoMask={} uiCorrection={} depth=zero-contract disabled=false",
 		ENABLE_CORE_FEATURE18_DIAGNOSTIC ? "core-diagnostic" : "signed-snippet",
 		impl->sourceWidth, impl->sourceHeight, static_cast<uint32_t>(inputDesc.Format),
-		impl->qualitySampling ? 1 : 0,
-		impl->qualitySampling ? "lanczos3" : "lanczos2-aa",
-		impl->qualitySampling ? "mitchell-netravali-5tap" : "catmull-rom-4+4",
+		impl->samplingTier,
+		impl->samplingTier == 1 ? "lanczos3" :
+			impl->samplingTier == 2 ? "bilinear-4tap-single-pass" : "lanczos2-aa",
+		impl->samplingTier == 1 ? "mitchell-netravali-5tap" :
+			impl->samplingTier == 2 ? "hardware-bilinear-direct" : "catmull-rom-4+4",
 		impl->width, impl->height,
 		impl->useResolutionScaling, _settings.inputResolutionPercent,
 		_settings.residualMultiplier,

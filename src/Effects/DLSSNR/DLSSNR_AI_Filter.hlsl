@@ -20,6 +20,7 @@ int enableInputResolutionScaling;
 //!DEFAULT 0
 //!OPTION 0 Performance
 //!OPTION 1 Quality
+//!OPTION 2 UltraPerformance
 int samplingQuality;
 
 //!PARAMETER
