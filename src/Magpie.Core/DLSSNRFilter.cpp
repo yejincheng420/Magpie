@@ -31,6 +31,7 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept {
 	return DLSSNRSettings{
 		.enableInputResolutionScaling =
 			getParameter("enableInputResolutionScaling", 0.0f) >= 0.5f,
+		.samplingQuality = getParameter("samplingQuality", 0.0f) >= 0.5f ? 1u : 0u,
 		.inputResolutionPercent = static_cast<uint32_t>(std::clamp(
 			static_cast<int>(std::lround(
 				getParameter("inputResolutionPercent", 100.0f))), 25, 100)),
@@ -216,6 +217,77 @@ void DownsampleColorHorizontal(uint3 tid : SV_DispatchThreadID) {
     [loop]
     for (int x = first; x <= last; ++x) {
         float weight = Lanczos2((float(x) - position) * scale);
+        total += InputColor.Load(int3(
+            clamp(x, 0, int(SourceExtent.x) - 1), tid.y, 0)) * weight;
+        totalWeight += weight;
+    }
+    OutputColor[tid.xy] = total / (abs(totalWeight) > 1e-6 ? totalWeight : 1.0);
+}
+)";
+
+// Sampling Quality 档（samplingQuality=1）使用的 3-lobe Lanczos 版本。与上面的
+// 2-lobe 版本结构完全一致，只更换插值核并相应扩大 support 半径，因此可以复用
+// 相同的 dispatch 几何与常量布局。Quality 档在低输入分辨率下保留更多中频。
+constexpr char COLOR_DOWNSAMPLE_LANCZOS3_HLSL[] = R"(
+Texture2D<float4> InputColor : register(t0);
+RWTexture2D<float4> OutputColor : register(u0);
+
+cbuffer ResampleParams : register(b0) {
+    uint2 SourceExtent;
+    uint2 TargetExtent;
+    uint Padding0;
+    float2 MotionScale;
+    float ResidualMultiplier;
+    float ResidualSaturation;
+    float ResidualLightness;
+    float ShadowStructureMultiplier;
+    float ReflectionGlowMultiplier;
+};
+
+float Sinc3(float x) {
+    if (abs(x) < 1e-5) return 1.0;
+    x *= 3.14159265358979323846;
+    return sin(x) / x;
+}
+
+float Lanczos3(float x) {
+    return abs(x) < 3.0 ? Sinc3(x) * Sinc3(x / 3.0) : 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void DownsampleColorVertical(uint3 tid : SV_DispatchThreadID) {
+    if (tid.x >= SourceExtent.x || tid.y >= TargetExtent.y) return;
+    float scale = float(TargetExtent.y) / float(SourceExtent.y);
+    float position = (float(tid.y) + 0.5) / scale - 0.5;
+    float support = 3.0 / scale;
+    int first = int(ceil(position - support));
+    int last = int(floor(position + support));
+    float4 total = 0.0;
+    float totalWeight = 0.0;
+    [loop]
+    for (int y = first; y <= last; ++y) {
+        float weight = Lanczos3((float(y) - position) * scale);
+        total += InputColor.Load(int3(tid.x,
+            clamp(y, 0, int(SourceExtent.y) - 1), 0)) * weight;
+        totalWeight += weight;
+    }
+    // Keep negative lobes in the shared FP16 intermediate, including alpha.
+    OutputColor[tid.xy] = total / (abs(totalWeight) > 1e-6 ? totalWeight : 1.0);
+}
+
+[numthreads(8, 8, 1)]
+void DownsampleColorHorizontal(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= TargetExtent)) return;
+    float scale = float(TargetExtent.x) / float(SourceExtent.x);
+    float position = (float(tid.x) + 0.5) / scale - 0.5;
+    float support = 3.0 / scale;
+    int first = int(ceil(position - support));
+    int last = int(floor(position + support));
+    float4 total = 0.0;
+    float totalWeight = 0.0;
+    [loop]
+    for (int x = first; x <= last; ++x) {
+        float weight = Lanczos3((float(x) - position) * scale);
         total += InputColor.Load(int3(
             clamp(x, 0, int(SourceExtent.x) - 1), tid.y, 0)) * weight;
         totalWeight += weight;
@@ -454,6 +526,69 @@ void UpsampleResidualHorizontal(uint3 tid : SV_DispatchThreadID) {
 }
 )";
 
+// Sampling Quality 档（samplingQuality=1）的残差水平上采样：与 Catmull-Rom 版本
+// 结构一致，只把 4-tap 核换成 Mitchell-Netravali（B=C=1/3）并放宽 unroll 边界。
+// 残差是带正负的高频 delta，不是画面本身——上采样核首要目标是抑制振铃而不是
+// 锐度，MN 核比 Catmull-Rom（负瓣更强）与 Lanczos3（长振荡尾巴）都更适合。
+constexpr char RESIDUAL_HORIZONTAL_MN_HLSL[] = R"(
+Texture2D<float4> ControlledResidual : register(t0);
+RWTexture2D<float4> HorizontalResidual : register(u0);
+
+cbuffer ResampleParams : register(b0) {
+    uint2 SourceExtent;
+    uint2 TargetExtent;
+    uint Padding0;
+    float2 MotionScale;
+    float ResidualMultiplier;
+    float ResidualSaturation;
+    float ResidualLightness;
+    float ShadowStructureMultiplier;
+    float ReflectionGlowMultiplier;
+};
+
+// Mitchell & Netravali (1988), B = C = 1/3
+float MitchellNetravali(float x) {
+    x = abs(x);
+    if (x < 1.0) {
+        return ((12.0 - 9.0 * 0.33333333 - 6.0 * 0.33333333) * x * x * x +
+            (-18.0 + 12.0 * 0.33333333 + 6.0 * 0.33333333) * x * x +
+            (6.0 - 2.0 * 0.33333333)) / 6.0;
+    }
+    if (x < 2.0) {
+        return ((-0.33333333 - 6.0 * 0.33333333) * x * x * x +
+            (6.0 * 0.33333333 + 30.0 * 0.33333333) * x * x +
+            (-12.0 * 0.33333333 - 48.0 * 0.33333333) * x +
+            (8.0 * 0.33333333 + 24.0 * 0.33333333)) / 6.0;
+    }
+    return 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void UpsampleResidualHorizontal(uint3 tid : SV_DispatchThreadID) {
+    if (tid.x >= SourceExtent.x || tid.y >= TargetExtent.y) return;
+    if (SourceExtent.x == TargetExtent.x) {
+        HorizontalResidual[tid.xy] =
+            ControlledResidual.Load(int3(tid.xy, 0));
+        return;
+    }
+    float reducedPosition = (float(tid.x) + 0.5) *
+        float(TargetExtent.x) / float(SourceExtent.x) - 0.5;
+    int center = int(floor(reducedPosition));
+    float3 residual = 0.0;
+    float totalWeight = 0.0;
+    [unroll]
+    for (int x = -2; x <= 2; ++x) {
+        float weight = MitchellNetravali(reducedPosition - float(center + x));
+        int sampleX = clamp(center + x, 0, int(TargetExtent.x) - 1);
+        int3 samplePixel = int3(sampleX, tid.y, 0);
+        residual += ControlledResidual.Load(samplePixel).rgb * weight;
+        totalWeight += weight;
+    }
+    residual /= abs(totalWeight) > 1e-6 ? totalWeight : 1.0;
+    HorizontalResidual[tid.xy] = float4(residual, 0.0);
+}
+)";
+
 constexpr char RESIDUAL_VERTICAL_COMPOSITE_HLSL[] = R"(
 Texture2D<float4> OriginalColor : register(t0);
 Texture2D<float4> HorizontalResidual : register(t1);
@@ -496,6 +631,72 @@ void CompositeResidualVertical(uint3 tid : SV_DispatchThreadID) {
         [unroll]
         for (int y = -1; y <= 2; ++y) {
             float weight = CatmullRom(reducedPosition - float(center + y));
+            int sampleY = clamp(center + y, 0, int(TargetExtent.y) - 1);
+            residual += HorizontalResidual.Load(
+                int3(tid.x, sampleY, 0)).rgb * weight;
+            totalWeight += weight;
+        }
+        residual /= abs(totalWeight) > 1e-6 ? totalWeight : 1.0;
+    }
+    OutputColor[tid.xy] = float4(
+        saturate(original + residual), storedOriginal.a);
+}
+)";
+
+// Sampling Quality 档（samplingQuality=1）的残差垂直合成：与 Catmull-Rom 版本
+// 结构一致，只把 4-tap 核换成 Mitchell-Netravali（B=C=1/3）并放宽 unroll 边界。
+constexpr char RESIDUAL_VERTICAL_COMPOSITE_MN_HLSL[] = R"(
+Texture2D<float4> OriginalColor : register(t0);
+Texture2D<float4> HorizontalResidual : register(t1);
+RWTexture2D<float4> OutputColor : register(u0);
+
+cbuffer ResampleParams : register(b0) {
+    uint2 SourceExtent;
+    uint2 TargetExtent;
+    uint Padding0;
+    float2 MotionScale;
+    float ResidualMultiplier;
+    float ResidualSaturation;
+    float ResidualLightness;
+    float ShadowStructureMultiplier;
+    float ReflectionGlowMultiplier;
+};
+
+// Mitchell & Netravali (1988), B = C = 1/3
+float MitchellNetravali(float x) {
+    x = abs(x);
+    if (x < 1.0) {
+        return ((12.0 - 9.0 * 0.33333333 - 6.0 * 0.33333333) * x * x * x +
+            (-18.0 + 12.0 * 0.33333333 + 6.0 * 0.33333333) * x * x +
+            (6.0 - 2.0 * 0.33333333)) / 6.0;
+    }
+    if (x < 2.0) {
+        return ((-0.33333333 - 6.0 * 0.33333333) * x * x * x +
+            (6.0 * 0.33333333 + 30.0 * 0.33333333) * x * x +
+            (-12.0 * 0.33333333 - 48.0 * 0.33333333) * x +
+            (8.0 * 0.33333333 + 24.0 * 0.33333333)) / 6.0;
+    }
+    return 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void CompositeResidualVertical(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= SourceExtent)) return;
+    float4 storedOriginal = OriginalColor.Load(int3(tid.xy, 0));
+    // A typed BGRA SRV already returns logical RGBA components.
+    float3 original = storedOriginal.rgb;
+    float3 residual = 0.0;
+    if (SourceExtent.y == TargetExtent.y) {
+        residual = HorizontalResidual.Load(int3(tid.xy, 0)).rgb;
+    } else {
+        float reducedPosition = (float(tid.y) + 0.5) *
+            float(TargetExtent.y) / float(SourceExtent.y) - 0.5;
+        int center = int(floor(reducedPosition));
+        residual = 0.0;
+        float totalWeight = 0.0;
+        [unroll]
+        for (int y = -2; y <= 2; ++y) {
+            float weight = MitchellNetravali(reducedPosition - float(center + y));
             int sampleY = clamp(center + y, 0, int(TargetExtent.y) - 1);
             residual += HorizontalResidual.Load(
                 int3(tid.x, sampleY, 0)).rgb * weight;
@@ -615,10 +816,16 @@ struct DLSSNRFilter::Impl {
 	winrt::com_ptr<ID3D11ComputeShader> colorConvertShader11;
 	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleVerticalShader11;
 	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleHorizontalShader11;
+	// Sampling Quality 档（Lanczos3）的可选 shader。为空表示未启用该档。
+	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleVerticalLanczos3Shader11;
+	winrt::com_ptr<ID3D11ComputeShader> colorDownsampleHorizontalLanczos3Shader11;
 	winrt::com_ptr<ID3D11ComputeShader> guidanceDownsampleShader11;
 	winrt::com_ptr<ID3D11ComputeShader> residualPrepareShader11;
 	winrt::com_ptr<ID3D11ComputeShader> residualHorizontalShader11;
 	winrt::com_ptr<ID3D11ComputeShader> residualVerticalCompositeShader11;
+	// Sampling Quality 档（Lanczos3 降采样 + MN 残差上采样）的可选 shader。为空表示未启用该档。
+	winrt::com_ptr<ID3D11ComputeShader> residualHorizontalMNShader11;
+	winrt::com_ptr<ID3D11ComputeShader> residualVerticalCompositeMNShader11;
 	winrt::com_ptr<ID3D11Buffer> resampleConstants11;
 	winrt::com_ptr<ID3D11Texture2D> reducedMotion11;
 	winrt::com_ptr<ID3D11Texture2D> reducedDepth11;
@@ -682,6 +889,9 @@ struct DLSSNRFilter::Impl {
 	uint32_t height = 0;
 	bool convertInputToRgba = false;
 	bool useResolutionScaling = false;
+	// Sampling Quality 档（0=Performance Lanczos2/Catmull-Rom, 1=Quality Lanczos3）。
+	// 只影响降采样与残差上采样的插值核，不改变管线结构与 NGX feature。
+	bool qualitySampling = false;
 	bool coreRegistered = false;
 	bool snippetInitialized = false;
 	bool snippetCallerHookInstalled = false;
@@ -1265,28 +1475,55 @@ static bool CreateResolutionScalingResources(
 		return false;
 	}
 
-	return CreateComputeShader(
+	// Performance 档（默认）shader 总是创建；Quality 档仅在启用时创建，
+	// 避免无谓的编译时间。
+	if (!CreateComputeShader(
 			impl, COLOR_DOWNSAMPLE_HLSL, "DownsampleColorVertical",
-            "DLSSNRColorDownsampleVertical", impl.colorDownsampleVerticalShader11) &&
-        CreateComputeShader(
+            "DLSSNRColorDownsampleVertical", impl.colorDownsampleVerticalShader11) ||
+        !CreateComputeShader(
             impl, COLOR_DOWNSAMPLE_HLSL, "DownsampleColorHorizontal",
-            "DLSSNRColorDownsampleHorizontal", impl.colorDownsampleHorizontalShader11) &&
-        (!impl.convertInputToRgba || CreateComputeShader(
+            "DLSSNRColorDownsampleHorizontal", impl.colorDownsampleHorizontalShader11) ||
+        (impl.convertInputToRgba && !CreateComputeShader(
             impl, COLOR_CONVERT_HLSL, "ConvertToRgba",
-            "DLSSNRColorConvert", impl.colorConvertShader11)) &&
-		CreateComputeShader(
+            "DLSSNRColorConvert", impl.colorConvertShader11)) ||
+		!CreateComputeShader(
 			impl, GUIDANCE_DOWNSAMPLE_HLSL, "DownsampleGuidance",
-			"DLSSNRGuidanceDownsample", impl.guidanceDownsampleShader11) &&
-		CreateComputeShader(
+			"DLSSNRGuidanceDownsample", impl.guidanceDownsampleShader11) ||
+		!CreateComputeShader(
 			impl, RESIDUAL_PREPARE_HLSL, "PrepareResidual",
-			"DLSSNRResidualPrepare", impl.residualPrepareShader11) &&
-		CreateComputeShader(
+			"DLSSNRResidualPrepare", impl.residualPrepareShader11) ||
+		!CreateComputeShader(
 			impl, RESIDUAL_HORIZONTAL_HLSL, "UpsampleResidualHorizontal",
-			"DLSSNRResidualHorizontal", impl.residualHorizontalShader11) &&
-		CreateComputeShader(
+			"DLSSNRResidualHorizontal", impl.residualHorizontalShader11) ||
+		!CreateComputeShader(
 			impl, RESIDUAL_VERTICAL_COMPOSITE_HLSL,
 			"CompositeResidualVertical", "DLSSNRResidualVerticalComposite",
-			impl.residualVerticalCompositeShader11);
+			impl.residualVerticalCompositeShader11)) {
+		return false;
+	}
+	if (impl.qualitySampling) {
+		if (!CreateComputeShader(
+				impl, COLOR_DOWNSAMPLE_LANCZOS3_HLSL, "DownsampleColorVertical",
+				"DLSSNRColorDownsampleVerticalL3",
+				impl.colorDownsampleVerticalLanczos3Shader11) ||
+			!CreateComputeShader(
+				impl, COLOR_DOWNSAMPLE_LANCZOS3_HLSL, "DownsampleColorHorizontal",
+				"DLSSNRColorDownsampleHorizontalL3",
+				impl.colorDownsampleHorizontalLanczos3Shader11) ||
+			!CreateComputeShader(
+				impl, RESIDUAL_HORIZONTAL_MN_HLSL,
+				"UpsampleResidualHorizontal", "DLSSNRResidualHorizontalMN",
+				impl.residualHorizontalMNShader11) ||
+			!CreateComputeShader(
+				impl, RESIDUAL_VERTICAL_COMPOSITE_MN_HLSL,
+				"CompositeResidualVertical", "DLSSNRResidualVerticalCompositeMN",
+				impl.residualVerticalCompositeMNShader11)) {
+			Logger::Get().ComError(
+				"Create DLSSNR quality sampling shaders failed", S_OK);
+			return false;
+		}
+	}
+	return true;
 }
 
 static bool UpdateGuidanceResources(
@@ -1475,7 +1712,9 @@ static bool PrepareInput(
 		ID3D11UnorderedAccessView* uav = impl.resampleIntermediateUav11.get();
 		ID3D11Buffer* constantBuffer = impl.resampleConstants11.get();
 		impl.context11->CSSetShader(
-			impl.colorDownsampleVerticalShader11.get(), nullptr, 0);
+			impl.qualitySampling
+				? impl.colorDownsampleVerticalLanczos3Shader11.get()
+				: impl.colorDownsampleVerticalShader11.get(), nullptr, 0);
 		impl.context11->CSSetShaderResources(0, 1, &srv);
 		impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		impl.context11->CSSetConstantBuffers(0, 1, &constantBuffer);
@@ -1489,7 +1728,10 @@ static bool PrepareInput(
         // The first pass UAV becomes the second pass SRV only after unbinding.
         srv = impl.resampleIntermediateSrv11.get();
         uav = impl.sharedInputUav11.get();
-        impl.context11->CSSetShader(impl.colorDownsampleHorizontalShader11.get(), nullptr, 0);
+        impl.context11->CSSetShader(
+            impl.qualitySampling
+                ? impl.colorDownsampleHorizontalLanczos3Shader11.get()
+                : impl.colorDownsampleHorizontalShader11.get(), nullptr, 0);
         impl.context11->CSSetShaderResources(0, 1, &srv);
         impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
         impl.context11->Dispatch((impl.width + 7) / 8, (impl.height + 7) / 8, 1);
@@ -1705,7 +1947,10 @@ static bool CompositeResidual(
 	if (impl.sourceWidth != impl.width) {
 		ID3D11ShaderResourceView* horizontalSrv = impl.controlledResidualSrv11.get();
 		ID3D11UnorderedAccessView* horizontalUav = impl.resampleIntermediateUav11.get();
-		impl.context11->CSSetShader(impl.residualHorizontalShader11.get(), nullptr, 0);
+		impl.context11->CSSetShader(
+			impl.qualitySampling
+				? impl.residualHorizontalMNShader11.get()
+				: impl.residualHorizontalShader11.get(), nullptr, 0);
 		impl.context11->CSSetShaderResources(0, 1, &horizontalSrv);
 		impl.context11->CSSetUnorderedAccessViews(0, 1, &horizontalUav, nullptr);
 		impl.context11->Dispatch((impl.sourceWidth + 7) / 8, (impl.height + 7) / 8, 1);
@@ -1720,7 +1965,9 @@ static bool CompositeResidual(
 	ID3D11UnorderedAccessView* compositeUav =
 		impl.compositeOutputUav11.get();
 	impl.context11->CSSetShader(
-		impl.residualVerticalCompositeShader11.get(), nullptr, 0);
+		impl.qualitySampling
+			? impl.residualVerticalCompositeMNShader11.get()
+			: impl.residualVerticalCompositeShader11.get(), nullptr, 0);
 	impl.context11->CSSetShaderResources(
 		0, ARRAYSIZE(verticalSrvs), verticalSrvs);
 	impl.context11->CSSetUnorderedAccessViews(
@@ -1756,7 +2003,8 @@ EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode(
 		parameterName == "localToneStrength" ||
 		parameterName == "localStructureStrength" ||
 		parameterName == "skinStructureStrength" ||
-		parameterName == "useAutoMask" || parameterName == "uiCorrection") {
+		parameterName == "useAutoMask" || parameterName == "uiCorrection" ||
+		parameterName == "samplingQuality") {
 		return EffectParameterApplyMode::Live;
 	}
 	if (parameterName == "residualMultiplier" ||
@@ -1798,6 +2046,7 @@ bool DLSSNRFilter::ApplyLiveParameters(
 
 	bool evaluateChanged = false;
 	bool residualChanged = false;
+	bool samplingChanged = false;
 	for (const std::string& name : parameterNames) {
 		if (GetParameterApplyMode(name) != EffectParameterApplyMode::Live) {
 			return false;
@@ -1807,11 +2056,24 @@ bool DLSSNRFilter::ApplyLiveParameters(
 			name == "shadowStructureMultiplier" ||
 			name == "reflectionGlowMultiplier") {
 			residualChanged = true;
+		} else if (name == "samplingQuality") {
+			// Quality 档 shader 在 Initialize 时按需创建；若初始化时是 Performance
+			// 档（未编译 Lanczos3 shader），这里无法热切换，退回要求重启。
+			if (_impl->qualitySampling != (candidate.samplingQuality != 0) &&
+				candidate.samplingQuality != 0 && !_impl->colorDownsampleVerticalLanczos3Shader11) {
+				// Quality 档的 Lanczos3 降采样 shader 未编译（Performance 启动），无法热切换
+				return false;
+			}
+			samplingChanged = true;
 		} else {
 			evaluateChanged = true;
 		}
 	}
 
+	if (samplingChanged) {
+		_settings.samplingQuality = candidate.samplingQuality;
+		_impl->qualitySampling = candidate.samplingQuality != 0;
+	}
 	_settings.style = candidate.style;
 	_settings.intensity = candidate.intensity;
 	_settings.localToneStrength = candidate.localToneStrength;
@@ -1888,6 +2150,7 @@ bool DLSSNRFilter::Initialize(
 	impl->sourceWidth = inputDesc.Width;
 	impl->sourceHeight = inputDesc.Height;
 	impl->useResolutionScaling = settings.enableInputResolutionScaling;
+	impl->qualitySampling = settings.samplingQuality != 0;
 	const uint32_t resolutionPercent = std::clamp(
 		settings.inputResolutionPercent, 25u, 100u);
 	impl->width = impl->useResolutionScaling ? std::max(
@@ -2098,13 +2361,16 @@ bool DLSSNRFilter::Initialize(
 
 	LogDlssnrStatus(fmt::format(
 		"DLSSNR STATUS: Feature=18 created=true path={} sourceSize={}x{} sourceFormat={} "
-		"colorDownsample=lanczos2-aa residualControls=before-upsample residualUpsample=catmull-rom-4+4 inputSize={}x{} inputResolutionScaling={} inputResolutionPercent={} residualMultiplier={} "
+		"samplingQuality={} colorDownsample={} residualControls=before-upsample residualUpsample={} inputSize={}x{} inputResolutionScaling={} inputResolutionPercent={} residualMultiplier={} "
 		"residualSaturation={} residualLightness={} shadowStructureMultiplier={} "
 		"reflectionGlowMultiplier={} preset=fixed-0 "
 		"style={} intensity={} localTone={} localStructure={} skinStructure={} "
 		"motionVectorQuality={} autoMask={} uiCorrection={} depth=zero-contract disabled=false",
 		ENABLE_CORE_FEATURE18_DIAGNOSTIC ? "core-diagnostic" : "signed-snippet",
 		impl->sourceWidth, impl->sourceHeight, static_cast<uint32_t>(inputDesc.Format),
+		impl->qualitySampling ? 1 : 0,
+		impl->qualitySampling ? "lanczos3" : "lanczos2-aa",
+		impl->qualitySampling ? "mitchell-netravali-5tap" : "catmull-rom-4+4",
 		impl->width, impl->height,
 		impl->useResolutionScaling, _settings.inputResolutionPercent,
 		_settings.residualMultiplier,

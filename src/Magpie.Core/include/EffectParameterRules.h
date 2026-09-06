@@ -26,8 +26,9 @@ bool IsEffectParameterVisible(std::string_view effect, std::string_view paramete
 		if (parameter == "nvidiaOpticalFlowQuality") return method == 2.0f;
 	}
 	if (effect == "DLSSNR\\DLSSNR_AI_Filter" &&
-		(parameter == "inputResolutionPercent" || parameter == "residualMultiplier" ||
-		 parameter == "residualSaturation" || parameter == "residualLightness" ||
+		(parameter == "samplingQuality" || parameter == "inputResolutionPercent" ||
+		 parameter == "residualMultiplier" || parameter == "residualSaturation" ||
+		 parameter == "residualLightness" ||
 		 parameter == "shadowStructureMultiplier" || parameter == "reflectionGlowMultiplier")) {
 		return getValue("enableInputResolutionScaling", 0.0f) != 0.0f;
 	}

@@ -16,6 +16,14 @@ int enableInputResolutionScaling;
 
 //!PARAMETER
 //!GROUP Detail Control
+//!LABEL Sampling Quality
+//!DEFAULT 0
+//!OPTION 0 Performance
+//!OPTION 1 Quality
+int samplingQuality;
+
+//!PARAMETER
+//!GROUP Detail Control
 //!LABEL Input Resolution (%)
 //!DEFAULT 100
 //!MIN 25

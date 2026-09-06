@@ -8,6 +8,9 @@ class NgxD3D12Core;
 
 struct DLSSNRSettings {
 	bool enableInputResolutionScaling = false;
+	// 0 = Performance（Lanczos2 降采样 + Catmull-Rom 残差上采样，原始行为）
+	// 1 = Quality（Lanczos3 降采样 + Lanczos3 残差上采样，低输入分辨率下保留更多中频）
+	uint32_t samplingQuality = 0;
 	uint32_t inputResolutionPercent = 100;
 	float residualMultiplier = 1.0f;
 	float residualSaturation = 1.0f;
