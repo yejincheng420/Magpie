@@ -32,6 +32,10 @@
     -->
     <EnableNvidiaOpticalFlow>true</EnableNvidiaOpticalFlow>
     <NvidiaOpticalFlowSdkDir>C:\Users\yejin\Desktop\Magpie-perf\nvof-sdk</NvidiaOpticalFlowSdkDir>
+
+    <!-- 版本标识：同时显示在关于页与启动日志。注意引号会被 MSBuild 吃掉，
+         C++ 侧 STRINGIFY 后是裸 token，不能含空格——用下划线。 -->
+    <VersionString>天禄永远皮下去_基于大力喜鹊的魔改版</VersionString>
   </PropertyGroup>
 
 </Project>

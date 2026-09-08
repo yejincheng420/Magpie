@@ -14,6 +14,9 @@ struct NativeEffectDrawContext {
 	// the same captured frame. Native effects that cache duplicate frames must
 	// include this value in their cache key.
 	uint64_t inputRevision = 0;
+	// 本次 Draw 消费的捕获帧的 QPC 时间戳（100ns 单位，来自帧源）。0 = 未知。
+	// 残差转移用它估计源供给速率（与后端处理节奏无关的无污染度量）。
+	int64_t captureTimestamp100ns = 0;
 	const FrameGuidanceView& frameGuidance;
 	const FrameGuidanceView& zeroFrameGuidance;
 };

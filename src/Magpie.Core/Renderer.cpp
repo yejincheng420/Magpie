@@ -2803,6 +2803,7 @@ void Renderer::_BackendRender(
 				.frameId = _capturedFrameId,
 				.inputRevision = i < _effectInputRevisions.size()
 					? _effectInputRevisions[i] : 0,
+				.captureTimestamp100ns = _frameSource->CaptureTimestamp100ns(),
 				.frameGuidance = guidance.produced,
 				.zeroFrameGuidance = guidance.zero
 			};

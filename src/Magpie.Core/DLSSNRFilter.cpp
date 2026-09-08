@@ -1223,6 +1223,20 @@ struct DLSSNRFilter::Impl {
 	bool nextFrameIsReuse = false;
 	// 最近完成帧的奇偶（0=偶,1=奇,-1=未启用/未知），供前端呈现节奏查询。
 	int32_t lastDrawParity = -1;
+	// ---- 自适应旁路（视频/低负载场景保护）----
+	// 残差转移的吞吐模型假设「NGX 是瓶颈」。当源帧率本身就跑得动（NGX 耗时
+	// < 源帧间隔,如 30fps 视频配 20ms NGX）,转移反而把输出降到源帧率一半的
+	// 等效新内容率（每个源帧被 pair 消化 2 次,内容延迟一个源帧间隔,观感卡顿）。
+	// 旁路条件（带滞回,防临界抖动）：
+	//   转移激活中: NGX耗时 < 源间隔×85% → 旁路（本帧走完整 NGX,1:1 跟随源）
+	//   旁路激活中: NGX耗时 > 源间隔×95% → 恢复转移（NGX 重新成为瓶颈）
+	// 源间隔估计 = 相邻两次 Draw 的捕获时间戳差（EMA）。必须用捕获时间戳：
+	// Draw 到达间隔会被后端自身节奏污染（转移期 pair≈2×源间隔,游戏里被误判
+	// 为「源跑得动」而旁路,实测 46ms NGX/33ms 源被判成 sourceMs=96）。
+	bool transferBypassed = false;
+	int64_t lastCaptureTimestamp100ns = 0;
+	std::chrono::nanoseconds sourceIntervalEstimate{};
+	uint32_t bypassDiagnosticCount = 0;
 	// 诊断（每 30 对重置）。
 	uint64_t transferDiagnosticCount = 0;
 	uint64_t transferOddTotalNs = 0;
@@ -3335,12 +3349,54 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	if (impl.lastEvaluatedInputRevision != context.inputRevision) {
 		impl.resetHistory = true;
 	}
+	// 源供给速率估计：相邻两次 Draw 的捕获时间戳差（EMA）。奇偶帧各自消费了
+	// 相邻的捕获帧,时间戳差即源节奏,与后端处理速度无关（无污染度量）。
+	if (_settings.enableFrameReuse &&
+		context.captureTimestamp100ns > 0 &&
+		impl.lastCaptureTimestamp100ns > 0 &&
+		context.captureTimestamp100ns > impl.lastCaptureTimestamp100ns) {
+		const int64_t delta = context.captureTimestamp100ns -
+			impl.lastCaptureTimestamp100ns;
+		// 有效窗 1-500ms：防同帧重绘/会话暂停污染。
+		if (delta >= 10'000 && delta <= 5'000'000) {
+			const std::chrono::nanoseconds interval(delta / 100);
+			impl.sourceIntervalEstimate =
+				impl.sourceIntervalEstimate.count() == 0 ? interval :
+				(impl.sourceIntervalEstimate * 3 + interval) / 4;
+		}
+	}
+	if (context.captureTimestamp100ns > 0) {
+		impl.lastCaptureTimestamp100ns = context.captureTimestamp100ns;
+	}
 	// 残差转移（Frame Reuse）：奇数帧跳过 NGX，把偶帧残差（运动补偿后）贴到
 	// 奇帧新画面上。任何一步失败退回完整 NGX 路径（下一帧仍当偶数帧）。
+	// 自适应旁路：NGX 赶得上源节奏（源跑得动,如 30fps 视频）时跳过转移,
+	// 本帧直接走完整 NGX——1:1 跟随源帧,避免转移把输出降为源帧率一半的
+	// 等效新内容率（内容延迟+观感卡顿）。滞回阈值防临界抖动。
 	if (_settings.enableFrameReuse && impl.nextFrameIsReuse &&
 		impl.evenDenoised11 && impl.useResolutionScaling && !impl.disabled) {
 		const auto oddStart = std::chrono::steady_clock::now();
-		if (TransferResidualToOddFrame(
+		// NGX GPU 耗时（EMA 窗口均值）vs 源帧间隔估计。
+		const TimingSummary ngxSummary = impl.evaluateGpuTimings.Summarize();
+		const double ngxMs = ngxSummary.count >= 4 ? ngxSummary.average : 0.0;
+		const double sourceMs = std::chrono::duration<double, std::milli>(
+			impl.sourceIntervalEstimate).count();
+		const bool sourceEstimateValid = impl.sourceIntervalEstimate.count() > 0;
+		if (sourceEstimateValid && ngxMs > 0.0 && sourceMs > 0.0) {
+			if (!impl.transferBypassed && ngxMs < sourceMs * 0.85) {
+				impl.transferBypassed = true;
+				Logger::Get().Info(fmt::format(
+					"Residual transfer bypassed: ngxMs={:.1f} < sourceMs*0.85={:.1f} "
+					"(NGX keeps up with the source; running full DLSSNR per frame)",
+					ngxMs, sourceMs * 0.85));
+			} else if (impl.transferBypassed && ngxMs > sourceMs * 0.95) {
+				impl.transferBypassed = false;
+				Logger::Get().Info(fmt::format(
+					"Residual transfer resumed: ngxMs={:.1f} > sourceMs*0.95={:.1f}",
+					ngxMs, sourceMs * 0.95));
+			}
+		}
+		if (!impl.transferBypassed && TransferResidualToOddFrame(
 			impl, context, _settings, input, output)) {
 			impl.lastEvaluatedFrameId = context.frameId;
 			impl.lastEvaluatedParameterRevision = impl.evaluateParameterRevision;
@@ -3379,7 +3435,10 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 			}
 			return true;
 		}
-		// 转移失败：本帧退回完整路径；历史残差仍在，下次奇数帧可再试。
+		// 转移失败或旁路：本帧退回完整路径。
+		// 旁路时 motionHistory 可能残留 true（旁路前最后一帧转移成功保存的
+		// MV）——此时本帧走完整 NGX 且上次 evaluate 就是上一帧,跨帧累积语义
+		// 不成立,必须清除,否则下偶帧会用错位的累积 MV。
 		impl.motionHistoryValid = false;
 	}
 	// 偶数帧：记录配对周期（诊断）。
@@ -3630,12 +3689,16 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	impl.lastEvaluatedInputRevision = context.inputRevision;
 	// 偶数帧完成：保存低分辨率降噪成品（sharedOutput11 = impl.width x height），
 	// 供下一奇数帧做残差转移，并翻转奇偶状态。资源缺失/禁用时保持偶数帧连跑。
+	// 旁路状态下不翻转（本帧虽走完整 NGX 但奇偶角色仍是「奇」,持续重估旁路
+	// 条件,直到 NGX 重新成为瓶颈）——但残差仍要刷新（恢复转移时用最新残差）。
 	if (_settings.enableFrameReuse && impl.evenDenoised11 &&
 		impl.useResolutionScaling && !impl.disabled) {
 		impl.context11->CopyResource(
 			impl.evenDenoised11.get(), impl.sharedOutput11.get());
-		impl.nextFrameIsReuse = true;
 		impl.lastDrawParity = 0;
+		if (!impl.transferBypassed) {
+			impl.nextFrameIsReuse = true;
+		}
 	} else {
 		impl.nextFrameIsReuse = false;
 		impl.lastDrawParity = -1;
