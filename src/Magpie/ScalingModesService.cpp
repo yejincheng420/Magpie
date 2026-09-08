@@ -297,6 +297,14 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 		for (EffectItem& effect : scalingMode.effects) {
 
 			if (effect.name == L"DLSSNR\\DLSSNR_AI_Filter") {
+				// turing-ampere 分支历史：帧复用参数曾名 frameReuseMode（逐像素
+				// warp 实验期），架构改为残差转移后更名 residualTransferMode。
+				auto legacyReuseMode = effect.parameters.find(L"frameReuseMode");
+				if (legacyReuseMode != effect.parameters.end()) {
+					effect.parameters.try_emplace(
+						L"residualTransferMode", legacyReuseMode->second);
+					effect.parameters.erase(legacyReuseMode);
+				}
 				auto guidanceMode = effect.parameters.find(L"guidanceMode");
 				if (guidanceMode != effect.parameters.end()) {
 					const int oldMode = std::clamp(
@@ -306,6 +314,11 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 					effect.parameters.erase(guidanceMode);
 					++stats.migratedGuidanceModes;
 				}
+				// useMotionVectors 是上面 guidanceMode 迁移的写入目标，当前 HLSL
+				// 已无此参数（OF Quality 取代）。必须在迁移之后清除，否则内联
+				// 参数模式下多余参数会直接导致效果编译失败。
+				stats.removedLegacyParameters += static_cast<uint32_t>(
+					effect.parameters.erase(L"useMotionVectors"));
 				stats.removedDepthParameters += static_cast<uint32_t>(
 					effect.parameters.erase(L"depthInferenceInterval"));
 				stats.removedLegacyParameters += static_cast<uint32_t>(

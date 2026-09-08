@@ -960,6 +960,37 @@ bool Renderer::_FrontendOverlayRender(bool contentChanged) noexcept {
 	return submitted;
 }
 
+// 帧复用奇帧呈现延迟（方案 A）：由 ScalingRuntime 在消费 pending 渲染请求前
+// 查询。true = 后端刚发布奇帧且距发布不足半配对周期，调用方应保留 pending
+// 稍后再试（非阻塞）。半周期估计来自奇帧到期消费的奇→奇间隔 EMA。偶帧与
+// 超时（800ms 防冻结）恒 false。
+bool Renderer::ShouldDeferOddPresentation() noexcept {
+	if (_reuseParityPublished.load(std::memory_order_acquire) != 1) {
+		return false;
+	}
+	const int64_t publishedNs = _reuseOddPublishNs.load(std::memory_order_acquire);
+	if (publishedNs == 0) return false;
+	const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	const int64_t ageNs = nowNs - publishedNs;
+	if (ageNs < 0 || ageNs >= 800'000'000) return false;
+	const int64_t halfPairNs = _reusePairIntervalNs.load(std::memory_order_acquire) / 2;
+	if (halfPairNs > 0 && ageNs < halfPairNs) {
+		return true;
+	}
+	// 到期：更新奇→奇间隔估计（EMA）。首次（prev==0）不更新。
+	const int64_t prev = _reuseLastOddConsumedNs.exchange(nowNs,
+		std::memory_order_acq_rel);
+	if (prev != 0 && nowNs > prev && nowNs - prev < 800'000'000) {
+		const int64_t interval = nowNs - prev;
+		const int64_t smoothed = _reusePairIntervalNs.load(std::memory_order_acquire);
+		_reusePairIntervalNs.store(
+			smoothed == 0 ? interval : (smoothed * 3 + interval) / 4,
+			std::memory_order_release);
+	}
+	return false;
+}
+
 bool Renderer::Render(bool force, bool waitForGpu) noexcept {
 	if (_pendingFrontendFrame) return _SubmitFrontendFrame();
 	_frontendPacingDeadline.reset();
@@ -2833,6 +2864,25 @@ void Renderer::_CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewC
 		_synchronousFramePresentationEnabled.load(std::memory_order_acquire);
 	if (!_PublishBackendTexture(effectsOutput, synchronous, false)) {
 		return;
+	}
+
+	// 帧复用：发布完成后打奇偶标记与时间戳（供前端呈现节奏控制）。Draw 刚在
+	// 本线程完成，parity 查询无竞态。
+	{
+		int32_t parity = -1;
+		for (const auto& backend : _nativeEffectBackends) {
+			if (backend) {
+				parity = backend->LastDrawReuseParity();
+				if (parity != -1) break;
+			}
+		}
+		_reuseParityPublished.store(parity, std::memory_order_release);
+		if (parity == 1) {
+			_reuseOddPublishNs.store(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count(),
+				std::memory_order_release);
+		}
 	}
 
 	// 查询效果的渲染时间

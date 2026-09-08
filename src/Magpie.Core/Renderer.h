@@ -43,6 +43,8 @@ public:
 
 	bool Render(bool force = false, bool waitForGpu = false) noexcept;
 	bool RenderOverlay() noexcept;
+	// 帧复用奇帧呈现延迟查询：见 ScalingRuntime 渲染循环（方案 A）。
+	bool ShouldDeferOddPresentation() noexcept;
 	bool HasFrameGeneration() const noexcept { return _hasFrameGeneration; }
 	PresentationRateSnapshot PresentationRate() const noexcept { return _presentationRate.Get(); }
 	DLSSFGFrameRenderResult RenderDLSSFGFrame(
@@ -352,6 +354,17 @@ private:
 	// Backend-owned cadence; publish an immutable interval with each ring slot.
 	CaptureFrameCadence _captureCadence;
 	uint64_t _captureSequence = 0;
+	// 残差转移（帧复用）的前端奇帧呈现延迟：后端发布奇偶标记+时间戳（原子），
+	// 前端 Render 入口对「奇帧且距发布不足半周期」的 pending 短暂跳过（非阻塞，
+	// 返回 false 交回消息循环），把「偶帧+奇帧 2ms 背靠背 + 80ms 空窗」的脉冲
+	// 节奏变为半周期交替。等待发生在前端线程，后端 Draw/publish 全速不受影响
+	//（区别于已证伪的后端 CPU pacing：串行线程里的等待=纯损耗）。
+	// -1 = 未知/禁用；0 = 偶帧（立即呈现）；1 = 奇帧（延迟呈现候选）。
+	std::atomic<int32_t> _reuseParityPublished = -1;
+	std::atomic<int64_t> _reuseOddPublishNs = 0;
+	// 奇帧消费周期估计（奇→奇间隔的 EMA）与上次奇帧到期时刻（纳秒 epoch）。
+	std::atomic<int64_t> _reusePairIntervalNs = 0;
+	std::atomic<int64_t> _reuseLastOddConsumedNs = 0;
 	uint32_t _publicationTimingSamples = 0;
 	double _publicationTransactionTotalMs = 0;
 	double _publicationTransactionMaxMs = 0;

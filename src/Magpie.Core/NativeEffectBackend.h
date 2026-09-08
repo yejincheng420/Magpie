@@ -30,6 +30,13 @@ public:
 	}
 	virtual bool Drain() noexcept { return true; }
 
+	// 帧复用（隔帧 NGX）后端声明：刚刚完成的 Draw 是否为奇数复用帧（跳过 NGX
+	// 的廉价帧）。前端用它决定呈现时机——奇帧延迟到配对半周期，偶帧立即。
+	// -1 表示该后端不参与（每帧等价，无需延迟控制）。
+	virtual int32_t LastDrawReuseParity() const noexcept {
+		return -1;
+	}
+
 	virtual EffectParameterApplyMode GetParameterApplyMode(
 		std::string_view /*parameterName*/
 	) const noexcept {

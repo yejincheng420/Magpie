@@ -26,6 +26,13 @@ struct DLSSNRSettings {
 	float skinStructureStrength = -1.0f;
 	bool useAutoMask = false;
 	bool uiCorrection = false;
+	// 残差转移：奇数帧跳过 NGX，把偶数帧的（运动补偿后的）残差贴到奇数帧的
+	// 新捕获上。奇数帧是真实的新画面（可与帧生成叠加），NGX 开销减半。
+	// 残差与噪点独立随机，转移后奇帧噪点幅度约 √2 倍（比无 DLSSNR 干净一半）。
+	// residualTransferMode: 0 = Copy(残差不挪,最稳) 1 = OF(逐像素 NVOF MV 挪)
+	//                       2 = Global MV(全帧单一向量挪)
+	bool enableFrameReuse = false;
+	uint32_t residualTransferMode = 0;
 	NvidiaOpticalFlowQuality motionVectorQuality =
 		NvidiaOpticalFlowQuality::Balanced;
 };
@@ -46,6 +53,7 @@ public:
 
 	FrameGuidanceRequirements GetFrameGuidanceRequirements() const noexcept override;
 	bool Drain() noexcept override;
+	int32_t LastDrawReuseParity() const noexcept override;
 	EffectParameterApplyMode GetParameterApplyMode(
 		std::string_view parameterName
 	) const noexcept override;

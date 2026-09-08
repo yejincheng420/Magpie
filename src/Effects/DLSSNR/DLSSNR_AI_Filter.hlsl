@@ -6,6 +6,24 @@
 //!SORT_NAME DLSSNR AI Filter (Experimental)
 
 //!PARAMETER
+//!GROUP Frame Reuse
+//!LABEL Enable Frame Reuse\n(Halves DLSSNR Cost, ~2x FPS)
+//!DEFAULT 0
+//!MIN 0
+//!MAX 1
+//!STEP 1
+int enableFrameReuse;
+
+//!PARAMETER
+//!GROUP Frame Reuse
+//!LABEL Residual Transfer Mode
+//!DEFAULT 0
+//!OPTION 0 Copy
+//!OPTION 1 Optical Flow
+//!OPTION 2 Global MV
+int residualTransferMode;
+
+//!PARAMETER
 //!GROUP Detail Control
 //!LABEL Adjust Input Resolution\n(Reduces DLSSNR Quality)
 //!DEFAULT 0

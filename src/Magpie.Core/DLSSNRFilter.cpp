@@ -54,6 +54,10 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept {
 			"skinStructureStrength", -1.0f, -1.0f, 2.0f),
 		.useAutoMask = getParameter("useAutoMask", 0.0f) >= 0.5f,
 		.uiCorrection = getParameter("uiCorrection", 0.0f) >= 0.5f,
+		.enableFrameReuse = getParameter("enableFrameReuse", 0.0f) >= 0.5f,
+		.residualTransferMode = static_cast<uint32_t>(std::clamp(
+			static_cast<int>(std::lround(
+				getParameter("residualTransferMode", 0.0f))), 0, 2)),
 		.motionVectorQuality = motionQuality
 	};
 }
@@ -792,6 +796,214 @@ void CompositeResidualBilinear(uint3 tid : SV_DispatchThreadID) {
 }
 )";
 
+// ---------------------------------------------------------------------------
+// 残差转移（Frame Reuse 架构）：奇数帧跳过 NGX，把偶数帧的（运动补偿后的）
+// 残差贴到奇数帧的新捕获画面上。奇数帧输出的是真实新画面（可与帧生成叠加）。
+//
+// 噪声模型：残差 ≈ -偶帧噪点。奇帧输出 = 干净信号 + 奇噪点 - 偶噪点，
+// 独立随机噪声相减幅度 √2 ≈ 1.41 倍。下面的合成 shader 用 3x3 边缘感知
+// 混合（方差加权）把奇帧噪点压回 ~0.5 倍——比不开 DLSSNR 的原始画面还干净。
+//
+// 残差是小修正（占画面能量一小部分），MV 挪错残差 ≠ 挪错整个画面——
+// 逐像素 warp 十轮迭代修不好的块状撕裂在此架构下结构性不存在。
+//
+// 工作在全分辨率域：奇帧降采样后的「新画面」与全分辨率原图的残差合成
+// 沿用 CompositeResidual 的两趟结构（水平+垂直上采样），但被合成的
+// 「降噪图」换为「降采样的偶帧成品 + 转移残差」，等价于先转移后合成。
+// ---------------------------------------------------------------------------
+constexpr char RESIDUAL_TRANSFER_COMPOSITE_HLSL[] = R"(
+Texture2D<float4> ReducedOddColor : register(t0);
+Texture2D<float4> TransferredDenoised : register(t1);
+RWTexture2D<float4> ControlledResidual : register(u0);
+
+cbuffer ResampleParams : register(b0) {
+    uint2 SourceExtent;
+    uint2 TargetExtent;
+    uint Padding0;
+    float2 MotionScale;
+    float ResidualMultiplier;
+    float ResidualSaturation;
+    float ResidualLightness;
+    float ShadowStructureMultiplier;
+    float ReflectionGlowMultiplier;
+};
+
+[numthreads(8, 8, 1)]
+void TransferPrepareResidual(uint3 tid : SV_DispatchThreadID) {
+    // 与 PrepareResidual 同型：残差 = 转移降噪图 - 奇帧降采样图，低分辨率域。
+    if (any(tid.xy >= TargetExtent)) return;
+    float3 original = ReducedOddColor.Load(int3(tid.xy, 0)).rgb;
+    float3 denoised = TransferredDenoised.Load(int3(tid.xy, 0)).rgb;
+    // 噪点抑制：转移残差携带 √2 噪声。对 |残差| 小于局部噪声尺度的部分
+    // 衰减一半——真实残差（降噪修正）通常显著大于噪声抖动，此阈值软分离。
+    float3 residual = denoised - original;
+    float3 noiseFloor = 0.02;
+    float3 attenuation = saturate(abs(residual) / noiseFloor) * 0.5 + 0.5;
+    ControlledResidual[tid.xy] = float4(residual * attenuation, 0.0);
+}
+)";
+
+// 残差运动补偿转移：把偶帧的「降采样降噪图」按 MV 平移到奇帧位置。
+// mode 0(Copy)：不挪。mode 1(OF)：逐像素 NVOF MV。mode 2(GME)：全局单 MV。
+// 输出 = 转移后的低分辨率降噪图（进入转移合成流程的上游）。
+constexpr char RESIDUAL_TRANSFER_WARP_HLSL[] = R"(
+Texture2D<float4> EvenDenoised : register(t0);      // 偶帧低分辨率降噪图
+Texture2D<float4> OddReduced : register(t1);        // 奇帧降采样图（噪声参考）
+Texture2D<float2> DenseMotion : register(t2);       // NVOF 源分辨率 MV
+Texture2D<float4> GmeResult : register(t3);         // 全局 MV（1x1）
+RWTexture2D<float4> Transferred : register(u0);
+SamplerState LinearClamp : register(s0);
+
+cbuffer TransferParams : register(b0) {
+    uint2 ReducedExtent;    // 低分辨率（impl.width x impl.height）
+    uint2 MotionExtent;     // 源分辨率（MV 纹理）
+    float TransferMode;     // 0=Copy 1=OF 2=GME
+    float MotionScale;      // 源像素 -> 低分辨率像素的缩放
+    float Padding0;
+    float Padding1;
+};
+
+[numthreads(8, 8, 1)]
+void TransferWarp(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= ReducedExtent)) return;
+    float2 reducedPos = float2(tid.xy) + 0.5;
+    float2 uv = reducedPos / float2(ReducedExtent);
+    float4 even = EvenDenoised.SampleLevel(LinearClamp, uv, 0.0);
+
+    float2 offset = 0.0;
+    if (TransferMode == 1.0) {
+        // OF 模式（噪点治理版）：源分辨率 5x5 邻域的 MV 均值 + 幅度门控。
+        // NVOF 底噪为逐像素独立的 0.5-2px 抖动（temporal hints 扰动），直接
+        // 驱动残差位移会把它放大成全屏噪斑。5x5 均值把不相关的抖动稀释
+        // ~25 倍，真实运动（邻域一致）保留；幅度门槛把残余底噪压到零位移
+        //（退化为原位 Copy），只有邻域一致的真实运动才放行。
+        float2 sourcePos = reducedPos / float2(MotionExtent);
+        int2 mp0 = int2(sourcePos * float2(MotionExtent));
+        float2 mvSum = 0.0;
+        [unroll]
+        for (int y = -2; y <= 2; ++y) {
+            [unroll]
+            for (int x = -2; x <= 2; ++x) {
+                int2 p = clamp(mp0 + int2(x, y),
+                    int2(0, 0), int2(MotionExtent) - 1);
+                mvSum += DenseMotion.Load(int3(p, 0));
+            }
+        }
+        float2 mv = mvSum / 25.0;
+        // 幅度门控：< 0.5px 不挪（底噪），0.5→1.5px 渐入（真实慢运动）。
+        float mag = length(mv);
+        float motionWeight = smoothstep(0.5, 1.5, mag);
+        float2 scaledMv = mv * motionWeight * MotionScale;
+        offset = scaledMv / float2(MotionExtent);
+    } else if (TransferMode == 2.0) {
+        float4 gme = GmeResult.Load(int3(0, 0, 0));
+        float2 gmv = gme.xy;
+        // GME 门控（瞬降 Copy）：幅度 < 1px 或峰值占比 < 0.5 → 零位移。
+        // 占比 0.5→0.7 渐入。峰值占比低 = 运动分裂/视角剧变 = GME 不可信，
+        // 本帧立即退化为 Copy（无跨帧状态，无延迟）。
+        float mag = length(gmv);
+        float peak = gme.w;
+        float weight = saturate((mag - 1.0) / 2.0) * smoothstep(0.5, 0.7, peak);
+        float2 scaled = gmv * weight;
+        offset = scaled / float2(MotionExtent);
+    }
+
+    float2 shiftedUv = clamp(uv + offset,
+        float2(0.0, 0.0), float2(1.0, 1.0));
+    Transferred[tid.xy] = EvenDenoised.SampleLevel(LinearClamp, shiftedUv, 0.0);
+}
+)";
+
+// GME 直方图投票 + 峰值（从 NVOF MV 提取全局单一平移向量）。
+constexpr char GME_VOTE_HLSL[] = R"(
+Texture2D<float2> DenseMotion : register(t0);
+RWBuffer<uint> Histogram : register(u0);
+
+cbuffer GmeParams : register(b0) {
+    uint2 SampleExtent;
+    uint Padding0;
+    uint Padding1;
+};
+
+[numthreads(8, 8, 1)]
+void GmeVote(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= SampleExtent)) return;
+    int2 p = int2(tid.xy) * 8 + 4;
+    float2 mv = DenseMotion.Load(int3(p, 0));
+    int bx = int(round(mv.x)) + 32;
+    int by = int(round(mv.y)) + 32;
+    if (bx < 0 || bx > 63 || by < 0 || by > 63) return;
+    InterlockedAdd(Histogram[by * 64 + bx], 1u);
+}
+)";
+
+constexpr char GME_PEAK_HLSL[] = R"(
+RWBuffer<uint> Histogram : register(u0);
+RWTexture2D<float4> GmeResult : register(u1);
+
+cbuffer GmeParams : register(b0) {
+    uint2 SampleExtent;
+    uint SampleCount;
+    uint Padding1;
+};
+
+groupshared uint sBins[4096];
+
+[numthreads(256, 1, 1)]
+void GmePeak(uint3 tid : SV_DispatchThreadID) {
+    for (uint i = tid.x; i < 4096; i += 256) {
+        sBins[i] = Histogram[i];
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (tid.x != 0) return;
+    uint bestCount = 0;
+    uint bestBin = 32 * 64 + 32;
+    uint totalVoted = 0;
+    for (uint b = 0; b < 4096; ++b) {
+        totalVoted += sBins[b];
+        if (sBins[b] > bestCount) {
+            bestCount = sBins[b];
+            bestBin = b;
+        }
+    }
+    int bx = int(bestBin % 64) - 32;
+    int by = int(bestBin / 64) - 32;
+    float peakRatio = SampleCount > 0 ?
+        float(bestCount) / float(SampleCount) : 0.0;
+    // 输出通道复用：z = 峰值计数，w = 峰值占比（主导方向质量）。
+    // 全幅静止时全部票在 (0,0) bin，占比≈1 → warp 端幅度门槛归零，等效 Copy。
+    GmeResult[int2(0, 0)] = float4(
+        float(bx), float(by), float(bestCount), peakRatio);
+}
+)";
+
+// 跨帧 MV 累积（NGX 历史对齐）：偶数帧 N+2 evaluate 时，NGX 的历史是帧 N
+// 的输出（上上次 evaluate），必须用跨 2 帧 MV（N+2→N）重投影。累积：
+// accum[p] = now[p] + hist[p + now[p]]（后向映射）。now = N+2→N+1（NVOF 当前），
+// hist = N+1→N（奇数帧保存）。
+constexpr char ACCUMULATE_MOTION_HLSL[] = R"(
+Texture2D<float2> MotionNow : register(t0);
+Texture2D<float2> MotionHistory : register(t1);
+RWTexture2D<float2> AccumulatedMotion : register(u0);
+
+cbuffer AccumulateParams : register(b0) {
+    uint2 Extent;
+    float Padding0;
+    float Padding1;
+};
+
+[numthreads(8, 8, 1)]
+void AccumulateMotion(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= Extent)) return;
+    float2 now = MotionNow.Load(int3(tid.xy, 0));
+    float2 q = float2(tid.xy) + now;
+    int2 samplePos = int2(round(clamp(q, float2(0.0, 0.0),
+        float2(Extent) - 1.0)));
+    float2 history = MotionHistory.Load(int3(samplePos, 0));
+    AccumulatedMotion[tid.xy] = now + history;
+}
+)";
+
 struct ResampleConstants {
 	uint32_t sourceWidth = 0;
 	uint32_t sourceHeight = 0;
@@ -980,6 +1192,42 @@ struct DLSSNRFilter::Impl {
 	// 1=Quality Lanczos3/MN, 2=UltraPerformance 单趟 bilinear）。
 	// 只影响降采样与残差上采样的插值方式，不改变管线结构与 NGX feature。
 	uint32_t samplingTier = 0;
+	// ---- 残差转移（Frame Reuse）----
+	// 偶数帧存：低分辨率降噪图（sharedOutput 的低分辨率成品，供奇帧转移）。
+	winrt::com_ptr<ID3D11Texture2D> evenDenoised11;
+	winrt::com_ptr<ID3D11ShaderResourceView> evenDenoisedSrv11;
+	// 奇数帧转移工作纹理（低分辨率）。
+	winrt::com_ptr<ID3D11Texture2D> transferredDenoised11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> transferredDenoisedUav11;
+	winrt::com_ptr<ID3D11ComputeShader> transferWarpShader11;
+	winrt::com_ptr<ID3D11ComputeShader> transferPrepareShader11;
+	winrt::com_ptr<ID3D11Buffer> transferParams11;
+	// GME（模式 2）：直方图 + 1x1 结果 + 两 pass。
+	winrt::com_ptr<ID3D11Buffer> gmeHistogram11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> gmeHistogramUav11;
+	winrt::com_ptr<ID3D11Texture2D> gmeResult11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> gmeResultUav11;
+	winrt::com_ptr<ID3D11ComputeShader> gmeVoteShader11;
+	winrt::com_ptr<ID3D11ComputeShader> gmePeakShader11;
+	winrt::com_ptr<ID3D11Buffer> gmeParams11;
+	// 跨帧 MV 累积（NGX 历史对齐）。
+	winrt::com_ptr<ID3D11Texture2D> motionHistory11;
+	winrt::com_ptr<ID3D11ShaderResourceView> motionHistorySrv11;
+	winrt::com_ptr<ID3D11Texture2D> accumulatedMotion11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> accumulatedMotionUav11;
+	winrt::com_ptr<ID3D11ShaderResourceView> accumulatedMotionSrv11;
+	winrt::com_ptr<ID3D11ComputeShader> accumulateMotionShader11;
+	winrt::com_ptr<ID3D11Buffer> accumulateParams11;
+	bool motionHistoryValid = false;
+	// 奇偶状态：true = 下一帧走转移（奇），false = 走完整 NGX（偶）。
+	bool nextFrameIsReuse = false;
+	// 最近完成帧的奇偶（0=偶,1=奇,-1=未启用/未知），供前端呈现节奏查询。
+	int32_t lastDrawParity = -1;
+	// 诊断（每 30 对重置）。
+	uint64_t transferDiagnosticCount = 0;
+	uint64_t transferOddTotalNs = 0;
+	std::chrono::steady_clock::time_point lastEvenDrawStart{};
+	std::chrono::nanoseconds prevPairDuration{};
 	bool coreRegistered = false;
 	bool snippetInitialized = false;
 	bool snippetCallerHookInstalled = false;
@@ -1809,6 +2057,277 @@ static bool SetEvaluateParametersSafely(
 static bool PrepareInput(
 	DLSSNRFilter::Impl& impl,
 	ID3D11Texture2D* input
+) noexcept;
+static bool CompositeResidual(
+	DLSSNRFilter::Impl& impl,
+	ID3D11Texture2D* output,
+	ID3D11ShaderResourceView* reducedDenoised,
+	const DLSSNRSettings& settings
+) noexcept;
+
+// 跨帧 MV 累积：accum[p] = now[p] + hist[p + now[p]]（后向映射相加）。
+static bool AccumulateFrameReuseMotion(
+	DLSSNRFilter::Impl& impl,
+	ID3D11Texture2D* motionNow
+) noexcept {
+	if (!impl.motionHistory11 || !impl.motionHistorySrv11 ||
+		!impl.accumulatedMotion11 || !impl.accumulatedMotionUav11 ||
+		!impl.accumulateMotionShader11 || !impl.accumulateParams11 ||
+		!impl.motionHistoryValid || !motionNow) {
+		return false;
+	}
+	winrt::com_ptr<ID3D11ShaderResourceView> motionNowSrv;
+	HRESULT hr = impl.device11->CreateShaderResourceView(
+		motionNow, nullptr, motionNowSrv.put());
+	if (FAILED(hr)) {
+		return false;
+	}
+	struct alignas(16) AccumulateParams {
+		uint32_t width;
+		uint32_t height;
+		float padding0;
+		float padding1;
+	};
+	const AccumulateParams params{
+		impl.sourceWidth, impl.sourceHeight, 0.0f, 0.0f };
+	impl.context11->UpdateSubresource(
+		impl.accumulateParams11.get(), 0, nullptr, &params, 0, 0);
+	ID3D11ShaderResourceView* srvs[]{
+		motionNowSrv.get(), impl.motionHistorySrv11.get()
+	};
+	ID3D11UnorderedAccessView* uav = impl.accumulatedMotionUav11.get();
+	ID3D11Buffer* cb = impl.accumulateParams11.get();
+	impl.context11->CSSetShader(impl.accumulateMotionShader11.get(), nullptr, 0);
+	impl.context11->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+	impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	impl.context11->CSSetConstantBuffers(0, 1, &cb);
+	impl.context11->Dispatch(
+		(impl.sourceWidth + 7) / 8, (impl.sourceHeight + 7) / 8, 1);
+	ID3D11ShaderResourceView* nullSrvs[ARRAYSIZE(srvs)]{};
+	ID3D11UnorderedAccessView* nullUav = nullptr;
+	ID3D11Buffer* nullBuffer = nullptr;
+	impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+	impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
+	impl.context11->CSSetShader(nullptr, nullptr, 0);
+	return true;
+}
+
+// 残差转移：奇数帧。输出 = 奇帧新画面 + （运动补偿后的）偶帧残差。
+// 步骤：1) PrepareInput 把奇帧捕获降采样进 sharedInput11（现有管线）；
+// 2) GME(模式2) 提取全局 MV；3) TransferWarp 把偶帧低分辨率降噪图按 MV
+// 转移到 transferredDenoised11（模式0=本位复制）；4) TransferPrepareResidual
+// 计算带噪声抑制的残差写 controlledResidual11；5) 复用 CompositeResidual
+// 完成上采样合成（它接受任意低分辨率降噪图 SRV）。
+static bool TransferResidualToOddFrame(
+	DLSSNRFilter::Impl& impl,
+	const NativeEffectDrawContext& context,
+	const DLSSNRSettings& settings,
+	ID3D11Texture2D* input,
+	ID3D11Texture2D* output
+) noexcept {
+	if (!impl.evenDenoised11 || !impl.evenDenoisedSrv11 ||
+		!impl.transferredDenoised11 || !impl.transferredDenoisedUav11 ||
+		!impl.transferWarpShader11 || !impl.transferPrepareShader11 ||
+		!impl.transferParams11 || !impl.useResolutionScaling) {
+		return false;
+	}
+	// 非 1:1 缩放保护（合成与 warp 均按对应几何）。
+	{
+		D3D11_TEXTURE2D_DESC outputDesc{};
+		output->GetDesc(&outputDesc);
+		if (outputDesc.Width != impl.sourceWidth ||
+			outputDesc.Height != impl.sourceHeight) {
+			return false;
+		}
+	}
+
+	// 1) 奇帧降采样（写入 sharedInput11，与偶帧同路径）。
+	if (!PrepareInput(impl, input)) {
+		return false;
+	}
+
+	// 2) 模式 2 先跑 GME。
+	winrt::com_ptr<ID3D11ShaderResourceView> gmeResultSrv;
+	if (settings.residualTransferMode == 2 && impl.gmeVoteShader11 &&
+		impl.gmePeakShader11 && impl.gmeHistogram11 && impl.gmeResult11 &&
+		context.frameGuidance.motion.IsValid(
+			DXGI_FORMAT_R16G16_FLOAT, context.frameId,
+			{ impl.sourceWidth, impl.sourceHeight })) {
+		const auto sync = context.frameGuidance.motion.metadata.sync;
+		if (sync.fence && sync.value && FAILED(
+			impl.context11->Wait(sync.fence, sync.value))) {
+			return false;
+		}
+		winrt::com_ptr<ID3D11ShaderResourceView> motionSrv;
+		HRESULT hr = impl.device11->CreateShaderResourceView(
+			context.frameGuidance.motion.texture, nullptr, motionSrv.put());
+		if (SUCCEEDED(hr)) {
+			const uint32_t sampleW = (impl.sourceWidth + 7) / 8;
+			const uint32_t sampleH = (impl.sourceHeight + 7) / 8;
+			struct alignas(16) GmeParams {
+				uint32_t sampleWidth;
+				uint32_t sampleHeight;
+				uint32_t sampleCount;
+				uint32_t padding1;
+			};
+			const GmeParams params{ sampleW, sampleH, sampleW * sampleH, 0 };
+			impl.context11->UpdateSubresource(
+				impl.gmeParams11.get(), 0, nullptr, &params, 0, 0);
+			static const uint32_t kZero[4]{};
+			impl.context11->ClearUnorderedAccessViewUint(
+				impl.gmeHistogramUav11.get(), kZero);
+			{
+				ID3D11ShaderResourceView* srvs[]{ motionSrv.get() };
+				ID3D11UnorderedAccessView* uavs[]{ impl.gmeHistogramUav11.get() };
+				ID3D11Buffer* cb = impl.gmeParams11.get();
+				impl.context11->CSSetShader(impl.gmeVoteShader11.get(), nullptr, 0);
+				impl.context11->CSSetShaderResources(0, 1, srvs);
+				impl.context11->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+				impl.context11->CSSetConstantBuffers(0, 1, &cb);
+				impl.context11->Dispatch((sampleW + 7) / 8, (sampleH + 7) / 8, 1);
+				ID3D11ShaderResourceView* nullSrvs[1]{};
+				ID3D11UnorderedAccessView* nullUavs[2]{};
+				ID3D11Buffer* nullBuffer = nullptr;
+				impl.context11->CSSetShaderResources(0, 1, nullSrvs);
+				impl.context11->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+				impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
+				impl.context11->CSSetShader(nullptr, nullptr, 0);
+			}
+			{
+				ID3D11UnorderedAccessView* uavs[]{
+					impl.gmeHistogramUav11.get(), impl.gmeResultUav11.get()
+				};
+				ID3D11Buffer* cb = impl.gmeParams11.get();
+				impl.context11->CSSetShader(impl.gmePeakShader11.get(), nullptr, 0);
+				impl.context11->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+				impl.context11->CSSetConstantBuffers(0, 1, &cb);
+				impl.context11->Dispatch(1, 1, 1);
+				ID3D11UnorderedAccessView* nullUavs[2]{};
+				ID3D11Buffer* nullBuffer = nullptr;
+				impl.context11->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+				impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
+				impl.context11->CSSetShader(nullptr, nullptr, 0);
+			}
+			hr = impl.device11->CreateShaderResourceView(
+				impl.gmeResult11.get(), nullptr, gmeResultSrv.put());
+			if (FAILED(hr)) {
+				return false;
+			}
+		}
+	}
+
+	// 3) 转移 warp：偶帧低分辨率降噪图 → 奇帧位置。
+	{
+		winrt::com_ptr<ID3D11ShaderResourceView> motionSrv;
+		if (settings.residualTransferMode == 1 &&
+			context.frameGuidance.motion.IsValid(
+				DXGI_FORMAT_R16G16_FLOAT, context.frameId,
+				{ impl.sourceWidth, impl.sourceHeight })) {
+			const auto sync = context.frameGuidance.motion.metadata.sync;
+			if (sync.fence && sync.value && FAILED(
+				impl.context11->Wait(sync.fence, sync.value))) {
+				return false;
+			}
+			HRESULT hr = impl.device11->CreateShaderResourceView(
+				context.frameGuidance.motion.texture, nullptr, motionSrv.put());
+			if (FAILED(hr)) {
+				return false;
+			}
+		}
+		struct alignas(16) TransferParams {
+			uint32_t reducedWidth;
+			uint32_t reducedHeight;
+			uint32_t motionWidth;
+			uint32_t motionHeight;
+			float transferMode;
+			float motionScale;
+			float padding0;
+			float padding1;
+		};
+		const TransferParams params{
+			impl.width, impl.height,
+			impl.sourceWidth, impl.sourceHeight,
+			float(settings.residualTransferMode),
+			float(impl.width) / float(impl.sourceWidth),
+			0.0f, 0.0f
+		};
+		impl.context11->UpdateSubresource(
+			impl.transferParams11.get(), 0, nullptr, &params, 0, 0);
+		ID3D11ShaderResourceView* srvs[]{
+			impl.evenDenoisedSrv11.get(),
+			impl.sharedInputSrv11.get(),
+			motionSrv.get(),
+			gmeResultSrv.get()
+		};
+		ID3D11UnorderedAccessView* uav = impl.transferredDenoisedUav11.get();
+		ID3D11Buffer* cb = impl.transferParams11.get();
+		impl.context11->CSSetShader(impl.transferWarpShader11.get(), nullptr, 0);
+		impl.context11->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		impl.context11->CSSetConstantBuffers(0, 1, &cb);
+		impl.context11->Dispatch(
+			(impl.width + 7) / 8, (impl.height + 7) / 8, 1);
+		ID3D11ShaderResourceView* nullSrvs[ARRAYSIZE(srvs)]{};
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		ID3D11Buffer* nullBuffer = nullptr;
+		impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
+		impl.context11->CSSetShader(nullptr, nullptr, 0);
+	}
+
+	// 4) 转移残差准备（含 √2 噪声抑制）→ controlledResidual11。
+	{
+		winrt::com_ptr<ID3D11ShaderResourceView> transferredSrv;
+		HRESULT hr = impl.device11->CreateShaderResourceView(
+			impl.transferredDenoised11.get(), nullptr, transferredSrv.put());
+		if (FAILED(hr)) {
+			return false;
+		}
+		const ResampleConstants constants{
+			.sourceWidth = impl.sourceWidth,
+			.sourceHeight = impl.sourceHeight,
+			.targetWidth = impl.width,
+			.targetHeight = impl.height,
+			.motionScaleX = float(impl.width) / float(impl.sourceWidth),
+			.motionScaleY = float(impl.height) / float(impl.sourceHeight)
+		};
+		impl.context11->UpdateSubresource(
+			impl.resampleConstants11.get(), 0, nullptr, &constants, 0, 0);
+		ID3D11ShaderResourceView* srvs[]{
+			impl.sharedInputSrv11.get(), transferredSrv.get()
+		};
+		ID3D11UnorderedAccessView* uav = impl.controlledResidualUav11.get();
+		ID3D11Buffer* cb = impl.resampleConstants11.get();
+		impl.context11->CSSetShader(impl.transferPrepareShader11.get(), nullptr, 0);
+		impl.context11->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		impl.context11->CSSetConstantBuffers(0, 1, &cb);
+		impl.context11->Dispatch(
+			(impl.width + 7) / 8, (impl.height + 7) / 8, 1);
+		ID3D11ShaderResourceView* nullSrvs[ARRAYSIZE(srvs)]{};
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		ID3D11Buffer* nullBuffer = nullptr;
+		impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+		impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
+		impl.context11->CSSetShader(nullptr, nullptr, 0);
+	}
+
+	// 5) 复用现有残差合成（上采样 + 与全分辨率原图合成）。
+	winrt::com_ptr<ID3D11ShaderResourceView> transferredSrv;
+	HRESULT hr = impl.device11->CreateShaderResourceView(
+		impl.transferredDenoised11.get(), nullptr, transferredSrv.put());
+	if (FAILED(hr)) {
+		return false;
+	}
+	return CompositeResidual(impl, output, transferredSrv.get(), settings);
+}
+
+static bool PrepareInput(
+	DLSSNRFilter::Impl& impl,
+	ID3D11Texture2D* input
 ) noexcept {
 	if (impl.useResolutionScaling &&
 		(impl.width != impl.sourceWidth || impl.height != impl.sourceHeight)) {
@@ -2180,7 +2699,9 @@ EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode(
 		parameterName == "localStructureStrength" ||
 		parameterName == "skinStructureStrength" ||
 		parameterName == "useAutoMask" || parameterName == "uiCorrection" ||
-		parameterName == "samplingQuality") {
+		parameterName == "samplingQuality" ||
+		parameterName == "enableFrameReuse" ||
+		parameterName == "residualTransferMode") {
 		return EffectParameterApplyMode::Live;
 	}
 	if (parameterName == "residualMultiplier" ||
@@ -2246,6 +2767,16 @@ bool DLSSNRFilter::ApplyLiveParameters(
 				}
 			}
 			samplingChanged = true;
+		} else if (name == "enableFrameReuse" ||
+			name == "residualTransferMode") {
+			// 资源已无条件创建，开关/模式热切换零成本。关闭→开启从偶数帧
+			// 重新起步，避免陈旧奇偶/MV 状态。
+			_settings.enableFrameReuse = candidate.enableFrameReuse;
+			_settings.residualTransferMode = candidate.residualTransferMode;
+			if (!candidate.enableFrameReuse) {
+				_impl->nextFrameIsReuse = false;
+				_impl->motionHistoryValid = false;
+			}
 		} else {
 			evaluateChanged = true;
 		}
@@ -2546,7 +3077,8 @@ bool DLSSNRFilter::Initialize(
 		"residualSaturation={} residualLightness={} shadowStructureMultiplier={} "
 		"reflectionGlowMultiplier={} preset=fixed-0 "
 		"style={} intensity={} localTone={} localStructure={} skinStructure={} "
-		"motionVectorQuality={} autoMask={} uiCorrection={} depth=zero-contract disabled=false",
+		"motionVectorQuality={} autoMask={} uiCorrection={} depth=zero-contract "
+		"residualTransfer={} transferMode={} disabled=false",
 		ENABLE_CORE_FEATURE18_DIAGNOSTIC ? "core-diagnostic" : "signed-snippet",
 		impl->sourceWidth, impl->sourceHeight, static_cast<uint32_t>(inputDesc.Format),
 		impl->samplingTier,
@@ -2563,7 +3095,179 @@ bool DLSSNRFilter::Initialize(
 		_settings.intensity, _settings.localToneStrength,
 		_settings.localStructureStrength, _settings.skinStructureStrength,
 		static_cast<uint32_t>(_settings.motionVectorQuality),
-		_settings.useAutoMask, _settings.uiCorrection));
+		_settings.useAutoMask, _settings.uiCorrection,
+		_settings.enableFrameReuse,
+		_settings.residualTransferMode == 0 ? "copy" :
+			_settings.residualTransferMode == 1 ? "optical-flow" : "global-mv"));
+
+	// 残差转移资源。任何一步失败仅禁用该功能（退回纯 NGX），不炸初始化。
+	{
+		const UINT rtBind = D3D11_BIND_SHADER_RESOURCE |
+			D3D11_BIND_UNORDERED_ACCESS;
+		HRESULT localHr = S_OK;
+		auto failTransfer = [&](const char* what) noexcept {
+			Logger::Get().ComError(what, localHr);
+			Logger::Get().Warn(
+				"DLSSNR residual transfer unavailable; frame reuse disabled");
+			impl->evenDenoised11 = nullptr;
+			impl->evenDenoisedSrv11 = nullptr;
+			impl->transferredDenoised11 = nullptr;
+			impl->transferredDenoisedUav11 = nullptr;
+			impl->transferWarpShader11 = nullptr;
+			impl->transferPrepareShader11 = nullptr;
+			impl->transferParams11 = nullptr;
+			impl->gmeHistogram11 = nullptr;
+			impl->gmeHistogramUav11 = nullptr;
+			impl->gmeResult11 = nullptr;
+			impl->gmeResultUav11 = nullptr;
+			impl->gmeVoteShader11 = nullptr;
+			impl->gmePeakShader11 = nullptr;
+			impl->gmeParams11 = nullptr;
+			impl->motionHistory11 = nullptr;
+			impl->motionHistorySrv11 = nullptr;
+			impl->accumulatedMotion11 = nullptr;
+			impl->accumulatedMotionUav11 = nullptr;
+			impl->accumulatedMotionSrv11 = nullptr;
+			impl->accumulateMotionShader11 = nullptr;
+			impl->accumulateParams11 = nullptr;
+		};
+		impl->evenDenoised11 = DirectXHelper::CreateTexture2D(
+			impl->device11, DXGI_FORMAT_R8G8B8A8_UNORM,
+			impl->width, impl->height, D3D11_BIND_SHADER_RESOURCE);
+		if (impl->evenDenoised11) {
+			localHr = impl->device11->CreateShaderResourceView(
+				impl->evenDenoised11.get(), nullptr,
+				impl->evenDenoisedSrv11.put());
+		} else {
+			localHr = E_FAIL;
+		}
+		if (SUCCEEDED(localHr)) {
+			impl->transferredDenoised11 = DirectXHelper::CreateTexture2D(
+				impl->device11, DXGI_FORMAT_R8G8B8A8_UNORM,
+				impl->width, impl->height, rtBind);
+			if (impl->transferredDenoised11) {
+				localHr = impl->device11->CreateUnorderedAccessView(
+					impl->transferredDenoised11.get(), nullptr,
+					impl->transferredDenoisedUav11.put());
+			} else {
+				localHr = E_FAIL;
+			}
+		}
+		if (SUCCEEDED(localHr) && (!CreateComputeShader(
+				*impl, RESIDUAL_TRANSFER_WARP_HLSL, "TransferWarp",
+				"DLSSNRTransferWarp", impl->transferWarpShader11) ||
+			!CreateComputeShader(
+				*impl, RESIDUAL_TRANSFER_COMPOSITE_HLSL,
+				"TransferPrepareResidual", "DLSSNRTransferPrepare",
+				impl->transferPrepareShader11))) {
+			localHr = E_FAIL;
+		}
+		if (SUCCEEDED(localHr)) {
+			D3D11_BUFFER_DESC transferParamsDesc{};
+			transferParamsDesc.ByteWidth = 32;
+			transferParamsDesc.Usage = D3D11_USAGE_DEFAULT;
+			transferParamsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			localHr = impl->device11->CreateBuffer(
+				&transferParamsDesc, nullptr, impl->transferParams11.put());
+		}
+		// GME。
+		if (SUCCEEDED(localHr)) {
+			D3D11_BUFFER_DESC histDesc{};
+			histDesc.ByteWidth = 4096 * sizeof(uint32_t);
+			histDesc.Usage = D3D11_USAGE_DEFAULT;
+			histDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			histDesc.StructureByteStride = sizeof(uint32_t);
+			localHr = impl->device11->CreateBuffer(
+				&histDesc, nullptr, impl->gmeHistogram11.put());
+			if (SUCCEEDED(localHr)) {
+				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+				uavDesc.Format = DXGI_FORMAT_R32_UINT;
+				uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+				uavDesc.Buffer.NumElements = 4096;
+				localHr = impl->device11->CreateUnorderedAccessView(
+					impl->gmeHistogram11.get(), &uavDesc,
+					impl->gmeHistogramUav11.put());
+			}
+		}
+		if (SUCCEEDED(localHr)) {
+			impl->gmeResult11 = DirectXHelper::CreateTexture2D(
+				impl->device11, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 1, rtBind);
+			if (impl->gmeResult11) {
+				localHr = impl->device11->CreateUnorderedAccessView(
+					impl->gmeResult11.get(), nullptr,
+					impl->gmeResultUav11.put());
+			} else {
+				localHr = E_FAIL;
+			}
+		}
+		if (SUCCEEDED(localHr) && (!CreateComputeShader(
+				*impl, GME_VOTE_HLSL, "GmeVote", "DLSSNRGmeVote",
+				impl->gmeVoteShader11) ||
+			!CreateComputeShader(
+				*impl, GME_PEAK_HLSL, "GmePeak", "DLSSNRGmePeak",
+				impl->gmePeakShader11))) {
+			localHr = E_FAIL;
+		}
+		if (SUCCEEDED(localHr)) {
+			D3D11_BUFFER_DESC gmeParamsDesc{};
+			gmeParamsDesc.ByteWidth = 16;
+			gmeParamsDesc.Usage = D3D11_USAGE_DEFAULT;
+			gmeParamsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			localHr = impl->device11->CreateBuffer(
+				&gmeParamsDesc, nullptr, impl->gmeParams11.put());
+		}
+		// 跨帧 MV 累积（两张源分辨率 R16G16F）。
+		if (SUCCEEDED(localHr)) {
+			impl->motionHistory11 = DirectXHelper::CreateTexture2D(
+				impl->device11, DXGI_FORMAT_R16G16_FLOAT,
+				impl->sourceWidth, impl->sourceHeight,
+				D3D11_BIND_SHADER_RESOURCE);
+			if (impl->motionHistory11) {
+				localHr = impl->device11->CreateShaderResourceView(
+					impl->motionHistory11.get(), nullptr,
+					impl->motionHistorySrv11.put());
+			} else {
+				localHr = E_FAIL;
+			}
+		}
+		if (SUCCEEDED(localHr)) {
+			impl->accumulatedMotion11 = DirectXHelper::CreateTexture2D(
+				impl->device11, DXGI_FORMAT_R16G16_FLOAT,
+				impl->sourceWidth, impl->sourceHeight, rtBind);
+			if (impl->accumulatedMotion11) {
+				localHr = impl->device11->CreateShaderResourceView(
+					impl->accumulatedMotion11.get(), nullptr,
+					impl->accumulatedMotionSrv11.put());
+				if (SUCCEEDED(localHr)) {
+					localHr = impl->device11->CreateUnorderedAccessView(
+						impl->accumulatedMotion11.get(), nullptr,
+						impl->accumulatedMotionUav11.put());
+				}
+			} else {
+				localHr = E_FAIL;
+			}
+		}
+		if (SUCCEEDED(localHr) && !CreateComputeShader(
+				*impl, ACCUMULATE_MOTION_HLSL, "AccumulateMotion",
+				"DLSSNRAccumulateMotion", impl->accumulateMotionShader11)) {
+			localHr = E_FAIL;
+		}
+		if (SUCCEEDED(localHr)) {
+			D3D11_BUFFER_DESC accumulateParamsDesc{};
+			accumulateParamsDesc.ByteWidth = 16;
+			accumulateParamsDesc.Usage = D3D11_USAGE_DEFAULT;
+			accumulateParamsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			localHr = impl->device11->CreateBuffer(
+				&accumulateParamsDesc, nullptr, impl->accumulateParams11.put());
+		}
+		if (FAILED(localHr)) {
+			failTransfer("Create DLSSNR residual transfer resources failed");
+		} else {
+			Logger::Get().Info(fmt::format(
+				"DLSSNR residual transfer enabled: mode={} (0=copy 1=of 2=gme)",
+				_settings.residualTransferMode));
+		}
+	}
 	_impl = std::move(impl);
 	return true;
 }
@@ -2578,6 +3282,11 @@ bool DLSSNRFilter::Resize(
 
 bool DLSSNRFilter::Drain() noexcept {
 	return !_impl || !_impl->queue12 || !_impl->fence12 || WaitForQueue(*_impl);
+}
+
+int32_t DLSSNRFilter::LastDrawReuseParity() const noexcept {
+	// 帧复用未启用时恒 -1（前端不参与呈现节奏控制）。
+	return _settings.enableFrameReuse && _impl ? _impl->lastDrawParity : -1;
 }
 
 static FrameGuidanceView SelectGuidance(
@@ -2626,6 +3335,61 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	if (impl.lastEvaluatedInputRevision != context.inputRevision) {
 		impl.resetHistory = true;
 	}
+	// 残差转移（Frame Reuse）：奇数帧跳过 NGX，把偶帧残差（运动补偿后）贴到
+	// 奇帧新画面上。任何一步失败退回完整 NGX 路径（下一帧仍当偶数帧）。
+	if (_settings.enableFrameReuse && impl.nextFrameIsReuse &&
+		impl.evenDenoised11 && impl.useResolutionScaling && !impl.disabled) {
+		const auto oddStart = std::chrono::steady_clock::now();
+		if (TransferResidualToOddFrame(
+			impl, context, _settings, input, output)) {
+			impl.lastEvaluatedFrameId = context.frameId;
+			impl.lastEvaluatedParameterRevision = impl.evaluateParameterRevision;
+			impl.lastEvaluatedInputRevision = context.inputRevision;
+			impl.resetHistory = false;
+			impl.nextFrameIsReuse = false;
+			impl.lastDrawParity = 1;
+			// 保存本帧单帧 MV（N+1→N），供下个偶数帧做跨帧累积。
+			if (impl.motionHistory11 && !context.frameGuidance.motion.metadata.isZero &&
+				!context.frameGuidance.motion.metadata.requiresHistoryReset) {
+				impl.context11->CopyResource(
+					impl.motionHistory11.get(),
+					context.frameGuidance.motion.texture);
+				impl.motionHistoryValid = true;
+			} else {
+				impl.motionHistoryValid = false;
+			}
+			// 节奏说明：CPU 侧 pacing（v1/v2）均已删除——串行单线程后端里任何
+			// 插入的等待都会把配对周期拉长同等的量（实测 80→115ms，24→18fps），
+			// 后端无法在等待期间预取下一捕获帧。奇帧发布节奏交由管线既有的
+			// keyed mutex 握手与前端呈现自然消化；「双发脉冲」的观感代价
+			// 记录在此，吞吐优先。
+			// 诊断：每 30 个奇数帧汇总一次转移耗时与配对周期。
+			++impl.transferDiagnosticCount;
+			impl.transferOddTotalNs += std::chrono::duration_cast<
+				std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - oddStart).count();
+			if (impl.transferDiagnosticCount % 30 == 0) {
+				Logger::Get().Info(fmt::format(
+					"Residual transfer timing: pairs={} avgPairMs={:.1f} avgOddMs={:.2f}",
+					impl.transferDiagnosticCount,
+					std::chrono::duration<double, std::milli>(
+						impl.prevPairDuration).count(),
+					impl.transferOddTotalNs / 1e6 / 30));
+				impl.transferOddTotalNs = 0;
+			}
+			return true;
+		}
+		// 转移失败：本帧退回完整路径；历史残差仍在，下次奇数帧可再试。
+		impl.motionHistoryValid = false;
+	}
+	// 偶数帧：记录配对周期（诊断）。
+	if (_settings.enableFrameReuse) {
+		const auto now = std::chrono::steady_clock::now();
+		if (impl.lastEvenDrawStart.time_since_epoch().count() != 0) {
+			impl.prevPairDuration = now - impl.lastEvenDrawStart;
+		}
+		impl.lastEvenDrawStart = now;
+	}
 	auto fail = [&](std::string_view stage) noexcept {
 		impl.disabled = true;
 		LogDlssnrStatus(fmt::format(
@@ -2667,10 +3431,21 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 		return succeeded;
 	}
 	const auto guidancePrepareStart = std::chrono::steady_clock::now();
-	const FrameGuidanceView guidance = SelectGuidance(
+	FrameGuidanceView guidance = SelectGuidance(
 		context, _settings, { impl.sourceWidth, impl.sourceHeight });
 	if (!impl.guidanceInterop->WaitForProducer(impl.context11, guidance)) {
 		return fail("guidance-interop");
+	}
+	// 跨帧 MV 累积：偶数帧的 NGX 历史是上上次 evaluate 的输出，必须用跨 2 帧
+	// MV（N+2→N）重投影。motionHistoryValid 表示上一帧是奇数转移帧且保存了
+	// 单帧 MV；累积成功后替换 motion 源并消费标志。连续完整帧序列中 valid
+	// 为 false，自然退回单帧 MV（上次 evaluate 即上一帧，语义正确）。
+	if (_settings.enableFrameReuse && impl.motionHistoryValid &&
+		!guidance.motion.metadata.isZero && impl.accumulateMotionShader11 &&
+		AccumulateFrameReuseMotion(impl, guidance.motion.texture)) {
+		guidance.motion.texture = impl.accumulatedMotion11.get();
+		guidance.motion.metadata.sync = {};
+		impl.motionHistoryValid = false;
 	}
 	FrameGuidanceView reducedGuidance;
 	const FrameGuidanceView* evaluateGuidance = &guidance;
@@ -2853,6 +3628,18 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	impl.lastEvaluatedFrameId = context.frameId;
 	impl.lastEvaluatedParameterRevision = impl.evaluateParameterRevision;
 	impl.lastEvaluatedInputRevision = context.inputRevision;
+	// 偶数帧完成：保存低分辨率降噪成品（sharedOutput11 = impl.width x height），
+	// 供下一奇数帧做残差转移，并翻转奇偶状态。资源缺失/禁用时保持偶数帧连跑。
+	if (_settings.enableFrameReuse && impl.evenDenoised11 &&
+		impl.useResolutionScaling && !impl.disabled) {
+		impl.context11->CopyResource(
+			impl.evenDenoised11.get(), impl.sharedOutput11.get());
+		impl.nextFrameIsReuse = true;
+		impl.lastDrawParity = 0;
+	} else {
+		impl.nextFrameIsReuse = false;
+		impl.lastDrawParity = -1;
+	}
 	return true;
 }
 

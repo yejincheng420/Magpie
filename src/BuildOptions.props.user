@@ -18,7 +18,7 @@
     <!-- NGX 头文件与静态库来自 NVIDIA 公开的 DLSS SDK -->
     <DLSSSdkDir>C:\Users\yejin\Desktop\Magpie-perf\dlss-sdk\DLSS-main</DLSSSdkDir>
     <!-- nvngx_dlssnr.dll 直接取现有 Release 包里已验证能在 2080 Ti 跑通的 310.8.SF 变体 -->
-    <DLSSNRRuntimeDir>C:\Users\yejin\Desktop\Magpie-Experimental-x64</DLSSNRRuntimeDir>
+    <DLSSNRRuntimeDir>C:\Users\yejin\Desktop\Magpie-perf\dlssnr-runtime</DLSSNRRuntimeDir>
 
     <!-- XeSS 放大 + XeSS 帧生成（通用显卡 x2 Zero-MV 路径，Turing 可用） -->
     <EnableXeSSZeroMV>true</EnableXeSSZeroMV>

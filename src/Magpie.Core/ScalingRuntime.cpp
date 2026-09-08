@@ -397,8 +397,15 @@ void ScalingRuntime::_ScalingThreadProc() noexcept {
 				lastRenderTime = steady_clock::now();
 			} else if (scalingWindow.HasPendingFrontendRender() ||
 				scalingWindow.Renderer().HasPendingContent()) {
-				scalingWindow.Render();
-				lastRenderTime = steady_clock::now();
+				// 帧复用奇帧呈现延迟：奇帧发布后不足半配对周期时跳过本次渲染
+				//（不清 pending，等下一轮消息/超时到点再渲），脉冲节奏变为
+				// 偶帧立即、奇帧半周期交替。偶帧与超时兜底不受影响。
+				if (scalingWindow.Renderer().ShouldDeferOddPresentation()) {
+					FrameTrace::Mark(FrameTrace::Event::RenderDecision, 17);
+				} else {
+					scalingWindow.Render();
+					lastRenderTime = steady_clock::now();
+				}
 			} else if (scalingWindow.HasUrgentOverlayInput()) {
 				scalingWindow.RenderOverlay();
 				lastRenderTime = steady_clock::now();
