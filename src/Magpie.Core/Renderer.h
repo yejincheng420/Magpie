@@ -363,6 +363,9 @@ private:
 	std::atomic<int32_t> _reuseParityPublished = -1;
 	std::atomic<int64_t> _reuseOddPublishNs = 0;
 	// 奇帧消费周期估计（奇→奇间隔的 EMA）与上次奇帧到期时刻（纳秒 epoch）。
+	// 组合模式（XeSSFG）下不再用于 hold（物理等待已删——串行后端里任何等待
+	// 都阻塞 NGX/捕获,且自测会正反馈发散）;XeSSFGPresenter 的 frameRenderTime
+	// 欺骗用它做半周期参考。
 	std::atomic<int64_t> _reusePairIntervalNs = 0;
 	std::atomic<int64_t> _reuseLastOddConsumedNs = 0;
 	uint32_t _publicationTimingSamples = 0;

@@ -38,6 +38,7 @@ public:
 		bool requiresHistoryReset,
 		const RECT& destinationRect
 	) noexcept override;
+	void SetReuseParity(int32_t parity) noexcept override;
 	bool HasIndependentOverlay() const noexcept override;
 	bool BeginOverlayFrame(
 		winrt::com_ptr<ID3D11Texture2D>& frameTex,

@@ -39,6 +39,13 @@ public:
 		const RECT&
 	) noexcept {}
 
+	// Residual-transfer parity of the frame about to be published: 0 = even
+	// (full NGX), 1 = odd (transferred residual), -1 = reuse inactive. Written
+	// by the backend right after publication; frame-generation presenters use
+	// it to pace odd frames to the pair midpoint. Presenters that do not
+	// participate in residual transfer intentionally ignore this call.
+	virtual void SetReuseParity(int32_t) noexcept {}
+
 	// Frame-generation presenters may expose a transparent composition surface
 	// above their SDK-owned colour swap chain. UI-only presents use this surface
 	// and therefore never masquerade as a new game input frame.

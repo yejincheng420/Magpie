@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "ScalingWindow.h"
 #include "Win32Helper.h"
+#include <atomic>
 #include <dcomp.h>
 
 #ifdef MP_ENABLE_XESS_FRAME_GENERATION
@@ -112,6 +113,21 @@ struct XeSSFGPresenter::Impl {
 	bool externalMotionReset = true;
 	bool resetHistory = true;
 	std::chrono::steady_clock::time_point lastPresent{};
+	// 残差转移组合的节奏控制（parity 真值驱动,不再用时间阈值猜测）。后端
+	// 发布每帧后经 SetReuseParity 写入 0(偶)/1(奇)/-1(未启用)。P 的估计只
+	// 用偶帧的 EndFrame 到达间隔（hold 不改变到达时刻,估计无自反馈）。
+	std::atomic<int32_t> reuseParity{ -1 };
+	std::chrono::steady_clock::time_point lastEvenArrival{};
+	float pairPeriodMs = 0.0f;
+	// present 间隔诊断统计（120-present 窗口,验证节奏均匀性）
+	std::chrono::steady_clock::time_point prevPresent{};
+	bool prevPresentValid = false;
+	int presentStatCount = 0;
+	int presentOddCount = 0;
+	double presentIntervalSumMs = 0.0;
+	double presentIntervalMinMs = 0.0;
+	double presentIntervalMaxMs = 0.0;
+	int presentHeldCount = 0;
 };
 
 static bool WaitForFence(XeSSFGPresenter::Impl& impl, uint64_t value) noexcept {
@@ -122,6 +138,36 @@ static bool WaitForFence(XeSSFGPresenter::Impl& impl, uint64_t value) noexcept {
 		return false;
 	}
 	return WaitForSingleObject(impl.fenceEvent.get(), 3000) == WAIT_OBJECT_0;
+}
+
+// 到绝对时刻的高精度等待（EndFrame 前端 present 线程专用,单线程无并发）:
+// 高分辨率 waitable timer 睡到剩 1.5ms,YieldProcessor 自旋收尾,抖动 <1ms。
+// Sleep 的 15ms 档误差不可接受,也不复用 WaitForFramePacing——它会因消息
+// 到达提前返回,而 present 不能被消息打断。等待期间不泵消息（EndFrame 深处
+// dispatch 有重入风险）:消息在队列排队,hold（最长 ~P/2）结束后由外层消息
+// 循环正常处理,不会假死。timer 创建/设置失败时退化为整毫秒 Sleep 兜底。
+static void HighResWaitUntil(std::chrono::steady_clock::time_point target) noexcept {
+	using namespace std::chrono;
+	// 高分辨率 timer;失败时退化为普通 timer（Sleep 精度档,仅极端环境）。
+	static wil::unique_handle timer(CreateWaitableTimerExW(nullptr, nullptr,
+		CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE));
+	constexpr nanoseconds spinTail{ 1500 };
+	while (true) {
+		const auto now = steady_clock::now();
+		if (now >= target) return;
+		const auto remaining = duration_cast<nanoseconds>(target - now);
+		if (remaining <= spinTail) break;
+		LARGE_INTEGER due{ .QuadPart = -((remaining - spinTail).count() + 99) / 100 };
+		if (!timer || !SetWaitableTimerEx(timer.get(), &due, 0,
+			nullptr, nullptr, nullptr, 0)) {
+			const DWORD ms = static_cast<DWORD>(duration_cast<milliseconds>(
+				remaining - spinTail).count());
+			if (ms > 0) Sleep(ms);
+			break;
+		}
+		WaitForSingleObject(timer.get(), INFINITE);
+	}
+	while (steady_clock::now() < target) YieldProcessor();
 }
 
 static bool WaitForQueue(XeSSFGPresenter::Impl& impl) noexcept {
@@ -611,6 +657,13 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 	return true;
 }
 
+void XeSSFGPresenter::SetReuseParity(int32_t parity) noexcept {
+	if (!_impl) {
+		return;
+	}
+	_impl->reuseParity.store(parity, std::memory_order_relaxed);
+}
+
 void XeSSFGPresenter::SetFrameGuidance(
 	ID3D11Texture2D* motion,
 	FrameGuidanceFrameId frameId,
@@ -836,6 +889,47 @@ bool XeSSFGPresenter::EndFrame(bool waitForGpu) noexcept {
 	ID3D12CommandList* lists[]{ impl.commandList12.get() };
 	impl.queue12->ExecuteCommandLists(1, lists);
 
+	// 残差转移组合的节奏控制（parity 真值驱动,详见 Impl 状态注释）。实测
+	// 证明时间阈值分类不可行:奇帧的前端 present 间隔实际是 24-45ms（渲染
+	// 管线延迟底线）而非背靠背 2ms,而偶帧间隔可低至 50ms——两类几乎重叠,
+	// 0.4×EMA 阈值导致 hold 几乎不触发(实测 5/60)且把纯 XeSSFG 的输入抖动
+	// 误判为 burst,污染 frameRenderTime 造成回归。parity 由后端发布时直接
+	// 写入,零猜测:奇帧 hold 到「上次 present + P/2」,偶帧立即发布,P 用偶帧
+	// 到达间隔的 EMA（不受 hold 影响）。parity==-1（未启用复用）时全部旁路,
+	// 行为与上游完全一致。
+	const int32_t parity = impl.frameGenerationEnabled ?
+		impl.reuseParity.load(std::memory_order_relaxed) : -1;
+	const auto arrivalNow = std::chrono::steady_clock::now();
+	if (parity == 0) {
+		// 偶帧到达:更新配对周期 EMA。
+		if (impl.lastEvenArrival.time_since_epoch().count() != 0) {
+			const float pairDeltaMs = static_cast<float>(
+				std::chrono::duration<double, std::milli>(arrivalNow - impl.lastEvenArrival).count());
+			constexpr float kMinPairMs = 4.0f;
+			if (impl.pairPeriodMs < kMinPairMs) {
+				impl.pairPeriodMs = pairDeltaMs;
+			} else if (pairDeltaMs > impl.pairPeriodMs * 2.5f) {
+				// 场景切换/暂停后的长间隔:不更新,防 EMA 膨胀。
+			} else {
+				impl.pairPeriodMs = impl.pairPeriodMs * 0.5f + pairDeltaMs * 0.5f;
+			}
+		}
+		impl.lastEvenArrival = arrivalNow;
+	}
+	bool presentHeld = false;
+	if (parity == 1 && impl.pairPeriodMs >= 4.0f &&
+		impl.lastPresent.time_since_epoch().count() != 0) {
+		auto target = impl.lastPresent + std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::duration<double, std::milli>(impl.pairPeriodMs * 0.5f));
+		// 防呆:hold 上限 100ms（EMA 异常时保护 UI 响应）。
+		const auto holdLimit = arrivalNow + std::chrono::milliseconds(100);
+		if (target > holdLimit) target = holdLimit;
+		if (arrivalNow < target) {
+			HighResWaitUntil(target);
+			presentHeld = true;
+		}
+	}
+
 	if (impl.frameGenerationEnabled) {
 		xefg_swapchain_d3d12_resource_data_t motion{};
 		motion.type = XEFG_SWAPCHAIN_RES_MOTION_VECTOR;
@@ -870,8 +964,16 @@ bool XeSSFGPresenter::EndFrame(bool waitForGpu) noexcept {
 		const auto now = std::chrono::steady_clock::now();
 		if (impl.lastPresent.time_since_epoch().count() != 0) {
 			if (now - impl.lastPresent >= std::chrono::milliseconds(500)) constants.resetHistory = 1;
-			constants.frameRenderTime = static_cast<float>(
-				std::chrono::duration<double, std::milli>(now - impl.lastPresent).count());
+			// 节奏欺骗（parity 驱动）:奇帧报告半配对周期,与 hold 后的真实
+			// present 间隔一致——XeSS 看到的输入时刻分布均匀,插值时刻回归
+			// 配对中点。偶帧报告真实值（hold 生效后也≈P/2,自然一致）。
+			// parity==-1 时恒报真实值——与上游行为完全一致,零回归。
+			if (parity == 1 && impl.pairPeriodMs >= 4.0f) {
+				constants.frameRenderTime = std::max(1.0f, impl.pairPeriodMs * 0.5f);
+			} else {
+				constants.frameRenderTime = static_cast<float>(
+					std::chrono::duration<double, std::milli>(now - impl.lastPresent).count());
+			}
 		}
 		if (XeFGSucceeded(result)) {
 			result = xefgSwapChainTagFrameConstants(
@@ -901,6 +1003,38 @@ bool XeSSFGPresenter::EndFrame(bool waitForGpu) noexcept {
 	_lastPresentedFrameCount = hr == S_OK ? std::optional<uint32_t>(1) : std::optional<uint32_t>(0);
 	xellAddMarkerData(impl.xell, impl.frameId, XELL_PRESENT_END);
 	impl.lastPresent = presentStart;
+	// present 间隔诊断:量化验证节奏均匀性。组合模式预期:odd≈presents/2、
+	// held≈odd、avgMs≈P/2、min/max 收敛在 P/2 附近、pairMs≈后端配对周期;
+	// 纯 XeSSFG 预期:odd=0、held=0、avgMs≈真实输入间隔（零干预证据）。
+	if (impl.prevPresentValid) {
+		const float intervalMs = static_cast<float>(
+			std::chrono::duration<double, std::milli>(presentStart - impl.prevPresent).count());
+		if (impl.presentStatCount == 0) {
+			impl.presentIntervalMinMs = intervalMs;
+			impl.presentIntervalMaxMs = intervalMs;
+		} else {
+			impl.presentIntervalMinMs = std::min(impl.presentIntervalMinMs, static_cast<double>(intervalMs));
+			impl.presentIntervalMaxMs = std::max(impl.presentIntervalMaxMs, static_cast<double>(intervalMs));
+		}
+		if (parity == 1) ++impl.presentOddCount;
+		if (presentHeld) ++impl.presentHeldCount;
+		impl.presentIntervalSumMs += intervalMs;
+		++impl.presentStatCount;
+		if (impl.presentStatCount >= 120) {
+			Logger::Get().Info(fmt::format(
+				"XeSSFG present pacing: presents={} odd={} held={} avgMs={:.1f} minMs={:.1f} maxMs={:.1f} pairMs={:.1f}",
+				impl.presentStatCount, impl.presentOddCount, impl.presentHeldCount,
+				impl.presentIntervalSumMs / impl.presentStatCount,
+				impl.presentIntervalMinMs, impl.presentIntervalMaxMs,
+				impl.pairPeriodMs));
+			impl.presentStatCount = 0;
+			impl.presentOddCount = 0;
+			impl.presentHeldCount = 0;
+			impl.presentIntervalSumMs = 0.0;
+		}
+	}
+	impl.prevPresent = presentStart;
+	impl.prevPresentValid = true;
 
 	if (FAILED(hr)) {
 		Logger::Get().ComError("XeSSFG proxy Present failed", hr);
@@ -1028,6 +1162,7 @@ bool XeSSFGPresenter::BeginFrame(
 bool XeSSFGPresenter::EndFrame(bool) noexcept { return false; }
 bool XeSSFGPresenter::SetBaseFrameRateLimit(double) noexcept { return false; }
 bool XeSSFGPresenter::WaitForFrameCapacity(DWORD) noexcept { return false; }
+void XeSSFGPresenter::SetReuseParity(int32_t) noexcept {}
 void XeSSFGPresenter::SetFrameGuidance(
 	ID3D11Texture2D*, FrameGuidanceFrameId, bool, const RECT&) noexcept {}
 bool XeSSFGPresenter::HasIndependentOverlay() const noexcept { return false; }

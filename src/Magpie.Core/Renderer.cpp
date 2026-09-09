@@ -965,6 +965,11 @@ bool Renderer::_FrontendOverlayRender(bool contentChanged) noexcept {
 // 稍后再试（非阻塞）。半周期估计来自奇帧到期消费的奇→奇间隔 EMA。偶帧与
 // 超时（800ms 防冻结）恒 false。
 bool Renderer::ShouldDeferOddPresentation() noexcept {
+	// XeSSFG 激活时输入节奏已由 _pendingReuseOdd hold 机制在后端输入层管理,
+	// 前端再叠加半周期延迟会造成双重延迟,跳过。
+	if (_isXeSSFrameGenerationActive) {
+		return false;
+	}
 	if (_reuseParityPublished.load(std::memory_order_acquire) != 1) {
 		return false;
 	}
@@ -2420,7 +2425,7 @@ void Renderer::_BackendThreadProc() noexcept {
 			if (now < _fgInputClock.Due(now)) continue;
 			// Do not replace colour/reference/motion before this input enters FG.
 			auto input = std::move(_pendingFrameGenerationInput);
-			_fgInputClock.Submitted(now);
+			_fgInputClock.Submitted(std::chrono::steady_clock::now());
 			_CompleteBackendFrame(input.get(), true);
 			if (!_dlssFrameGenerator || !_synchronousFramePresentationEnabled.load(std::memory_order_acquire)) {
 				PostMessage(ScalingWindow::Get().Handle(), CommonSharedConstants::WM_FRONTEND_RENDER, 0, 0);
@@ -2825,6 +2830,12 @@ void Renderer::_BackendRender(
 		d3dDC->Flush();
 		return;
 	}
+	// XeSSFG + 残差转移组合的输入节奏：后端保持零等待满速（串行单线程里
+	// 任何等待都会阻塞 NGX 提交与捕获,且等待时长的自测会经「延迟 NGX」
+	// 的间接路径正反馈发散——三次实测均以退化告终）。奇帧的背靠背到达
+	// 由前端 present 侧处理:XeSSFGPresenter::EndFrame 按 parity 把奇帧
+	// hold 到配对中点,并对 XeSS 报告均匀化的 frameRenderTime,插值时刻
+	// 因此回归真实运动中点。
 	_CompleteBackendFrame(effectsOutput, isNewCaptureFrame);
 }
 
@@ -2868,7 +2879,10 @@ void Renderer::_CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewC
 	}
 
 	// 帧复用：发布完成后打奇偶标记与时间戳（供前端呈现节奏控制）。Draw 刚在
-	// 本线程完成，parity 查询无竞态。
+	// 本线程完成，parity 查询无竞态。parity 同时交给 presenter（XeSSFG 用它
+	// 把奇帧 present 节奏化到配对中点——详见 XeSSFGPresenter::EndFrame）;
+	// 下一帧的 parity 写入在 ≥3ms 后（奇帧转移背靠背、偶帧在 NGX 之后）,
+	// 前端相邻两次原子读不会被跨帧污染。
 	{
 		int32_t parity = -1;
 		for (const auto& backend : _nativeEffectBackends) {
@@ -2878,6 +2892,9 @@ void Renderer::_CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewC
 			}
 		}
 		_reuseParityPublished.store(parity, std::memory_order_release);
+		if (_presenter) {
+			_presenter->SetReuseParity(parity);
+		}
 		if (parity == 1) {
 			_reuseOddPublishNs.store(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
