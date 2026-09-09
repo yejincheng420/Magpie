@@ -30,29 +30,31 @@ private:
 	MotionVectorRequest _motionRequest{};
 	void _Reset() noexcept;
 
-	ID3D11Device* _device = nullptr;
-	ID3D11DeviceContext4* _d3dDC = nullptr;
-	HMODULE _coreModule = nullptr;
-	HMODULE _backendModule = nullptr;
-	void* _context = nullptr;
-	void* _scratch = nullptr;
-	size_t _scratchSize = 0;
-	void* _contextCreate = nullptr;
-	void* _contextDestroy = nullptr;
-	void* _contextDispatch = nullptr;
-	void* _getInterface = nullptr;
-	void* _getScratchSize = nullptr;
-	void* _getDevice = nullptr;
-	void* _getResource = nullptr;
-	winrt::com_ptr<ID3D11Texture2D> _zeroMotion;
-	winrt::com_ptr<ID3D11UnorderedAccessView> _zeroMotionUav;
-	winrt::com_ptr<ID3D11Texture2D> _zeroDepth;
-	winrt::com_ptr<ID3D11UnorderedAccessView> _zeroDepthUav;
-	winrt::com_ptr<ID3D11Texture2D> _reactive;
-	winrt::com_ptr<ID3D11UnorderedAccessView> _reactiveUav;
-	bool _resetHistory = true;
-	FrameGuidanceFrameId _lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
-	bool _enableOpticalFlow = false;
+	// 以下字段仅在 MP_ENABLE_FSR2_ZEROMV 构建中使用；无 SDK 的 CI 构建里
+	// ClangCL -Werror、-Wunused-private-field 会报错
+	[[maybe_unused]] ID3D11Device* _device = nullptr;
+	[[maybe_unused]] ID3D11DeviceContext4* _d3dDC = nullptr;
+	[[maybe_unused]] HMODULE _coreModule = nullptr;
+	[[maybe_unused]] HMODULE _backendModule = nullptr;
+	[[maybe_unused]] void* _context = nullptr;
+	[[maybe_unused]] void* _scratch = nullptr;
+	[[maybe_unused]] size_t _scratchSize = 0;
+	[[maybe_unused]] void* _contextCreate = nullptr;
+	[[maybe_unused]] void* _contextDestroy = nullptr;
+	[[maybe_unused]] void* _contextDispatch = nullptr;
+	[[maybe_unused]] void* _getInterface = nullptr;
+	[[maybe_unused]] void* _getScratchSize = nullptr;
+	[[maybe_unused]] void* _getDevice = nullptr;
+	[[maybe_unused]] void* _getResource = nullptr;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _zeroMotion;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _zeroMotionUav;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _zeroDepth;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _zeroDepthUav;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _reactive;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _reactiveUav;
+	[[maybe_unused]] bool _resetHistory = true;
+	[[maybe_unused]] FrameGuidanceFrameId _lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
+	[[maybe_unused]] bool _enableOpticalFlow = false;
 };
 
 }

@@ -29,7 +29,8 @@ public:
 	OpticalFlowInitializationError InitializationError() const noexcept override;
 
 private:
-	AmdOpticalFlowMode _mode;
+	// 仅在 MP_ENABLE_AMD_OPTICAL_FLOW 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
+	[[maybe_unused]] AmdOpticalFlowMode _mode;
 	std::unique_ptr<Impl> _impl;
 };
 

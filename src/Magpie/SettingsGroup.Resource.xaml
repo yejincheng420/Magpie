@@ -38,12 +38,13 @@
 						                  Margin="1,0,0,0"
 						                  Content="{TemplateBinding Description}"
 						                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-						                  TextWrapping="WrapWholeWords">
+						                  TextWrapping="Wrap">
 							<ContentPresenter.Resources>
 								<Style BasedOn="{StaticResource CaptionTextBlockStyle}"
 								       TargetType="TextBlock">
 									<Style.Setters>
-										<Setter Property="TextWrapping" Value="WrapWholeWords" />
+										<!-- CJK 文本无词边界，WrapWholeWords 会导致窄窗口下整句截断 -->
+										<Setter Property="TextWrapping" Value="Wrap" />
 									</Style.Setters>
 								</Style>
 								<Style BasedOn="{StaticResource TextButtonStyle}"

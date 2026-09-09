@@ -90,6 +90,7 @@
 		              IsTabStop="True"
 		              KeyDown="ScrollViewer_KeyDown"
 		              PointerPressed="ScrollViewer_PointerPressed"
+		              HorizontalScrollBarVisibility="Disabled"
 		              VerticalScrollBarVisibility="Auto"
 		              ViewChanging="ScrollViewer_ViewChanging">
 			<ContentControl Grid.Column="0"

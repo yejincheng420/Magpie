@@ -1446,8 +1446,9 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 			std::string(GetEffectDisplayName(description)).c_str());
 
 		std::string_view currentGroup;
-		uint32_t validCount = 0;
-		uint32_t invalidCount = 0;
+		// 仅在 _DEBUG 下读取（参数元数据一致性告警），release 下以 maybe_unused 抑制 ClangCL -Werror
+		[[maybe_unused]] uint32_t validCount = 0;
+		[[maybe_unused]] uint32_t invalidCount = 0;
 		for (size_t parameterIdx = 0;
 			parameterIdx < description.params.size(); ++parameterIdx) {
 			const EffectParameterDesc& parameter =

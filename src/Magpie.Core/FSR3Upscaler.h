@@ -33,8 +33,9 @@ public:
 
 private:
 	MotionVectorRequest _motionRequest{};
-	std::unique_ptr<Impl> _impl;
-	bool _useFsr4 = false;
+	// 仅在 MP_ENABLE_FSR3_ZEROMV 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
+	[[maybe_unused]] std::unique_ptr<Impl> _impl;
+	[[maybe_unused]] bool _useFsr4 = false;
 };
 
 }

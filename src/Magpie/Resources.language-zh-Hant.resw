@@ -721,6 +721,9 @@
   <data name="Message_ScalingFailed" xml:space="preserve">
     <value>無法啟用效果組</value>
   </data>
+  <data name="Message_ScalingStarted" xml:space="preserve">
+    <value>縮放已開始，再按一次縮放捷徑停止</value>
+  </data>
   <data name="Home_Advanced_DeveloperOptions_EnableStatisticsForDynamicDetection.Content" xml:space="preserve">
     <value>啟用動態偵測統計</value>
   </data>

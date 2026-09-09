@@ -72,6 +72,7 @@ This project builds on [Blinue/Magpie](https://github.com/Blinue/Magpie) and its
 - [HexBen123](https://github.com/HexBen123): early depth-estimation performance optimization and TensorRT integration guidance, plus the [DLSSNR parameter-localization proposal](https://github.com/SAOG0721/Magpie/pull/16).
 - [Kristijan1001](https://github.com/Kristijan1001): the [reference implementation for editing effect parameters while scaling](https://github.com/SAOG0721/Magpie/pull/4), which informed this project's parameter-panel design and implementation.
 - [LCPD15](https://github.com/LCPD15): the [1.0× windowed-scaling fix](https://github.com/SAOG0721/Magpie/pull/3), allowing same-resolution effects to be displayed at the source size without forcing output enlargement.
+- [TurnX-alt](https://github.com/TurnX-alt): [build, UI and repository consistency improvements](https://github.com/SAOG0721/Magpie/pull/23), including ClangCL build fixes without optional SDKs, preset parameter and feedback link corrections, narrow-window text wrapping, scaling-start notifications and a repository consistency check suite.
 
 Contributions through Issues and Pull Requests are welcome. See [Contributors](https://github.com/SAOG0721/Magpie/graphs/contributors) for the code contribution history.
 

@@ -37,9 +37,11 @@ private:
 	void _Shutdown() noexcept;
 
 	winrt::com_ptr<ID3D12Device> _device;
-	uint32_t _activeConsumers = 0;
-	uint32_t _activeParameterBlocks = 0;
-	bool _initialized = false;
+	// 以下字段只在各 SDK 门控后端(同一 TU 之外)中读取，本 TU 不触达；
+	// 无 SDK 的 CI 构建里 ClangCL -Werror、-Wunused-private-field 会报错
+	[[maybe_unused]] uint32_t _activeConsumers = 0;
+	[[maybe_unused]] uint32_t _activeParameterBlocks = 0;
+	[[maybe_unused]] bool _initialized = false;
 };
 
 }

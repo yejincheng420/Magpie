@@ -823,6 +823,9 @@
   <data name="Message_ScalingFailed" xml:space="preserve">
     <value>无法启用效果组</value>
   </data>
+  <data name="Message_ScalingStarted" xml:space="preserve">
+    <value>缩放已开始，再次按下缩放快捷键停止</value>
+  </data>
   <data name="Profile_Performance_NoGraphicsCard.Title" xml:space="preserve">
     <value>找不到兼容的显卡，将使用性能较低的 CPU 渲染。请确认显卡驱动已经正确安装并更新。</value>
   </data>

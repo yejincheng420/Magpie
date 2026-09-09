@@ -62,10 +62,11 @@ protected:
 private:
 	bool _ResizeOverlaySurface() noexcept;
 
-	std::unique_ptr<Impl> _impl;
-	XeSSFGVariant _variant = XeSSFGVariant::X2;
-	uint32_t _requestedMultiplier = 2;
-	bool _useExternalMotion = false;
+	// 仅在 MP_ENABLE_XESS_FRAME_GENERATION 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
+	[[maybe_unused]] std::unique_ptr<Impl> _impl;
+	[[maybe_unused]] XeSSFGVariant _variant = XeSSFGVariant::X2;
+	[[maybe_unused]] uint32_t _requestedMultiplier = 2;
+	[[maybe_unused]] bool _useExternalMotion = false;
 	ScalingError _initializationError = ScalingError::ScalingFailedGeneral;
 };
 

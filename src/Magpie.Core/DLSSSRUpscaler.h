@@ -52,21 +52,23 @@ public:
 private:
 	void _Reset() noexcept;
 
-	ID3D11Device5* _device = nullptr;
-	ID3D11DeviceContext4* _d3dDC = nullptr;
-	winrt::com_ptr<ID3D11Texture2D> _zeroMotionVectors;
-	winrt::com_ptr<ID3D11UnorderedAccessView> _zeroMotionVectorsUav;
-	winrt::com_ptr<ID3D11Texture2D> _zeroDepth;
-	winrt::com_ptr<ID3D11UnorderedAccessView> _zeroDepthUav;
-	winrt::com_ptr<ID3D11Texture2D> _biasCurrentColorMask;
-	winrt::com_ptr<ID3D11UnorderedAccessView> _biasCurrentColorMaskUav;
-	void* _parameters = nullptr;
-	void* _feature = nullptr;
-	bool _ngxInitialized = false;
-	bool _resetHistory = true;
-	DLSSSRSettings _settings{};
-	uint8_t _lastGuidanceBinding = UINT8_MAX;
-	FrameGuidanceFrameId _lastGuidanceResetFrameId =
+	// 以下字段仅在 MP_ENABLE_DLSS_SR 构建中使用；无 SDK 的 CI 构建里
+	// ClangCL -Werror、-Wunused-private-field 会报错
+	[[maybe_unused]] ID3D11Device5* _device = nullptr;
+	[[maybe_unused]] ID3D11DeviceContext4* _d3dDC = nullptr;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _zeroMotionVectors;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _zeroMotionVectorsUav;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _zeroDepth;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _zeroDepthUav;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _biasCurrentColorMask;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _biasCurrentColorMaskUav;
+	[[maybe_unused]] void* _parameters = nullptr;
+	[[maybe_unused]] void* _feature = nullptr;
+	[[maybe_unused]] bool _ngxInitialized = false;
+	[[maybe_unused]] bool _resetHistory = true;
+	[[maybe_unused]] DLSSSRSettings _settings{};
+	[[maybe_unused]] uint8_t _lastGuidanceBinding = UINT8_MAX;
+	[[maybe_unused]] FrameGuidanceFrameId _lastGuidanceResetFrameId =
 		std::numeric_limits<FrameGuidanceFrameId>::max();
 };
 

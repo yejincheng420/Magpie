@@ -823,6 +823,9 @@
   <data name="Message_ScalingFailed" xml:space="preserve">
     <value>Could not enable effect group</value>
   </data>
+  <data name="Message_ScalingStarted" xml:space="preserve">
+    <value>Scaling started. Press the scaling shortcut again to stop.</value>
+  </data>
   <data name="Profile_Performance_NoGraphicsCard.Title" xml:space="preserve">
     <value>No compatible graphics card was found, so slower CPU rendering will be used. Make sure your graphics driver is installed and up to date.</value>
   </data>

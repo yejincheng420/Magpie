@@ -82,9 +82,10 @@ public:
 	bool Draw(const NativeEffectDrawContext& context) noexcept override;
 
 private:
-	std::unique_ptr<Impl> _impl;
-	DLSSNRSettings _settings;
-	NgxD3D12Core* _ngxCore = nullptr;
+	// 仅在 MP_ENABLE_DLSSNR 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
+	[[maybe_unused]] std::unique_ptr<Impl> _impl;
+	[[maybe_unused]] DLSSNRSettings _settings;
+	[[maybe_unused]] NgxD3D12Core* _ngxCore = nullptr;
 };
 
 }

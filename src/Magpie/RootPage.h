@@ -129,7 +129,8 @@ private:
 	::Magpie::Event<uint32_t>::EventRevoker _profileRenamedRevoker;
 	::Magpie::Event<uint32_t>::EventRevoker _profileRemovedRevoker;
 	::Magpie::Event<uint32_t, uint32_t>::EventRevoker _profileMovedRevoker;
-	Primitives::FlyoutBase::Opening_revoker _contextFlyoutOpeningRevoker;
+	// 当前未被任何代码读取（Opening 事件钩子未接线）；ClangCL -Werror、-Wunused-private-field 会报错
+	[[maybe_unused]] Primitives::FlyoutBase::Opening_revoker _contextFlyoutOpeningRevoker;
 
 	Button _profileMoreOptionsButton{ nullptr };
 	FrameworkElement _profileReorderHandle{ nullptr };

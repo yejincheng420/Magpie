@@ -12,7 +12,7 @@
         {
           "name": "DLSSFG\\DLSS_FrameGeneration",
           "parameters": {
-            "frameMultiplier": 2,
+            "multiplier": 2,
             "useMotionVectors": 1,
             "useEstimatedDepth": 0
           }

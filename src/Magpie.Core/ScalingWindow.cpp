@@ -464,6 +464,8 @@ void ScalingWindow::_CompleteFrontendRender(
 		_isFirstFrame = false;
 		// 第一帧渲染完成后显示缩放窗口
 		_Show();
+		// 缩放已开始，给用户一个确认；失败路径已有错误提示
+		ShowToast(GetLocalizedString(L"Message_ScalingStarted"));
 		const auto& notice = _renderer->MotionConfigurationNotice();
 		if (!notice.empty()) ShowToast(notice);
 	}

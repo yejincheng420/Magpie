@@ -33,8 +33,9 @@ public:
 
 private:
 	struct Impl;
-	std::unique_ptr<Impl> _impl;
-	uint32_t _qualityLevel = 8;
+	// 仅在 MP_ENABLE_RTX_VIDEO_DENOISE 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
+	[[maybe_unused]] std::unique_ptr<Impl> _impl;
+	[[maybe_unused]] uint32_t _qualityLevel = 8;
 	ScalingError _initializationError = ScalingError::NoError;
 };
 
