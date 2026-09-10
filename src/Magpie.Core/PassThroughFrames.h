@@ -11,7 +11,9 @@ class DeviceResources;
 // color and motion images. Reconfiguration runs only while the frontend waits.
 class PassThroughFrames {
 public:
-	static constexpr uint32_t MAX_SLOTS = 4;
+	// 必须与 Renderer::MAX_SHARED_TEXTURE_SLOTS 一致：DLSSFG 发布环按整对
+	//（2×倍率，4x=8）建槽，对比参考帧跟随同一槽位事务。
+	static constexpr uint32_t MAX_SLOTS = 8;
 	bool InitializeBackend(DeviceResources& resources, ID3D11Texture2D* input,
 		ID3D11Texture2D* output, uint32_t slotCount) noexcept;
 	bool OpenFrontend(DeviceResources& resources, uint32_t slotCount) noexcept;

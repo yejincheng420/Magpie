@@ -489,8 +489,11 @@ winrt::fire_and_forget Renderer::TakeScreenshot(
 bool Renderer::_OpenFrontendSharedTextures() noexcept {
 	// Backend rendering may already be running. Hold all publication slots
 	// while opening (or disabling) the optional reference branch.
-	std::scoped_lock slotLocks(_sharedTextureAccessMutexes[0], _sharedTextureAccessMutexes[1],
-		_sharedTextureAccessMutexes[2], _sharedTextureAccessMutexes[3]);
+	std::scoped_lock slotLocks(_sharedTextureAccessMutexes[0],
+		_sharedTextureAccessMutexes[1], _sharedTextureAccessMutexes[2],
+		_sharedTextureAccessMutexes[3], _sharedTextureAccessMutexes[4],
+		_sharedTextureAccessMutexes[5], _sharedTextureAccessMutexes[6],
+		_sharedTextureAccessMutexes[7]);
 	if (!_passThroughFrames.OpenFrontend(_frontendResources, _sharedTextureSlotCount)) {
 		const auto& window = ScalingWindow::Get();
 		if (const auto& report = window.Options().reportErrorDetails) {
@@ -1156,6 +1159,15 @@ void Renderer::_RecordDLSSFGFrontendTimings(
 		_dlssFgFrontendBeginFrame = {};
 		_dlssFgFrontendDraw = {};
 		_dlssFgFrontendEndFrame = {};
+		_dlssFgPairPacedFrames = 0;
+		_dlssFgDiagAnchorFrame = 0;
+		_dlssFgDiagPaced = 0;
+		_dlssFgDiagLate = 0;
+		_dlssFgDiagNoAnchor = 0;
+		_dlssFgDiagNoPeriod = 0;
+		_dlssFgDiagAnchorCommits = 0;
+		_dlssFgDiagGroups = 0;
+		_dlssFgDiagParity[0] = _dlssFgDiagParity[1] = _dlssFgDiagParity[2] = 0;
 		_dlssFgRingWaitNanoseconds.exchange(0, std::memory_order_relaxed);
 		_dlssFgRingWaitSamples.exchange(0, std::memory_order_relaxed);
 	}
@@ -1182,16 +1194,34 @@ void Renderer::_RecordDLSSFGFrontendTimings(
 	Logger::Get().Info(fmt::format(
 		"DLSSFG frontend timing: mode={} frames={} paceWait={:.3f} ms "
 		"beginFrame={:.3f} ms draw={:.3f} ms endFrame={:.3f} ms "
-		"ringWait={:.3f} ms",
+		"ringWait={:.3f} ms pairPaced={}/{} "
+		"decision[anchor={} paced={} late={} noAnchor={} noPeriod={}] "
+		"anchors={} groups={} period={:.1f}ms frameIdx={} "
+		"parity[-1/0/1]={}/{}/{}",
 		usesFrameLatencyWaitableObject ? "deadline+DXGI" : "DWM",
 		_dlssFgFrontendTimingFrames,
 		averageMilliseconds(_dlssFgFrontendPacingWait),
 		averageMilliseconds(_dlssFgFrontendBeginFrame),
 		averageMilliseconds(_dlssFgFrontendDraw),
 		averageMilliseconds(_dlssFgFrontendEndFrame),
-		averageRingWaitMilliseconds));
+		averageRingWaitMilliseconds,
+		_dlssFgPairPacedFrames, _dlssFgFrontendTimingFrames,
+		_dlssFgDiagAnchorFrame, _dlssFgDiagPaced, _dlssFgDiagLate,
+		_dlssFgDiagNoAnchor, _dlssFgDiagNoPeriod,
+		_dlssFgDiagAnchorCommits, _dlssFgDiagGroups,
+		_dlssFgPairPeriodMs, _dlssFgPairFrameIndex,
+		_dlssFgDiagParity[0], _dlssFgDiagParity[1], _dlssFgDiagParity[2]));
 
 	_dlssFgFrontendTimingFrames = 0;
+	_dlssFgPairPacedFrames = 0;
+	_dlssFgDiagAnchorFrame = 0;
+	_dlssFgDiagPaced = 0;
+	_dlssFgDiagLate = 0;
+	_dlssFgDiagNoAnchor = 0;
+	_dlssFgDiagNoPeriod = 0;
+	_dlssFgDiagAnchorCommits = 0;
+	_dlssFgDiagGroups = 0;
+	_dlssFgDiagParity[0] = _dlssFgDiagParity[1] = _dlssFgDiagParity[2] = 0;
 	_dlssFgFrontendPacingWait = {};
 	_dlssFgFrontendBeginFrame = {};
 	_dlssFgFrontendDraw = {};
@@ -1230,8 +1260,96 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 	const auto pacingStart = std::chrono::steady_clock::now();
 	const std::chrono::nanoseconds presentInterval(
 		_sharedPresentIntervalNs[sharedTextureSlot].load(std::memory_order_acquire));
-	const auto targetTime = _presentationClock.Due(pacingStart, presentInterval);
-	if (presentInterval.count() > 0 && pacingStart < targetTime) {
+
+	// pair 相位节奏化（见 Renderer.h 状态注释）：残差转移下到达是脉冲式
+	// （NGX 半周期憋帧、奇帧快出），固定间隔 deadline 永远晚点（paceWait
+	// 恒 0 的实证），脉冲直接穿透到显示。两种模式统一处理：
+	// - Pair（残差转移开，parity 0/1）：偶（NGX）组到达为锚点，一对 2M 帧
+	//   均匀铺到配对周期 P：第 k 帧 due = 锚点 + k×P/(2M)。
+	// - Uniform（单用 DLSSFG，parity 恒 -1）：后端把每组 M 帧在几 ms 内突发
+	//   发布（评估循环连续出帧），固定间隔时钟对突发结构性失效（每次迟到
+	//   重置基准 → 永远晚点）。每组首帧到达为锚点，M 帧均匀铺到组间周期
+	//   T：第 k 帧 due = 锚点 + k×T/M。
+	// 早到 Retry 等槽（外层循环 1ms 唤醒，已排队输入不被阻塞），晚到立即
+	// 呈现。关键：due 计算幂等（Retry 重试间可安全重跑），全部状态只在成
+	// 功呈现后一次性提交——否则索引/组开闭被每次重试重复执行而膨胀错乱
+	// （实测 pairPaced=0 的根因）。
+	if (sharedTextureGeneration != _dlssFgSeenRingGeneration) {
+		// 新发布环（重建/恢复）：节奏状态全部复位
+		_dlssFgSeenRingGeneration = sharedTextureGeneration;
+		_dlssFgPairAnchorValid = false;
+		_dlssFgPairPeriodMs = 0.0;
+		_dlssFgLastEvenPublishNs = 0;
+		_dlssFgPairFrameIndex = 0;
+		_dlssFgGroupClosed = true;
+		_dlssFgPairModeActive = false;
+	}
+	const bool containsGenerated =
+		_sharedTextureContainsGeneratedFrame[sharedTextureSlot].load(std::memory_order_acquire);
+	const int32_t frameParity =
+		_sharedFrameParity[sharedTextureSlot].load(std::memory_order_acquire);
+	const int64_t publishNs =
+		_sharedFramePublishNs[sharedTextureSlot].load(std::memory_order_acquire);
+	if (frameParity == 0 || frameParity == 1) {
+		_dlssFgPairModeActive = true;
+	}
+	// 组状态与奇偶解耦：真实帧呈现即关组（DLSSNR 旁路帧 parity=-1 也能维
+	// 持分组，下一锚定组到达即重新锚定）。
+	const bool newGroup = _dlssFgGroupClosed;
+	// 锚定组首：Pair=偶（NGX）组；Uniform=任意组（单用时 parity 恒 -1）。
+	const bool anchorGroupStart = newGroup && publishNs > 0 &&
+		(_dlssFgPairModeActive ? frameParity == 0 : true);
+	const uint32_t framesPerAnchor = (_dlssFgPairModeActive ? 2u : 1u) *
+		std::max(1u, _dlssFgActiveMultiplier.load(std::memory_order_acquire));
+
+	std::chrono::steady_clock::time_point targetTime = pacingStart;
+	bool pairPaced = false;
+	// 决策分类（幂等，重试间结果一致；计数在成功呈现后提交）
+	enum class PacingDecision : uint8_t { Anchor, Paced, Late, NoAnchor, NoPeriod };
+	PacingDecision decision = PacingDecision::Anchor;
+	{
+		// 幂等 due 计算（不提交状态）
+		std::chrono::steady_clock::time_point anchor;
+		uint32_t frameIndex = 0;
+		bool anchorUsable = false;
+		if (anchorGroupStart) {
+			// 组首 = 锚点本身，立即呈现（XeSSFG 同款「偶帧立即」语义）
+			anchor = std::chrono::steady_clock::time_point(
+				std::chrono::nanoseconds(publishNs));
+			frameIndex = 0;
+			anchorUsable = true;
+		} else {
+			anchor = _dlssFgPairAnchor;
+			frameIndex = _dlssFgPairFrameIndex;
+			anchorUsable = _dlssFgPairAnchorValid;
+		}
+		// 周期只在第二个锚定组后有效；组首（index 0）无需周期
+		if (anchorGroupStart) {
+			decision = PacingDecision::Anchor;
+		} else if (!anchorUsable) {
+			decision = PacingDecision::NoAnchor;
+		} else if (_dlssFgPairPeriodMs < 4.0) {
+			decision = PacingDecision::NoPeriod;
+		} else {
+			const double slotMs = _dlssFgPairPeriodMs / framesPerAnchor;
+			const auto due = anchor +
+				std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+					std::chrono::duration<double, std::milli>(
+						frameIndex * slotMs));
+			if (pacingStart < due &&
+				// 防呆：锚点/估计异常时最多等 100ms（与 XeSSFG 相同上限）
+				due - pacingStart <= std::chrono::milliseconds(100)) {
+				targetTime = due;
+				pairPaced = true;
+				decision = PacingDecision::Paced;
+			} else {
+				decision = PacingDecision::Late;
+			}
+		}
+		// 组首/锚点无效/周期未估出/Pair 模式的旁路帧：立即呈现（与旧行为
+		// 一致，warmup 期脉冲直通）
+	}
+	if (pairPaced && pacingStart < targetTime) {
 		// The scheduler will wake on either input or the next short deadline. Do
 		// not sleep in a FIFO job and make already queued input wait behind it.
 		return DLSSFGFrameRenderResult::Retry;
@@ -1245,7 +1363,55 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 		return DLSSFGFrameRenderResult::Retry;
 	}
 	const auto presentEnd = std::chrono::steady_clock::now();
-	_presentationClock.Presented(presentEnd, targetTime, presentInterval);
+
+	// ---- 成功呈现后一次性提交状态（Retry 路径绝不触达） ----
+	// 诊断分类计数（决策在上面幂等计算）
+	switch (decision) {
+	case PacingDecision::Anchor: ++_dlssFgDiagAnchorFrame; break;
+	case PacingDecision::Paced: ++_dlssFgDiagPaced; break;
+	case PacingDecision::Late: ++_dlssFgDiagLate; break;
+	case PacingDecision::NoAnchor: ++_dlssFgDiagNoAnchor; break;
+	case PacingDecision::NoPeriod: ++_dlssFgDiagNoPeriod; break;
+	}
+	_dlssFgDiagParity[frameParity < 0 ? 0 : (frameParity == 0 ? 1 : 2)]++;
+	if (newGroup) {
+		_dlssFgGroupClosed = false;
+		++_dlssFgDiagGroups;
+		if (anchorGroupStart) {
+			++_dlssFgDiagAnchorCommits;
+			if (_dlssFgLastEvenPublishNs > 0) {
+				// 周期只用锚定组到达间隔估计（到达不受 hold 影响，无自反馈）
+				const double deltaMs = static_cast<double>(
+					publishNs - _dlssFgLastEvenPublishNs) / 1e6;
+				constexpr double kMinPeriodMs = 4.0;
+				if (_dlssFgPairPeriodMs < kMinPeriodMs) {
+					_dlssFgPairPeriodMs = deltaMs;
+				} else if (deltaMs > _dlssFgPairPeriodMs * 2.5) {
+					// 场景切换/暂停后的长间隔：不更新，防 EMA 膨胀
+				} else {
+					_dlssFgPairPeriodMs =
+						_dlssFgPairPeriodMs * 0.5 + deltaMs * 0.5;
+				}
+			}
+			_dlssFgLastEvenPublishNs = publishNs;
+			_dlssFgPairAnchor = std::chrono::steady_clock::time_point(
+				std::chrono::nanoseconds(publishNs));
+			_dlssFgPairAnchorValid = true;
+			_dlssFgPairFrameIndex = 1;
+		} else {
+			// 非锚定组组首（Pair 模式的奇组）：继续对内槽位计数
+			++_dlssFgPairFrameIndex;
+		}
+	} else {
+		++_dlssFgPairFrameIndex;
+	}
+	if (!containsGenerated) {
+		// 真实帧（组内最后发布）呈现后，组关闭
+		_dlssFgGroupClosed = true;
+	}
+	if (pairPaced) {
+		++_dlssFgPairPacedFrames;
+	}
 	consumePendingFrame();
 	if (_sharedTextureAvailableEvents[sharedTextureSlot]) {
 		SetEvent(_sharedTextureAvailableEvents[sharedTextureSlot].get());
@@ -2104,6 +2270,8 @@ bool Renderer::_InitializeDLSSFrameGenerator(
 	_dlssFgGeneratedPublishFailure = 0;
 	_dlssFgRealPublishSuccess = 0;
 	_dlssFgRealPublishFailure = 0;
+	_dlssFgActiveMultiplier.store(
+		std::max(1u, frameGenerator->Multiplier()), std::memory_order_release);
 	_dlssFrameGenerator = std::move(frameGenerator);
 	return true;
 }
@@ -2220,7 +2388,9 @@ HANDLE Renderer::_CreateSharedTexture(ID3D11Texture2D* effectsOutput) noexcept {
 	effectsOutput->GetDesc(&desc);
 	SIZE textureSize = { (LONG)desc.Width, (LONG)desc.Height };
 	_sharedTextureSlotCount = _dlssFrameGenerator ?
-		std::clamp(_dlssFrameGenerator->Multiplier(), 2u, MAX_SHARED_TEXTURE_SLOTS) : 1u;
+		// 整对容量（2×倍率）：前端 pair 相位 hold 不经有界环反压后端发布
+		//（反馈发散风险，见 Renderer.h 注释）。
+		std::clamp(_dlssFrameGenerator->Multiplier() * 2u, 2u, MAX_SHARED_TEXTURE_SLOTS) : 1u;
 	_sharedTextureGeneration.fetch_add(1, std::memory_order_release);
 	_nextBackendSharedTextureSlot = 0;
 	_latestSharedTextureSlot.store(0, std::memory_order_relaxed);
@@ -2236,6 +2406,8 @@ HANDLE Renderer::_CreateSharedTexture(ID3D11Texture2D* effectsOutput) noexcept {
 		_sharedMotionFrameIds[i].store(0, std::memory_order_relaxed);
 		_sharedMotionValid[i].store(false, std::memory_order_relaxed);
 		_sharedMotionReset[i].store(true, std::memory_order_relaxed);
+		_sharedFramePublishNs[i].store(0, std::memory_order_relaxed);
+		_sharedFrameParity[i].store(-1, std::memory_order_relaxed);
 	}
 
 	for (uint32_t i = 0; i < _sharedTextureSlotCount; ++i) {
@@ -2844,6 +3016,16 @@ void Renderer::_CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewC
 	if (_frontEdgeSyncEnabled) _baseFrameRateLimit = _FrontEdgeFrameRate();
 	if (_dlssFrameGenerator) _synchronousPresentInterval =
 		_captureCadence.Interval(_dlssFrameGenerator->Multiplier(), _baseFrameRateLimit);
+	// 帧首提前取本帧奇偶（DLSSNR 已在效果循环完成本帧绘制，之后无人改写）：
+	// 本帧全部发布（生成帧 + 真实帧）的 per-slot 奇偶由此写出，供前端
+	// pair 相位节奏化锚定。
+	_dlssFgPendingParity = -1;
+	for (const auto& backend : _nativeEffectBackends) {
+		if (backend) {
+			_dlssFgPendingParity = backend->LastDrawReuseParity();
+			if (_dlssFgPendingParity != -1) break;
+		}
+	}
 	if (_dlssFrameGenerator && isNewCaptureFrame) {
 		D3D11_TEXTURE2D_DESC sourceDesc{};
 		_frameSource->GetOutput()->GetDesc(&sourceDesc);
@@ -2884,13 +3066,7 @@ void Renderer::_CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewC
 	// 下一帧的 parity 写入在 ≥3ms 后（奇帧转移背靠背、偶帧在 NGX 之后）,
 	// 前端相邻两次原子读不会被跨帧污染。
 	{
-		int32_t parity = -1;
-		for (const auto& backend : _nativeEffectBackends) {
-			if (backend) {
-				parity = backend->LastDrawReuseParity();
-				if (parity != -1) break;
-			}
-		}
+		const int32_t parity = _dlssFgPendingParity;
 		_reuseParityPublished.store(parity, std::memory_order_release);
 		if (_presenter) {
 			_presenter->SetReuseParity(parity);
@@ -3056,6 +3232,14 @@ bool Renderer::_PublishBackendTexture(
 	}
 	_sharedPresentIntervalNs[sharedTextureSlot].store(
 		_synchronousPresentInterval.count(), std::memory_order_release);
+	// per-slot 发布时刻（到达）与奇偶：前端 RenderDLSSFGFrame 的 pair 相位
+	// 节奏化用它锚定与铺帧。
+	_sharedFramePublishNs[sharedTextureSlot].store(
+		std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count(),
+		std::memory_order_release);
+	_sharedFrameParity[sharedTextureSlot].store(
+		_dlssFgPendingParity, std::memory_order_release);
 	_sharedTextureContainsGeneratedFrame[sharedTextureSlot].store(
 		generatedFrame, std::memory_order_release);
 	_latestSharedTextureSlot.store(sharedTextureSlot, std::memory_order_release);

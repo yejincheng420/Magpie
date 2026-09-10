@@ -256,7 +256,10 @@ private:
 	PassThroughFrames _passThroughFrames;
 	bool _isPassThroughActive = false;
 
-	static constexpr uint32_t MAX_SHARED_TEXTURE_SLOTS = 4;
+	// DLSSFG pair 相位节奏化需要发布环容纳整对 2M 帧（4x=8），否则前端的
+	// hold 会经有界环反压后端发布，形成「等待→环阻塞→NGX 延迟→周期膨胀」
+	// 的正反馈（历史实测 pair 67→151ms 发散）。1440p 下 +4 槽 ≈ +59MiB。
+	static constexpr uint32_t MAX_SHARED_TEXTURE_SLOTS = 8;
 	std::array<winrt::com_ptr<ID3D11Texture2D>, MAX_SHARED_TEXTURE_SLOTS>
 		_frontendSharedTextures;
 	std::array<winrt::com_ptr<IDXGIKeyedMutex>, MAX_SHARED_TEXTURE_SLOTS>
@@ -339,6 +342,13 @@ private:
 		_sharedTextureMutexKeys{};
 	std::array<std::atomic<bool>, MAX_SHARED_TEXTURE_SLOTS>
 		_sharedTextureContainsGeneratedFrame{};
+	// DLSSFG pair 相位节奏化：每次发布随 slot 交换的发布时刻（steady ns）与
+	// 奇偶性（后端 _PublishBackendTexture 写，前端 RenderDLSSFGFrame 读）。
+	// -1 = 未知/无残差转移；0 = 偶（NGX）组；1 = 奇（转移）组。
+	std::array<std::atomic<int64_t>, MAX_SHARED_TEXTURE_SLOTS>
+		_sharedFramePublishNs{};
+	std::array<std::atomic<int32_t>, MAX_SHARED_TEXTURE_SLOTS>
+		_sharedFrameParity{};
 	std::array<std::atomic<FrameGuidanceFrameId>, MAX_SHARED_TEXTURE_SLOTS>
 		_sharedMotionFrameIds{};
 	std::array<std::atomic<bool>, MAX_SHARED_TEXTURE_SLOTS>
@@ -388,8 +398,40 @@ private:
 	std::chrono::nanoseconds _dlssFgFrontendBeginFrame{};
 	std::chrono::nanoseconds _dlssFgFrontendDraw{};
 	std::chrono::nanoseconds _dlssFgFrontendEndFrame{};
+	// DLSSFG pair 相位节奏化（仅 RenderDLSSFGFrame 触碰，前端线程独占）：
+	// 后端到达是脉冲式——残差转移下 NGX 半周期憋帧、奇帧快出；单用时每组
+	// M 帧在几 ms 内突发发布（评估循环连续出帧）。固定间隔 deadline 对突发
+	// 结构性失效（每次迟到重置基准 → paceWait 恒 0），脉冲原样穿透到显示。
+	// 两种模式统一：以锚定组首帧到达（发布）时刻为锚点，把锚定周期内的帧
+	// 均匀铺开——Pair（残差转移，parity 0/1）：偶（NGX）组锚定，一对 2M 帧
+	// 铺到配对周期 P，槽距 P/(2M)；Uniform（单用，parity 恒 -1）：每组锚定，
+	// M 帧铺到组间周期 T，槽距 T/M。早到 Retry 等槽（外层循环 1ms 唤醒，
+	// 输入不被阻塞），晚到立即呈现。锚点与周期估计只用发布时刻（到达），
+	// hold 不影响后端发布（发布环已扩到整对容量，无环反压）。
+	std::chrono::steady_clock::time_point _dlssFgPairAnchor{};
+	bool _dlssFgPairAnchorValid = false;
+	double _dlssFgPairPeriodMs = 0.0;
+	int64_t _dlssFgLastEvenPublishNs = 0;
+	uint32_t _dlssFgPairFrameIndex = 0;
+	bool _dlssFgGroupClosed = true;
+	uint32_t _dlssFgSeenRingGeneration = 0;
+	bool _dlssFgPairModeActive = false;
+	uint32_t _dlssFgPairPacedFrames = 0;
+	// 节奏化决策诊断（_RecordDLSSFGFrontendTimings 每 120 帧汇总清零）：
+	// 分类在 due 计算块（幂等），计数在成功呈现后——一次测试即可定位
+	// pairPaced=0 时卡在哪个分支。
+	uint32_t _dlssFgDiagAnchorFrame = 0;	// 锚定组首（按设计立即呈现）
+	uint32_t _dlssFgDiagPaced = 0;			// 早到被 hold 到槽位
+	uint32_t _dlssFgDiagLate = 0;			// due 已过（到达晚于槽位）
+	uint32_t _dlssFgDiagNoAnchor = 0;		// 锚点无效（首个周期前）
+	uint32_t _dlssFgDiagNoPeriod = 0;		// 周期 EMA 未估出（第二个锚定组前）
+	uint32_t _dlssFgDiagAnchorCommits = 0;	// 锚定组提交数
+	uint32_t _dlssFgDiagGroups = 0;			// 组关闭数（=真实帧呈现数）
+	uint32_t _dlssFgDiagParity[3] = {};		// parity[-1/0/1] 直方图
 	std::atomic<uint64_t> _dlssFgRingWaitNanoseconds = 0;
 	std::atomic<uint64_t> _dlssFgRingWaitSamples = 0;
+	// DLSSFG 实际生效倍率（后端 init 后写，前端读；请求倍率可能被 SDK 上限钳制）。
+	std::atomic<uint32_t> _dlssFgActiveMultiplier = 1;
 	std::chrono::steady_clock::time_point _dlssFgDiagnosticsStart{};
 	uint32_t _dlssFgCapturedFrameCount = 0;
 	uint32_t _dlssFgPresentedFrameCount = 0;
@@ -397,6 +439,9 @@ private:
 	uint32_t _dlssFgGeneratedPublishFailure = 0;
 	uint32_t _dlssFgRealPublishSuccess = 0;
 	uint32_t _dlssFgRealPublishFailure = 0;
+	// 本帧奇偶（后端线程独占；_CompleteBackendFrame 帧首计算，
+	// _PublishBackendTexture 随 slot 写出，供前端 pair 相位节奏化）。
+	int32_t _dlssFgPendingParity = -1;
 	bool _dlssFgPresentationStopping = false;
 	bool _isXeSSFrameGenerationActive = false;
 	FrameGenerationEffectKind _xessFrameGenerationKind =

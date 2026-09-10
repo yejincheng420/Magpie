@@ -20,6 +20,7 @@
 #include "TouchHelper.h"
 #include "CommonSharedConstants.h"
 #include "Logger.h"
+#include "StrHelper.h"
 #include <shellapi.h>
 
 using namespace Magpie;
@@ -80,6 +81,40 @@ static void InitializeLogger(const wchar_t* logFilePath) noexcept {
 	);
 }
 
+// DLSSG 代理加载（dlssg_sm75 / dlssg_sm86 部署包）：这类代理靠游戏静态导入
+// version/dinput8/winmm 之一被系统加载器带起，而 Magpie 不导入任何一个，且
+// WinUI 栈会在进程早期抢先加载系统版 VERSION.dll，导致 NGX 特征 DLL 的
+// VERSION.dll 依赖解析永远命中系统版、目录内代理不会被加载。因此在任何
+// XAML/D3D/NvAPI 初始化之前按完整路径显式加载——完整路径加载不受同名已
+// 加载模块影响。以代理包自带的 dlssg_sm86.ini 作为部署标记：文件不存在时
+// 静默返回，零行为变化。代理是钩子 DLL，加载后必须驻留进程整个生命周期。
+static void TryLoadDlssgProxy() noexcept {
+	const std::filesystem::path exeDir = Win32Helper::GetExePath().parent_path();
+
+	std::error_code ec;
+	if (!std::filesystem::exists(exeDir / L"dlssg_sm86.ini", ec)) {
+		return;
+	}
+
+	for (const wchar_t* name : { L"version.dll", L"dinput8.dll", L"winmm.dll" }) {
+		const std::filesystem::path proxy = exeDir / name;
+		if (!std::filesystem::exists(proxy, ec)) {
+			continue;
+		}
+
+		HMODULE module = LoadLibraryExW(proxy.c_str(), nullptr, 0);
+		if (module) {
+			// 故意不卸载（不持有句柄）：钩子代理的存活期是整个进程。
+			Logger::Get().Info(fmt::format(
+				"DLSSG 代理已加载: {}", StrHelper::UTF16ToUTF8(proxy.wstring())));
+		} else {
+			Logger::Get().Warn(fmt::format(
+				"DLSSG 代理加载失败: {}，错误码 {:#x}",
+				StrHelper::UTF16ToUTF8(proxy.wstring()), GetLastError()));
+		}
+	}
+}
+
 int APIENTRY wWinMain(
 	_In_ HINSTANCE /*hInstance*/,
 	_In_opt_ HINSTANCE /*hPrevInstance*/,
@@ -133,6 +168,9 @@ int APIENTRY wWinMain(
 	} else if (mode == UnRegisterTouchHelper) {
 		return Magpie::TouchHelper::Unregister() ? 0 : 1;
 	}
+
+	// 在 XAML/D3D/NvAPI 初始化之前加载 DLSSG 代理（见 TryLoadDlssgProxy 注释）。
+	TryLoadDlssgProxy();
 
 	// 程序结束时也不应调用 uninit_apartment
 	// 见 https://kennykerr.ca/2018/03/24/cppwinrt-hosting-the-windows-runtime/

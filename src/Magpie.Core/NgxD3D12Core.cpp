@@ -3,6 +3,8 @@
 #include "NgxD3D12Core.h"
 #include "DeviceResources.h"
 #include "Logger.h"
+#include "ScalingOptions.h"
+#include "ScalingWindow.h"
 #include "Win32Helper.h"
 
 #if defined(MP_ENABLE_DLSSNR) || defined(MP_ENABLE_DLSS_FRAME_GENERATION)
@@ -15,10 +17,57 @@ namespace Magpie {
 
 namespace {
 
+// dlssg 代理包（dlssg_sm75 / dlssg_for_sm86）附带的 310.1 运行库只接受它同
+// 时代（NGX API 0x13，Streamline 同款）的核心声明：0x15 核心下该运行库在
+// 自身 init 阶段即返回 UnableToInitializeFeature（backend kernel_create 从
+// 未发生、无任何 NvAPI 调用——版本门禁在两者之前）。较新的运行库（DLSS-SR
+// 310.7、DLSSNR 310.8）对旧声明向后兼容（NGX OTA 的正常方向），因此链上
+// 有 DLSSFG 时对外声明 0x13，其余会话保持 SDK 版本不变，行为零变化。
+constexpr NVSDK_NGX_Version NGX_VERSION_DLSSG_PROXY =
+	(NVSDK_NGX_Version)0x0000013;
+
+bool EffectChainContainsDLSSFG() noexcept {
+	if (!ScalingWindow::Get()) {
+		return false;
+	}
+	for (const EffectOption& effect : ScalingWindow::Get().Options().effects) {
+		if (ClassifyFrameGenerationEffect(effect.name) ==
+			FrameGenerationEffectKind::DLSS) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void NVSDK_CONV NgxLogCallback(
+	const char* message,
+	NVSDK_NGX_Logging_Level loggingLevel,
+	NVSDK_NGX_Feature sourceComponent
+) noexcept {
+	if (!message || !*message) {
+		return;
+	}
+	// 可从任意线程进入；spdlog 的每次调用自持锁，线程安全。
+	const std::string_view text(message);
+	switch (loggingLevel) {
+	case NVSDK_NGX_LOGGING_LEVEL_OFF:
+		break;
+	case NVSDK_NGX_LOGGING_LEVEL_ON:
+		Logger::Get().Info(fmt::format("NGX(feature={}) {}",
+			(uint32_t)sourceComponent, text));
+		break;
+	default:
+		Logger::Get().Info(fmt::format("NGX(feature={}) [verbose] {}",
+			(uint32_t)sourceComponent, text));
+		break;
+	}
+}
+
 NVSDK_NGX_Result InitCoreSafely(
 	const wchar_t* applicationDirectory,
 	ID3D12Device* device,
 	const NVSDK_NGX_FeatureCommonInfo* featureInfo,
+	NVSDK_NGX_Version sdkVersion,
 	DWORD* sehCode
 ) noexcept {
 	return NgxRuntimeGuard::Invoke([&]() {
@@ -29,7 +78,7 @@ NVSDK_NGX_Result InitCoreSafely(
 			applicationDirectory,
 			device,
 			featureInfo,
-			NVSDK_NGX_Version_API);
+			sdkVersion);
 	}, NVSDK_NGX_Result_FAIL_PlatformError, sehCode);
 }
 
@@ -123,9 +172,20 @@ bool NgxD3D12Core::Acquire(
 		NVSDK_NGX_FeatureCommonInfo featureInfo{};
 		featureInfo.PathListInfo.Path = featurePaths;
 		featureInfo.PathListInfo.Length = 1;
+		featureInfo.LoggingInfo.LoggingCallback = &NgxLogCallback;
+		featureInfo.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_ON;
+		const NVSDK_NGX_Version sdkVersion = EffectChainContainsDLSSFG() ?
+			NGX_VERSION_DLSSG_PROXY : NVSDK_NGX_Version_API;
+		if (sdkVersion != NVSDK_NGX_Version_API) {
+			Logger::Get().Info(fmt::format(
+				"NGX core 将以兼容版本 {:#x} 初始化（链上含 DLSSFG，"
+				"适配 dlssg 代理的 310.1 运行库；SDK 版本为 {:#x}）",
+				(uint32_t)sdkVersion, (uint32_t)NVSDK_NGX_Version_API));
+		}
 		DWORD sehCode = 0;
 		const NVSDK_NGX_Result result = InitCoreSafely(
-			applicationDirectory.c_str(), _device.get(), &featureInfo, &sehCode);
+			applicationDirectory.c_str(), _device.get(), &featureInfo,
+			sdkVersion, &sehCode);
 		if (!LogNgxResult("Init", consumer, result, sehCode)) return false;
 		_initialized = true;
 		Logger::Get().Info("NGX D3D12 Core initialized once for Renderer session");

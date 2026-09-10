@@ -14,6 +14,9 @@
     <EnableDLSSNR>true</EnableDLSSNR>
     <!-- DLSS 放大 -->
     <EnableDLSSSR>true</EnableDLSSSR>
+    <!-- DLSS 帧生成：代码全链路已有，运行时门禁由 dlssg 代理包（version.dll/dinput8.dll）
+         在 EXE 旁打 arch patch + SM75 后端解决。UI 打包另需 -p:PackDLSSFrameGenerationEffect=true。 -->
+    <EnableDLSSFrameGeneration>true</EnableDLSSFrameGeneration>
 
     <!-- NGX 头文件与静态库来自 NVIDIA 公开的 DLSS SDK -->
     <DLSSSdkDir>C:\Users\yejin\Desktop\Magpie-perf\dlss-sdk\DLSS-main</DLSSSdkDir>
