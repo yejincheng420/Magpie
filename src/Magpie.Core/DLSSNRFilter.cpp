@@ -3531,7 +3531,9 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 		return succeeded;
 	}
 	const auto guidancePrepareStart = NativeBackendTiming::Now();
-	const FrameGuidanceView guidance = SelectGuidance(
+	// 非 const：帧复用的跨帧 MV 累积要替换 motion 源（上游版本为 const，
+	// 我们的残差转移路径需要就地改写）。
+	FrameGuidanceView guidance = SelectGuidance(
 		context, _settings, { impl.sourceWidth, impl.sourceHeight });
 	if (!impl.guidanceInterop->WaitForProducer(impl.context11, guidance)) {
 		return fail("guidance-interop");
