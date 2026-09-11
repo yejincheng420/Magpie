@@ -36,6 +36,15 @@
     <EnableNvidiaOpticalFlow>true</EnableNvidiaOpticalFlow>
     <NvidiaOpticalFlowSdkDir>C:\Users\yejin\Desktop\Magpie-perf\nvof-sdk</NvidiaOpticalFlowSdkDir>
 
+    <!--
+      AMD Optical Flow（FidelityFX，compute shader 实现跨厂商可用，2080 Ti 可跑）：
+      给 DLSSNR/DLSSFG 的 Frame Guidance 提供 AMDOF 选项。源文件直引 FidelityFX
+      SDK v2.0.0（FSR 3.1.5 API 内嵌，Kits 布局）sparse checkout 的 Kits/ 目录。
+      shader DXIL 由构建时 Generate-FidelityFXOpticalFlowShaders.ps1 现场生成。
+    -->
+    <EnableAmdOpticalFlow>true</EnableAmdOpticalFlow>
+    <FSR3SdkDir>C:\Users\yejin\Desktop\Magpie-perf\fidelityfx-sdk</FSR3SdkDir>
+
     <!-- 版本标识：同时显示在关于页与启动日志。注意引号会被 MSBuild 吃掉，
          C++ 侧 STRINGIFY 后是裸 token，不能含空格——用下划线。 -->
     <VersionString>天禄永远皮下去_基于大力喜鹊的魔改版</VersionString>

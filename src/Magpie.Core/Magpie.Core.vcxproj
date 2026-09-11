@@ -261,10 +261,12 @@
     </ClCompile>
     <ClCompile Include="$(FSR3SdkDir)\Kits\FidelityFX\framegeneration\fsr3\internal\ffx_opticalflow.cpp" Condition="$(EnableAmdOpticalFlow) And '$(Platform)' == 'x64'">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <TreatWarningAsError>false</TreatWarningAsError>
       <DisableSpecificWarnings>4505;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <ClCompile Include="$(FSR3SdkDir)\Kits\FidelityFX\framegeneration\fsr3\internal\ffx_opticalflow_shaderblobs.cpp" Condition="$(EnableAmdOpticalFlow) And '$(Platform)' == 'x64'">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <TreatWarningAsError>false</TreatWarningAsError>
       <DisableSpecificWarnings>4201;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
   </ItemGroup>

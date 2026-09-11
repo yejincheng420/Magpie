@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+
 param([string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $reflexWorkspace = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
