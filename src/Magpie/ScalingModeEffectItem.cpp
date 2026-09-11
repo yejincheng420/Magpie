@@ -26,7 +26,7 @@ ScalingModeEffectItem::ScalingModeEffectItem(uint32_t scalingModeIdx, uint32_t e
 {
 	EffectItem& data = _Data();
 
-	_effectInfo = EffectsService::Get().GetEffect(data.name);
+	_effectInfo = data.isRecoveryInvalid ? nullptr : EffectsService::Get().GetEffect(data.name);
 
 	if (_effectInfo) {
 		_name = EffectHelper::GetDisplayName(data.name);
@@ -34,6 +34,10 @@ ScalingModeEffectItem::ScalingModeEffectItem(uint32_t scalingModeIdx, uint32_t e
 	} else {
 		ResourceLoader resourceLoader =
 			ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+		if (data.isRecoveryInvalid) {
+			_name = resourceLoader.GetString(L"ScalingModes_RecoveryInvalid_Name");
+			return;
+		}
 		_name = StrHelper::Concat(
 			resourceLoader.GetString(L"ScalingModes_Description_UnknownEffect"),
 			L" (",
@@ -81,6 +85,12 @@ bool ScalingModeEffectItem::HasParameters() const noexcept {
 	}
 
 	return _effectInfo && !_effectInfo->params.empty();
+}
+
+hstring ScalingModeEffectItem::IssueDescription() const noexcept {
+	if (_effectInfo || _IsRemoved()) return {};
+	return ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID).GetString(
+		_Data().isRecoveryInvalid ? L"ScalingModes_RecoveryInvalid_Description" : L"ScalingModes_MissingEffect_Description");
 }
 
 IVector<IInspectable> ScalingModeEffectItem::ScalingTypes() noexcept {

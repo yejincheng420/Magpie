@@ -4,9 +4,6 @@
 
 namespace Magpie {
 
-// A queued callback owns this token, never the Renderer. The run ID is fixed
-// at session creation; reading the global ID while reporting a late failure
-// could accidentally assign that failure to the next session.
 class ScalingSessionLifetime {
 public:
 	explicit ScalingSessionLifetime(uint32_t runId) noexcept : _runId(runId) {}

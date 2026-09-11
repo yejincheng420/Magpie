@@ -4,6 +4,7 @@
 #include "ScalingModeParameter.g.h"
 #include <parallel_hashmap/phmap.h>
 #include "Event.h"
+#include "EffectChoiceItems.h"
 
 namespace Magpie {
 struct EffectInfo;
@@ -54,7 +55,7 @@ struct ScalingModeParameter : ScalingModeParameterT<ScalingModeParameter>,
 		if (_choices) {
 			_choices.ReplaceAll(items);
 		} else {
-			_choices = single_threaded_observable_vector(std::move(items));
+			_choices = ::Magpie::MakeEffectChoiceItems(std::move(items));
 		}
 		assert(_choices.Size() == choices.size());
 		assert(_choices.try_as<IIterable<IInspectable>>());

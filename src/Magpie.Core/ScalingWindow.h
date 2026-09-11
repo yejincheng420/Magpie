@@ -2,6 +2,7 @@
 #include "ScalingOptions.h"
 #include "EffectDesc.h"
 #include "EffectParameterRestart.h"
+#include "FramePresentationTiming.h"
 #include "SrcTracker.h"
 #include "WindowBase.h"
 #include <deque>
@@ -36,6 +37,20 @@ public:
 	void Start(HWND hwndSrc, ScalingOptions&& options) noexcept;
 
 	void Stop() noexcept;
+	void Destroy() noexcept;
+	void RequestStop(uint32_t runId) noexcept {
+		if (Handle() && !_isDestroying && runId == RunId()) _stopRequested = true;
+	}
+	bool ProcessPendingStop() noexcept {
+		if (!_stopRequested || HasHeldParameterInput()) return false;
+		_stopRequested = false;
+		Stop();
+		return !Handle();
+	}
+	bool HasHeldParameterInput() const noexcept;
+	bool ProcessPendingSourceTransition() noexcept;
+	bool HasPendingSourceTransition() const noexcept { return _pendingSourceTransition != 0; }
+	bool IsSourceStateCheckDeferred() const noexcept { return _sourceStateCheckDeferred; }
 
 	void ToggleScaling(bool isWindowedMode) noexcept;
 
@@ -90,6 +105,8 @@ public:
 	}
 
 	class Renderer* TryGetRenderer() noexcept { return _renderer.get(); }
+	bool IsParameterInputWindow(HWND hwnd) const noexcept;
+	void UpdateToolbarShortcutLabels(ToolbarShortcutLabels labels) noexcept;
 	class CursorManager* TryGetCursorManager() noexcept { return _cursorManager.get(); }
 
 	bool IsSrcRepositioning() const noexcept {
@@ -133,6 +150,13 @@ protected:
 	LRESULT _MessageHandler(UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
 
 private:
+	bool _isDestroying = false;
+	bool _stopRequested = false;
+	// 1 = source reposition, 2 = stop. A stop takes precedence over a restart.
+	mutable uint8_t _pendingSourceTransition = 0;
+	bool _sourceStateCheckDeferred = false;
+	const char* _sourceStateChangeReason = "unspecified";
+	RECT _sourceRectBeforeCheck{};
 	ScalingWindow() noexcept;
 	~ScalingWindow() noexcept;
 
@@ -225,6 +249,9 @@ private:
 	};
 	std::vector<std::vector<RestartParameter>> _restartParameters;
 	OverlaySessionState _restartOverlayState;
+	std::optional<OverlaySessionState> _repositionOverlayState;
+	std::optional<bool> _pendingWindowedMode;
+	std::optional<std::pair<std::vector<EffectOption>, FrameSyncSettings>> _pendingManualParameterRestart;
 	std::unique_ptr<class Renderer> _renderer;
 	std::unique_ptr<class CursorManager> _cursorManager;
 
@@ -254,6 +281,7 @@ private:
 	struct DLSSFGFrameJob {
 		uint32_t sharedTextureSlot = 0;
 		uint32_t sharedTextureGeneration = 0;
+		PresentationJobTiming timing;
 	};
 	std::deque<DLSSFGFrameJob> _dlssFgFrameJobs;
 	bool _frontendRenderPending = false;

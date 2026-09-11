@@ -52,6 +52,7 @@ struct FSR3Upscaler::Impl {
 	uint32_t outputWidth = 0;
 	uint32_t outputHeight = 0;
 	bool enableOpticalFlow = false;
+	FsrHdrProtocol hdrProtocol{};
 	bool useFsr4 = false;
 	bool resetHistory = true;
 	FrameGuidanceFrameId lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
@@ -274,6 +275,7 @@ bool FSR3Upscaler::Initialize(
 	impl->device11 = resources.GetD3DDevice();
 	impl->context11 = resources.GetD3DDC();
 	impl->enableOpticalFlow = enableOpticalFlow;
+	impl->hdrProtocol = _hdrProtocol;
 	impl->useFsr4 = useFsr4;
 	const char* upscalerName = useFsr4 ? "FSR 4.1.1" : "FSR 3.1.5";
 
@@ -343,7 +345,8 @@ bool FSR3Upscaler::Initialize(
 	D3D12_RESOURCE_BARRIER auxBarriers[5]{};
 	UINT auxCount = 0;
 	const float zero[4]{};
-	const float one[4]{ 1, 1, 1, 1 };
+	const float one[4]{ impl->hdrProtocol.exposure, impl->hdrProtocol.exposure,
+		impl->hdrProtocol.exposure, impl->hdrProtocol.exposure };
 	const float reactive02[4]{ 0.2f, 0.2f, 0.2f, 0.2f };
 	const float reactiveFsr4OpticalFlow[4]{ 0.8f, 0.8f, 0.8f, 0.8f };
 	const float reactive08[4]{ 0.8f, 0.8f, 0.8f, 0.8f };
@@ -444,8 +447,12 @@ bool FSR3Upscaler::Initialize(
 	}
 
 	impl->createDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-	impl->createDesc.flags = FFX_UPSCALE_ENABLE_DEPTH_INVERTED |
-		FFX_UPSCALE_ENABLE_DEPTH_INFINITE | FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
+	impl->createDesc.flags =
+		(impl->hdrProtocol.depthInverted ? FFX_UPSCALE_ENABLE_DEPTH_INVERTED : 0) |
+		(impl->hdrProtocol.depthInfinite ? FFX_UPSCALE_ENABLE_DEPTH_INFINITE : 0);
+	if (!impl->hdrProtocol.hdrColorInput) {
+		impl->createDesc.flags |= FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
+	}
 	impl->createDesc.maxRenderSize = { inputDesc.Width, inputDesc.Height };
 	impl->createDesc.maxUpscaleSize = { outputDesc.Width, outputDesc.Height };
 	impl->backendDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
@@ -540,13 +547,16 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
 	desc.enableSharpening = true;
 	desc.sharpness = 0.2f;
 	desc.frameTimeDelta = 16.6667f;
-	desc.preExposure = 1.0f;
+	desc.preExposure = impl.hdrProtocol.preExposure;
 	desc.reset = impl.resetHistory;
 	desc.cameraNear = 1.0f;
 	desc.cameraFar = FLT_MAX;
 	desc.cameraFovAngleVertical = 1.04719755f;
 	desc.viewSpaceToMetersFactor = 1.0f;
-	desc.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
+	desc.flags = 0;
+	if (!impl.hdrProtocol.hdrColorInput) {
+		desc.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
+	}
 	const ffxReturnCode_t rc = impl.dispatch(&impl.context, &desc.header);
 	if (rc != FFX_API_RETURN_OK) {
 		Logger::Get().Error(fmt::format("Dispatch {} failed ({})",

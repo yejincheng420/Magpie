@@ -147,7 +147,9 @@ bool CompSwapchainPresenter::BeginFrame(
 		const SIZE rendererSize = Win32Helper::GetSizeOfRect(ScalingWindow::Get().RendererRect());
 
 		D3D11_TEXTURE2D_DESC desc{};
-		desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		desc.Format = ScalingWindow::Get().Options().IsHdrCompatibilityEnabled()
+			? DXGI_FORMAT_R16G16B16A16_FLOAT
+			: DXGI_FORMAT_R8G8B8A8_UNORM;
 		desc.SampleDesc.Count = 1;
 		desc.MipLevels = 1;
 		desc.ArraySize = 1;

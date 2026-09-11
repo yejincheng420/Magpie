@@ -1,5 +1,7 @@
 # Magpie 实验分支交接
 
+> 2026-09-08：当前本地迭代为 `0.6.7` 分支的 `067 local`。效果器选择器、参数化 RTX Video 与自动 HDR 见 [当前功能与测试](experimental/testing/EFFECT-PICKER.md)，fix1 见 [执行清单](experimental/todos/20260908-v0.6.7-r1-fix1-TODO.md)。构建及运行包直接使用 `release/v0.6.7-local/Magpie-Experimental-x64`，中间文件在该版本 `obj/`，使用 `Deploy-Local067.ps1` 持续覆盖。下方 0.6.5 及更早内容仅为历史背景。
+
 > 2026-09-05：当前准备版本为 0.6.5，最新行为和附件结构见 [0.6.5 Release Note](RELEASE_NOTES_v0.6.5-experimental.md)。下文保留历史交接背景，旧参数、深度组件和手动保存说明已被后续实现取代。
 
 

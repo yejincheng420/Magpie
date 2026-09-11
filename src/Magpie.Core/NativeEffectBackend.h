@@ -1,6 +1,8 @@
 #pragma once
 #include "FrameGuidanceTypes.h"
 #include "ScalingOptions.h"
+#include "HdrEffectBoundary.h"
+#include <utility>
 
 namespace Magpie {
 
@@ -9,6 +11,8 @@ class DeviceResources;
 struct NativeEffectDrawContext {
 	ID3D11Texture2D* input = nullptr;
 	ID3D11Texture2D* output = nullptr;
+	HdrFrameMetadata inputMetadata{};
+	HdrFrameMetadata outputMetadata{};
 	FrameGuidanceFrameId frameId = 0;
 	// Changes whenever an earlier effect in the chain changes its output for
 	// the same captured frame. Native effects that cache duplicate frames must
@@ -27,6 +31,9 @@ struct NativeEffectDrawContext {
 class NativeEffectBackend {
 public:
 	virtual ~NativeEffectBackend() = default;
+
+	virtual void SetHdrBoundary(HdrEffectBoundaryContext context) noexcept { _hdrBoundary = std::move(context); }
+	const HdrEffectBoundaryContext& GetHdrBoundary() const noexcept { return _hdrBoundary; }
 
 	virtual FrameGuidanceRequirements GetFrameGuidanceRequirements() const noexcept {
 		return {};
@@ -61,6 +68,14 @@ public:
 		return false;
 	}
 
+	// Backend-thread transaction, serialized with Draw/Resize/destruction.
+	// A model-backed implementation may load a candidate private model here;
+	// renderer-owned textures and the active model survive a failed load.
+	virtual bool ApplyParameters(const EffectOption& option,
+		std::span<const std::string> names) noexcept {
+		return ApplyLiveParameters(option, names);
+	}
+
 	virtual bool Resize(
 		DeviceResources& resources,
 		ID3D11Texture2D* input,
@@ -68,6 +83,9 @@ public:
 	) noexcept = 0;
 
 	virtual bool Draw(const NativeEffectDrawContext& context) noexcept = 0;
+
+protected:
+	HdrEffectBoundaryContext _hdrBoundary{};
 };
 
 }

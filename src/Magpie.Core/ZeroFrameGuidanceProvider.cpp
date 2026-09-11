@@ -3,6 +3,7 @@
 #include "DeviceResources.h"
 #include "DirectXHelper.h"
 #include "Logger.h"
+#include "ScalingWindow.h"
 
 namespace Magpie {
 
@@ -73,7 +74,10 @@ bool ZeroFrameGuidanceResources::_CreateTextures(
 	}
 
 	static constexpr float ZERO[4]{};
-	_context->ClearUnorderedAccessViewFloat(depthUav.get(), ZERO);
+	static constexpr float ONE[4]{ 1.0f, 1.0f, 1.0f, 1.0f };
+	const float* depthClear = (!ScalingWindow::Get().Options().hdrComponents.enabled && ScalingWindow::Get().Options().IsHdrCompatibilityEnabled())
+		? ONE : ZERO;
+	_context->ClearUnorderedAccessViewFloat(depthUav.get(), depthClear);
 	_context->ClearUnorderedAccessViewFloat(motionUav.get(), ZERO);
 	_context->ClearUnorderedAccessViewFloat(confidenceUav.get(), ZERO);
 	_depth = std::move(depth);
@@ -89,6 +93,9 @@ static FrameGuidanceMetadata MakeZeroMetadata(
 ) noexcept {
 	return {
 		.frameId = frame.frameId,
+		.captureSequence = frame.captureSequence,
+		.resourceGeneration = frame.resourceGeneration,
+		.timestamp100ns = frame.timestamp100ns,
 		.sourceExtent = frame.sourceExtent,
 		.validRegion = frame.validRegion,
 		.resetReason = resetReason,

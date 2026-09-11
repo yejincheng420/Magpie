@@ -76,8 +76,14 @@ struct ProfileViewModel : ProfileViewModelT<ProfileViewModel>,
 	int AutoScale() const noexcept;
 	void AutoScale(int value);
 
+	bool IsParameterFocusSwitchingEnabled() const noexcept;
+	void IsParameterFocusSwitchingEnabled(bool value);
+
 	bool Is3DGameMode() const noexcept;
 	void Is3DGameMode(bool value);
+
+	bool IsHdrCompatibilityEnabled() const noexcept;
+	void IsHdrCompatibilityEnabled(bool value);
 
 	bool HasMultipleMonitors() const noexcept;
 

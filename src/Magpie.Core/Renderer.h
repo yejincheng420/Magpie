@@ -9,6 +9,7 @@
 #include "OverlayDrawer.h"
 #include "PassThroughFrames.h"
 #include "PresenterBase.h"
+#include "ReflexController.h"
 #include "PresentationFrameRate.h"
 #include "FramePresentationTiming.h"
 #include "ScalingOptions.h"
@@ -36,9 +37,9 @@ public:
 	Renderer(Renderer&&) = delete;
 
 	ScalingError Initialize(HWND hwndAttach, OverlayOptions& overlayOptions) noexcept;
-	// Frontend: cancel new capture/presentation work before cursor teardown.
 	void BeginShutdown() noexcept;
 	const std::string& InitializationContext() const noexcept { return _backendInitContext; }
+	uint32_t InitializationSystemError() const noexcept { return _backendInitSystemError; }
 	const std::wstring& MotionConfigurationNotice() const noexcept { return _motionConfigurationNotice; }
 
 	bool Render(bool force = false, bool waitForGpu = false) noexcept;
@@ -49,7 +50,8 @@ public:
 	PresentationRateSnapshot PresentationRate() const noexcept { return _presentationRate.Get(); }
 	DLSSFGFrameRenderResult RenderDLSSFGFrame(
 		uint32_t sharedTextureSlot,
-		uint32_t sharedTextureGeneration
+		uint32_t sharedTextureGeneration,
+		PresentationJobTiming& jobTiming
 	) noexcept;
 	bool HasPendingOverlayInput() const noexcept;
 	bool HasUrgentOverlayInput() const noexcept;
@@ -69,6 +71,16 @@ public:
 	void SwitchToolbarState() noexcept;
 	void InvokeOverlayAction(OverlayAction action) noexcept;
 	OverlaySessionState CaptureOverlayState() const noexcept { return _overlayDrawer.CaptureSessionState(); }
+	bool IsEditingParameters() const noexcept { return _overlayDrawer.IsEditingParameters(); }
+	bool IsParameterPreviewAt(POINT point) const noexcept { return _overlayDrawer.IsParameterPreviewAt(point); }
+	HWND ParameterInputHandle() const noexcept { return _overlayDrawer.ParameterInputHandle(); }
+	bool IsParameterFocusSettling() const noexcept { return _overlayDrawer.IsParameterFocusSettling(); }
+	void SuspendParameterInput() noexcept { _overlayDrawer.SuspendParameterInput(); }
+	void ReleaseParameterInput() noexcept { _overlayDrawer.ReleaseParameterInput(); }
+	bool HasHeldParameterInput() const noexcept { return _overlayDrawer.HasHeldParameterInput(); }
+	bool AllowAutomaticSourceFocus() const noexcept { return _overlayDrawer.AllowAutomaticSourceFocus(); }
+	void UpdateParameterInputHost() noexcept { _overlayDrawer.UpdateParameterInputHost(); }
+	void RefreshOverlay() noexcept { ++_overlayActionRevision; }
 	void RestoreOverlayState(const OverlaySessionState& state) noexcept;
 	bool IsPassThroughActive() const noexcept { return _isPassThroughActive; }
 	bool SetPassThroughActive(bool value) noexcept;
@@ -95,6 +107,10 @@ public:
 	void ClearOverlayStates() noexcept;
 	bool IsEffectParameterInputActive() const noexcept { return _overlayDrawer.IsEffectParameterInputActive(); }
 	bool IsEffectParametersVisible() const noexcept { return _overlayDrawer.IsEffectParametersVisible(); }
+	FrameSyncBackend ActiveFrameSyncBackend() const noexcept {
+		return _frameSyncBackend == FrameSyncBackend::Reflex && _reflex.CanUseAsync()
+			? FrameSyncBackend::Async : _frameSyncBackend;
+	}
 
 	const std::vector<const EffectDesc*>& ActiveEffectDescs() const noexcept {
 		return _activeEffectDescs;
@@ -129,24 +145,31 @@ public:
 private:
 	bool _frameTraceStarted = false;
 	// Set before starting the backend; immutable for this session.
-	bool _frontEdgeSyncEnabled = false;
-	bool _frontEdgeUsesSharedSlot = false;
-	bool _frontEdgeLimiterFailed = false;
+	bool _frameSyncEnabled = false;
+	FrameSyncBackend _frameSyncBackend = FrameSyncBackend::None;
+	// Backend thread only: detects driver availability transitions and installs
+	// the corresponding limiter before another capture can be accepted.
+	FrameSyncBackend _appliedFrameSyncBackend = FrameSyncBackend::None;
+	bool _reflexFallbackLogged = false;
+	bool _frameSyncUsesSharedSlot = false;
+	bool _frameSyncLimiterFailed = false;
 	uint32_t _configuredFrameGenerationMultiplier = 1;
 	std::atomic<double> _presentationRefreshRate = 60.0;
 	std::atomic<double> _existingBaseFrameRateLimit = 0.0;
-	double _FrontEdgeFrameRate() const noexcept;
+	double _FrameSyncFrameRate() const noexcept;
 	FrontEdgeSyncClock _frontEdgeClock;
 	std::optional<std::chrono::steady_clock::time_point> _frontendPacingDeadline;
 	wil::unique_handle _frontendPacingTimer;
-	std::atomic<uint64_t> _frontEdgeAcknowledgedKey = 0;
-	wil::unique_handle _frontEdgeConsumedEvent;
+	std::atomic<uint64_t> _frameSyncAcknowledgedKey = 0;
+	wil::unique_handle _frameSyncConsumedEvent;
 	// Backend-owned staged input retains NR/SR and guidance until FG is due.
 	FrontEdgeSyncClock _fgInputClock;
 	wil::unique_handle _fgInputTimer;
 	winrt::com_ptr<ID3D11Texture2D> _pendingFrameGenerationInput;
 	bool _backendMayDeferFG = false;
-	void _CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewCaptureFrame) noexcept;
+	void _CompleteBackendFrame(ID3D11Texture2D* effectsOutput, bool isNewCaptureFrame,
+		uint64_t captureSequence) noexcept;
+	void _LogHdrTextureStats(ID3D11Texture2D* texture, std::string_view label) noexcept;
 	struct PendingFrontendFrame {
 		bool stableBaseOnly = false;
 		bool contentFrame = false;
@@ -172,33 +195,46 @@ private:
 		std::chrono::nanoseconds beginFrame{};
 		std::chrono::nanoseconds draw{};
 		std::chrono::nanoseconds endFrame{};
+		bool capacityBusy = false;
 	};
 
 	bool _FrontendRender(
 		bool waitForGpu = false,
 		uint32_t sharedTextureSlot = std::numeric_limits<uint32_t>::max(),
 		FrontendRenderTimings* timings = nullptr,
-		bool stableBaseOnly = false
+		bool stableBaseOnly = false,
+		bool* droppedFrame = nullptr
 	) noexcept;
 	bool _FrontendOverlayRender(bool contentChanged = false) noexcept;
-	bool _UpdateFrontendBase(uint32_t sharedTextureSlot) noexcept;
+	enum class FrontendBaseResult { Ready, Retry, Dropped };
+	FrontendBaseResult _UpdateFrontendBase(uint32_t sharedTextureSlot) noexcept;
 	bool _OpenFrontendSharedTextures() noexcept;
 	void _ResetDLSSFGSlotEvents() noexcept;
 	void _CopySceneToTarget(ID3D11Texture2D* scene, ID3D11Texture2D* target,
 		ID3D11RenderTargetView* rtv, POINT drawOffset) noexcept;
 	void _RecordDLSSFGFrontendTimings(
 		bool usesFrameLatencyWaitableObject,
-		std::chrono::nanoseconds pacingWait,
-		const FrontendRenderTimings& timings
+		const PresentationJobTiming& timings,
+		bool dropped
 	) noexcept;
 
 	void _BackendThreadProc() noexcept;
+	bool _IsDLSSFGQueueFull() const noexcept {
+		return _dlssFrameGenerator && _synchronousFramePresentationEnabled.load(std::memory_order_acquire) &&
+			_pendingDLSSFGFrontendFrames.load(std::memory_order_acquire) >= _sharedTextureSlotCount;
+	}
 
 	HANDLE _InitBackend() noexcept;
 
 	bool _InitFrameSource() noexcept;
 
 	ID3D11Texture2D* _BuildEffects() noexcept;
+
+	void _UpdateHdrEffectBoundaryContexts() noexcept;
+	void _FailColorPipeline(std::string effect, ScalingError error) noexcept;
+	HdrFrameMetadata _pipelineOutputMetadata{};
+	HdrComponentPlan _runtimeHdrComponents;
+	bool _colorPipelineFailed = false;
 
 	void _UpdateActiveEffectDescs() noexcept;
 
@@ -224,7 +260,10 @@ private:
 	bool _PublishBackendTexture(
 		ID3D11Texture2D* texture,
 		bool synchronous,
-		bool generatedFrame = false
+		bool generatedFrame = false,
+		uint64_t captureSequence = 0,
+		uint64_t resourceGeneration = 0,
+		uint64_t reflexPresentId = 0
 	) noexcept;
 
 	bool _InitializeDLSSFrameGenerator(
@@ -249,6 +288,7 @@ private:
 
 	// 只能由前台线程访问
 	DeviceResources _frontendResources;
+	ReflexController _reflex;
 	std::unique_ptr<PresenterBase> _presenter;
 	
 	CursorDrawer _cursorDrawer;
@@ -269,6 +309,7 @@ private:
 	std::array<winrt::com_ptr<IDXGIKeyedMutex>, MAX_SHARED_TEXTURE_SLOTS>
 		_frontendSharedMotionTextureMutexes;
 	std::array<uint64_t, MAX_SHARED_TEXTURE_SLOTS> _lastAccessMutexKeys{};
+	std::array<uint64_t, MAX_SHARED_TEXTURE_SLOTS> _discardedFrontendKeys{};
 	std::array<std::mutex, MAX_SHARED_TEXTURE_SLOTS> _sharedTextureAccessMutexes;
 	winrt::com_ptr<ID3D11Texture2D> _frontendBaseTexture;
 	winrt::com_ptr<ID3D11Texture2D> _frontendPresentedBaseTexture;
@@ -312,6 +353,11 @@ private:
 	uint32_t _dlssFgRecoveryAttempts = 0;
 
 	StepTimer _stepTimer;
+	// Frontend-owned before backend creation; backend-owned for the session.
+	void _EnsureGpuPriority(bool force = false) noexcept;
+	std::chrono::steady_clock::time_point _nextGpuPriorityCheck{};
+	bool _gpuPriorityVerified = false;
+	bool _gpuPriorityFailureLogged = false;
 	EffectsProfiler _effectsProfiler;
 
 	winrt::com_ptr<ID3D11Fence> _d3dFence;
@@ -320,6 +366,11 @@ private:
 
 	std::array<winrt::com_ptr<ID3D11Texture2D>, MAX_SHARED_TEXTURE_SLOTS>
 		_backendSharedTextures;
+	HdrSurfaceAdapter _hdrPresentationAdapter;
+	winrt::com_ptr<ID3D11Texture2D> _hdrPresentationTexture;
+	winrt::com_ptr<ID3D11Texture2D> _dlssFgNormalizedInput;
+	winrt::com_ptr<ID3D11Texture2D> _dlssFgCanonicalGenerated;
+	float _dlssFgHdrNormalizationScale = 1.0f;
 	std::array<winrt::com_ptr<IDXGIKeyedMutex>, MAX_SHARED_TEXTURE_SLOTS>
 		_backendSharedTextureMutexes;
 	std::array<winrt::com_ptr<ID3D11Texture2D>, MAX_SHARED_TEXTURE_SLOTS>
@@ -355,6 +406,23 @@ private:
 		_sharedMotionValid{};
 	std::array<std::atomic<bool>, MAX_SHARED_TEXTURE_SLOTS>
 		_sharedMotionReset{};
+	std::array<std::atomic<uint64_t>, MAX_SHARED_TEXTURE_SLOTS>
+		_sharedTextureCaptureSequences{};
+	std::array<std::atomic<FrameGuidanceFrameId>, MAX_SHARED_TEXTURE_SLOTS>
+		_sharedTextureFrameIds{};
+	std::array<std::atomic<uint64_t>, MAX_SHARED_TEXTURE_SLOTS>
+		_sharedTextureResourceGenerations{};
+	std::array<std::atomic<int64_t>, MAX_SHARED_TEXTURE_SLOTS>
+		_sharedTextureTimestamps{};
+	std::array<HdrFrameMetadata, MAX_SHARED_TEXTURE_SLOTS> _sharedFrameMetadata{};
+	HdrFrameMetadata _frontendFrameMetadata{};
+	// Protected by the slot's existing publication/consumption mutex. These
+	// IDs survive retries and stay paired with exactly the copied colour image.
+	std::array<std::pair<uint64_t, uint64_t>, MAX_SHARED_TEXTURE_SLOTS> _sharedReflexIds{};
+	std::pair<uint64_t, uint64_t> _frontendReflexIds{};
+	HdrFrameMetadata _frontendPresentedFrameMetadata{};
+	std::atomic<uint64_t> _activeCaptureSequence = 0;
+	std::atomic<uint64_t> _activeResourceGeneration = 0;
 	std::atomic<uint32_t> _latestSharedTextureSlot = 0;
 	std::atomic<uint32_t> _sharedTextureGeneration = 0;
 	std::atomic<bool> _synchronousFramePresentationEnabled = false;
@@ -395,6 +463,9 @@ private:
 	bool _dlssFgFrontendTimingModeInitialized = false;
 	bool _dlssFgFrontendTimingUsesWaitableObject = false;
 	std::chrono::nanoseconds _dlssFgFrontendPacingWait{};
+	std::chrono::nanoseconds _dlssFgFrontendCapacityWait{}, _dlssFgFrontendResourceWait{};
+	std::chrono::nanoseconds _dlssFgFrontendCpu{}, _dlssFgFrontendQueueAge{};
+	uint32_t _dlssFgFrontendDropped = 0;
 	std::chrono::nanoseconds _dlssFgFrontendBeginFrame{};
 	std::chrono::nanoseconds _dlssFgFrontendDraw{};
 	std::chrono::nanoseconds _dlssFgFrontendEndFrame{};
@@ -454,9 +525,12 @@ private:
 	winrt::Windows::System::DispatcherQueue _backendThreadDispatcher{ nullptr };
 	ScalingError _backendInitError = ScalingError::NoError;
 	std::string _backendInitContext;
+	uint32_t _backendInitSystemError = 0;
 	std::vector<std::pair<std::string, MotionVectorRequest>> _motionConsumers;
 	std::wstring _motionConfigurationNotice;
 	std::vector<EffectDesc> _effectDescs;
+	bool _dlssnrAutoHdr = false;
+	std::string _dlssnrHdrDiagnostic;
 	// 包含追加的 Bicubic
 	std::vector<const EffectDesc*> _activeEffectDescs;
 	std::vector<std::vector<EffectParameterRuntimeInfo>>

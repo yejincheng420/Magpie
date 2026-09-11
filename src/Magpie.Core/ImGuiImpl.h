@@ -35,9 +35,18 @@ public:
 	void Draw(POINT drawOffset) noexcept;
 
 	void ClearStates() noexcept;
+	void ParameterEditing(bool value) noexcept;
+	void ParameterFocusSwitchingEnabled(bool value) noexcept { _parameterFocusSwitchingEnabled = value; }
+	void ParameterPreview(bool value) noexcept { _parameterPreview = value; }
+	bool IsParameterPreviewAt(POINT screenPoint) const noexcept;
+	bool OwnsPointerAtCursor() const noexcept;
+	bool OwnsPointerAt(POINT screenPoint) const noexcept;
+	bool DismissParameterPopup() noexcept;
+	std::optional<ImVec4> PresentedParameterRect() const noexcept { return _presentedParameterRect; }
 	void OnPresentSucceeded() noexcept;
 
-	ImGuiInputResult MessageHandler(UINT msg, WPARAM wParam, LPARAM lParam) noexcept;
+	ImGuiInputResult MessageHandler(UINT msg, WPARAM wParam, LPARAM lParam,
+		std::optional<POINT> pointerPosition = std::nullopt) noexcept;
 	bool HasPendingInput() const noexcept;
 	bool HasUrgentInput() const noexcept;
 	bool HasCriticalInput() const noexcept { return !_pendingInput.criticalEvents.empty(); }
@@ -58,11 +67,16 @@ public:
 		float maxWidth = -1.0f
 	) noexcept;
 private:
+	bool _parameterFocusSwitchingEnabled = false;
+	bool _parameterEditing = false;
+	bool _parameterPreview = false;
 	enum class PendingInputEventType : uint8_t {
 		Move,
 		Button,
 		Wheel,
 		Leave,
+		Key,
+		Character,
 		Cancel
 	};
 
@@ -77,6 +91,8 @@ private:
 		uint64_t timestampUs = 0;
 		bool dragged = false;
 		bool controlDown = false;
+		ImGuiKey key = ImGuiKey_None;
+		unsigned int character = 0;
 	};
 
 	struct PendingInputBuffer {
@@ -111,6 +127,7 @@ private:
 	phmap::flat_hash_map<std::string, ImVec4> _windowRects;
 	std::vector<std::pair<std::string, ImVec4>> _stagedPresentedWindowRects;
 	std::vector<std::pair<std::string, ImVec4>> _presentedWindowRects;
+	std::optional<ImVec4> _stagedParameterRect, _presentedParameterRect;
 	bool _stagedHasOpenPopup = false;
 	bool _presentedHasOpenPopup = false;
 	PendingInputBuffer _pendingInput;

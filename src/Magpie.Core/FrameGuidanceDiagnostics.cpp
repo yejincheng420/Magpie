@@ -3,6 +3,7 @@
 #include "DeviceResources.h"
 #include "DirectXHelper.h"
 #include "Logger.h"
+#include "OpticalFlowSettings.h"
 
 namespace Magpie {
 
@@ -49,8 +50,7 @@ void Visualize(uint3 tid : SV_DispatchThreadID) {
 FrameGuidanceRequirements
 FrameGuidanceDiagnostics::GetFrameGuidanceRequirements() const noexcept {
 	FrameGuidanceRequirements result{ .zero = true };
-	result.Add(MotionVectorRequest::Nvidia(
-		NvidiaOpticalFlowQuality::Balanced));
+	result.Add(_settings.motionRequest);
 	return result;
 }
 
@@ -63,15 +63,19 @@ EffectParameterApplyMode FrameGuidanceDiagnostics::GetParameterApplyMode(
 }
 
 EffectParameterRestartReason FrameGuidanceDiagnostics::GetParameterRestartReason(
-	std::string_view /*parameterName*/
+	std::string_view parameterName
 ) const noexcept {
-	return EffectParameterRestartReason::NativeBackend;
+	return IsOpticalFlowParameter(parameterName)
+		? EffectParameterRestartReason::FrameGuidance
+		: EffectParameterRestartReason::NativeBackend;
 }
 
 bool FrameGuidanceDiagnostics::ApplyLiveParameters(
 	const EffectOption& option,
 	std::span<const std::string> parameterNames
 ) noexcept {
+	if (ParseOpticalFlowRequest(option) != _settings.motionRequest)
+		return false;
 	if (std::ranges::any_of(parameterNames, [](const std::string& name) {
 		return name != "gain";
 	})) {
@@ -126,7 +130,8 @@ bool FrameGuidanceDiagnostics::Resize(
 bool FrameGuidanceDiagnostics::Draw(
 	const NativeEffectDrawContext& draw
 ) noexcept {
-	const FrameGuidanceView& view = draw.frameGuidance;
+	const FrameGuidanceView& view = _settings.motionRequest.method == OpticalFlowMethod::None
+		? draw.zeroFrameGuidance : draw.frameGuidance;
 	ID3D11Texture2D* texture = nullptr;
 	switch (_settings.kind) {
 	case FrameGuidanceDiagnosticKind::Motion:

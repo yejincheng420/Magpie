@@ -8,7 +8,7 @@
 namespace Magpie {
 
 namespace {
-constexpr char REFERENCE_HLSL[] = R"(
+constexpr char REFERENCE_LDR_HLSL[] = R"(
 Texture2D<float4> Input : register(t0);
 SamplerState LinearClamp : register(s0);
 RWTexture2D<float4> Output : register(u0);
@@ -21,6 +21,29 @@ void Reference(uint3 id : SV_DispatchThreadID) {
     Output[id.xy] = float4(Input.SampleLevel(LinearClamp, uv, 0).rgb, 1.0);
 }
 )";
+
+constexpr char REFERENCE_HDR_HLSL[] = R"(
+cbuffer Transform : register(b0) {
+    uint hdrEnabled;
+    float exposure;
+    float sdrWhiteNits;
+    float shoulder;
+};
+Texture2D<float4> Input : register(t0);
+SamplerState LinearClamp : register(s0);
+RWTexture2D<float4> Output : register(u0);
+
+[numthreads(8, 8, 1)]
+void Reference(uint3 id : SV_DispatchThreadID) {
+    uint width, height;
+    Output.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(width, height);
+    float3 rgb = Input.SampleLevel(LinearClamp, uv, 0).rgb;
+    // Canonical HDR and presentation both use linear scRGB.
+    Output[id.xy] = float4(rgb, 1.0);
+}
+)";
 }
 
 void PassThroughFrames::_ClearBackend() noexcept {
@@ -29,36 +52,52 @@ void PassThroughFrames::_ClearBackend() noexcept {
 	_handles.fill(nullptr);
 	_valid.fill(false);
 	_frameIds.fill(0);
+	_metadata.fill({});
 	_current = nullptr;
 	_previous = nullptr;
 	_inputView = nullptr;
 	_outputView = nullptr;
 	_shader = nullptr;
 	_sampler = nullptr;
+	_constants = nullptr;
+	_hdrEnabled = false;
+	_hdrParameters = {};
 	_currentValid = false;
 	_previousValid = false;
+	_currentMetadata = {};
+	_previousMetadata = {};
+	_presentedMetadata = {};
 }
 
 bool PassThroughFrames::InitializeBackend(DeviceResources& resources,
-	ID3D11Texture2D* input, ID3D11Texture2D* output, uint32_t slotCount) noexcept {
+	ID3D11Texture2D* input, ID3D11Texture2D* output, uint32_t slotCount,
+	bool hdrEnabled, const HdrTransformParameters& hdrParameters,
+	const HdrFrameMetadata& frameMetadata, std::optional<bool> sourceHdr) noexcept {
+	const bool inputHdr = sourceHdr.value_or(hdrEnabled);
 	_ClearBackend();
 	_backendResources = &resources;
+	_hdrEnabled = hdrEnabled;
+	_hdrParameters = hdrParameters.IsValid() ? hdrParameters : HdrTransformParameters{};
+	_currentMetadata = frameMetadata;
 	if (!input || !output || slotCount == 0 || slotCount > MAX_SLOTS) return false;
 	D3D11_TEXTURE2D_DESC outputDesc{};
 	output->GetDesc(&outputDesc);
 	_width = outputDesc.Width;
 	_height = outputDesc.Height;
+	const DXGI_FORMAT referenceFormat = hdrEnabled
+		? DXGI_FORMAT_R16G16B16A16_FLOAT
+		: DXGI_FORMAT_R8G8B8A8_UNORM;
 	auto device = resources.GetD3DDevice();
 	auto fail = [&]() {
 		Logger::Get().Warn("Pass-through reference resources unavailable; effects remain enabled");
 		_ClearBackend();
 		return false;
 	};
-	_current = DirectXHelper::CreateTexture2D(device, DXGI_FORMAT_R8G8B8A8_UNORM,
+	_current = DirectXHelper::CreateTexture2D(device, referenceFormat,
 		_width, _height, D3D11_BIND_UNORDERED_ACCESS);
 	if (!_current) return fail();
 	if (slotCount > 1) {
-		_previous = DirectXHelper::CreateTexture2D(device, DXGI_FORMAT_R8G8B8A8_UNORM,
+		_previous = DirectXHelper::CreateTexture2D(device, referenceFormat,
 			_width, _height, 0);
 		if (!_previous) return fail();
 	}
@@ -66,10 +105,52 @@ bool PassThroughFrames::InitializeBackend(DeviceResources& resources,
 	if (SUCCEEDED(hr)) hr = device->CreateUnorderedAccessView(_current.get(), nullptr, _outputView.put());
 	if (FAILED(hr)) return fail();
 	winrt::com_ptr<ID3DBlob> blob;
-	if (!DirectXHelper::CompileComputeShader(REFERENCE_HLSL, "Reference", blob.put(),
+	std::string referenceShader = hdrEnabled ? REFERENCE_HDR_HLSL : REFERENCE_LDR_HLSL;
+	// Comparison must enter the same output domain even when conversion effects
+	// change it. Preserve source appearance using a display mapping, not the AI.
+	if (hdrEnabled && !inputHdr) {
+		const std::string marker = "Output[id.xy] = float4(rgb, 1.0);";
+		const auto position = referenceShader.find(marker);
+		referenceShader.replace(position, marker.size(),
+			"rgb = lerp(pow(max((rgb + 0.055) / 1.055, 0.0), 2.4), rgb / 12.92, step(rgb, 0.04045));"
+			"Output[id.xy] = float4(rgb * (sdrWhiteNits / 80.0), 1.0);");
+	} else if (!hdrEnabled && inputHdr) {
+		referenceShader = REFERENCE_HDR_HLSL;
+		const std::string marker = "Output[id.xy] = float4(rgb, 1.0);";
+		const auto position = referenceShader.find(marker);
+		referenceShader.replace(position, marker.size(),
+			"rgb = max(rgb, 0.0) / (sdrWhiteNits / 80.0);"
+			"rgb = saturate(rgb / (1.0 + dot(rgb, float3(0.2126, 0.7152, 0.0722))));"
+			"rgb = lerp(1.055 * pow(rgb, 1.0 / 2.4) - 0.055, 12.92 * rgb, step(rgb, 0.0031308));"
+			"Output[id.xy] = float4(rgb, 1.0);");
+	}
+	if (!DirectXHelper::CompileComputeShader(
+		referenceShader.c_str(),
+		"Reference", blob.put(),
 		"PassThroughReference", nullptr, {}, true)) return fail();
 	hr = device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, _shader.put());
 	if (FAILED(hr)) return fail();
+	if (hdrEnabled || inputHdr) {
+		struct ReferenceConstants {
+			uint32_t hdrEnabled;
+			float exposure;
+			float sdrWhiteNits;
+			float shoulder;
+		} constants{
+			1u,
+			_hdrParameters.exposure,
+			_hdrParameters.sdrWhiteNits,
+			_hdrParameters.shoulder
+		};
+		D3D11_BUFFER_DESC constantsDesc{
+			.ByteWidth = sizeof(constants),
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_CONSTANT_BUFFER
+		};
+		D3D11_SUBRESOURCE_DATA constantsData{ .pSysMem = &constants };
+		hr = device->CreateBuffer(&constantsDesc, &constantsData, _constants.put());
+		if (FAILED(hr)) return fail();
+	}
 	D3D11_SAMPLER_DESC samplerDesc{};
 	samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 	samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -78,7 +159,7 @@ bool PassThroughFrames::InitializeBackend(DeviceResources& resources,
 	if (FAILED(hr)) return fail();
 	for (uint32_t i = 0; i < slotCount; ++i) {
 		auto& slot = _backendSlots[i];
-		slot.texture = DirectXHelper::CreateTexture2D(device, DXGI_FORMAT_R8G8B8A8_UNORM,
+		slot.texture = DirectXHelper::CreateTexture2D(device, referenceFormat,
 			_width, _height, D3D11_BIND_SHADER_RESOURCE, D3D11_USAGE_DEFAULT,
 			D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX);
 		if (!slot.texture) return fail();
@@ -126,6 +207,7 @@ void PassThroughFrames::UpdateBackend(uint64_t captureFrameId, bool newCapture) 
 	if (newCapture && _previous && _currentValid) {
 		context->CopyResource(_previous.get(), _current.get());
 		_previousFrameId = _currentFrameId;
+		_previousMetadata = _currentMetadata;
 		_previousValid = true;
 	}
 	context->ClearState();
@@ -133,13 +215,26 @@ void PassThroughFrames::UpdateBackend(uint64_t captureFrameId, bool newCapture) 
 	auto output = _outputView.get();
 	auto sampler = _sampler.get();
 	context->CSSetShader(_shader.get(), nullptr, 0);
+	if (_constants) {
+		auto constants = _constants.get();
+		context->CSSetConstantBuffers(0, 1, &constants);
+	}
 	context->CSSetShaderResources(0, 1, &input);
 	context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
 	context->CSSetSamplers(0, 1, &sampler);
 	context->Dispatch((_width + 7) / 8, (_height + 7) / 8, 1);
 	context->ClearState();
 	_currentFrameId = captureFrameId;
+	_currentMetadata.frameId = captureFrameId;
 	_currentValid = true;
+}
+
+void PassThroughFrames::UpdateBackend(const HdrFrame& frame, bool newCapture) noexcept {
+	UpdateBackend(frame.metadata.frameId, newCapture);
+	if (_hdrEnabled && frame.IsCanonical()) {
+		_currentMetadata = frame.metadata;
+		_currentMetadata.stage = HdrFrameStage::CanonicalInput;
+	}
 }
 
 void PassThroughFrames::Publish(uint32_t slot, bool generatedFrame) noexcept {
@@ -149,6 +244,9 @@ void PassThroughFrames::Publish(uint32_t slot, bool generatedFrame) noexcept {
 	_backendResources->GetD3DDC()->CopyResource(_backendSlots[slot].texture.get(),
 		previous ? _previous.get() : _current.get());
 	_frameIds[slot] = previous ? _previousFrameId : _currentFrameId;
+	_metadata[slot] = previous ? _previousMetadata : _currentMetadata;
+	_metadata[slot].stage = HdrFrameStage::PublishedOutput;
+	_metadata[slot].generated = generatedFrame;
 	_valid[slot] = true;
 }
 
@@ -174,6 +272,7 @@ bool PassThroughFrames::Consume(uint32_t slot) noexcept {
 	}
 	_frontendResources->GetD3DDC()->CopyResource(_base.get(), _frontendSlots[slot].texture.get());
 	_baseFrameId = _frameIds[slot];
+	_presentedMetadata = _metadata[slot];
 	_baseValid = true;
 	return true;
 }
@@ -184,6 +283,7 @@ void PassThroughFrames::OnPresented() noexcept {
 	if (_presentedValid) {
 		_frontendResources->GetD3DDC()->CopyResource(_presented.get(), _base.get());
 		_presentedFrameId = _baseFrameId;
+		_presentedMetadata.stage = HdrFrameStage::PresentedOutput;
 	}
 }
 

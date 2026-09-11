@@ -1,10 +1,13 @@
 #include "pch.h"
+#include "RTXVideoParameters.h"
+#include "DlssOpticalFlowParameters.h"
 #include "AppSettings.h"
 #include "EffectHelper.h"
 #include "EffectsService.h"
 #include "JsonHelper.h"
 #include "Logger.h"
 #include "ScalingMode.h"
+#include "ScalingModeNames.h"
 #include "ScalingModesService.h"
 #include "StrHelper.h"
 
@@ -22,18 +25,46 @@ uint32_t ScalingModesService::GetScalingModeCount() {
 }
 
 void ScalingModesService::AddScalingMode(std::wstring_view name, int copyFrom) {
-	assert(!name.empty());
-
 	std::vector<ScalingMode>& scalingModes = AppSettings::Get().ScalingModes();
+	if (ScalingModeNames::Trim(name).empty() ||
+		(copyFrom >= 0 && static_cast<size_t>(copyFrom) >= scalingModes.size())) return;
+	const auto uniqueName = ScalingModeNames::Unique(name, [&](std::wstring_view candidate) {
+		return ScalingModeNames::Contains(scalingModes, candidate);
+	});
 	if (copyFrom < 0) {
-		scalingModes.emplace_back().name = name;
+		scalingModes.emplace_back().name = uniqueName;
 	} else {
-		scalingModes.emplace_back(scalingModes[copyFrom]).name = name;
+		scalingModes.emplace_back(scalingModes[copyFrom]).name = uniqueName;
 	}
 
 	ScalingModeAdded.Invoke(copyFrom < 0 ? EffectAddedWay::Add : EffectAddedWay::Duplicate);
 
 	AppSettings::Get().SaveAsync();
+}
+
+bool ScalingModesService::CanUseName(std::wstring_view name, uint32_t exceptIndex) const noexcept {
+	return !ScalingModeNames::Trim(name).empty() &&
+		!ScalingModeNames::Contains(AppSettings::Get().ScalingModes(), name, exceptIndex);
+}
+
+bool ScalingModesService::HasDuplicateNames() const noexcept {
+	return ScalingModeNames::HasDuplicates(AppSettings::Get().ScalingModes());
+}
+
+bool ScalingModesService::HasNameConflict(uint32_t index) const noexcept {
+	const auto& modes = AppSettings::Get().ScalingModes();
+	return index < modes.size() && ScalingModeNames::Contains(modes, modes[index].name, index);
+}
+
+bool ScalingModesService::RenameScalingMode(uint32_t index, std::wstring_view name) {
+	auto& modes = AppSettings::Get().ScalingModes();
+	if (index >= modes.size() || !CanUseName(name, index)) return false;
+	const std::wstring normalized(ScalingModeNames::Trim(name));
+	if (modes[index].name == normalized) return true;
+	modes[index].name = normalized;
+	ScalingModeNamesChanged.Invoke();
+	AppSettings::Get().SaveAsync();
+	return true;
 }
 
 static void UpdateProfileAfterRemove(Profile& profile, int removedIdx) {
@@ -46,6 +77,8 @@ static void UpdateProfileAfterRemove(Profile& profile, int removedIdx) {
 
 void ScalingModesService::RemoveScalingMode(uint32_t index) {
 	std::vector<ScalingMode>& scalingModes = AppSettings::Get().ScalingModes();
+	if (index >= scalingModes.size()) return;
+	ScalingModeRemoving.Invoke(index);
 	scalingModes.erase(scalingModes.begin() + index);
 
 	UpdateProfileAfterRemove(AppSettings::Get().DefaultProfile(), (int)index);
@@ -111,6 +144,12 @@ static void WriteScalingMode(rapidjson::PrettyWriter<rapidjson::StringBuffer>& w
 			writer.StartObject();
 			writer.Key("name");
 			writer.String(StrHelper::UTF16ToUTF8(effect.name).c_str());
+			if (effect.isRecoveryInvalid) {
+				writer.Key("recoveryInvalid");
+				writer.Bool(true);
+				writer.Key("recoveryOriginal");
+				writer.String(effect.recoveryOriginal.data(), static_cast<rapidjson::SizeType>(effect.recoveryOriginal.size()));
+			}
 
 			if (effect.HasScale()) {
 				writer.Key("scalingType");
@@ -165,6 +204,7 @@ static bool LoadScalingMode(
 	if (!JsonHelper::ReadString(scalingModeObj, "name", scalingMode.name)) {
 		return false;
 	}
+	if (!loadingSettings && ScalingModeNames::Trim(scalingMode.name).empty()) return false;
 
 	auto effectsNode = scalingModeObj.FindMember("effects");
 	if (effectsNode == scalingModeObj.MemberEnd()) {
@@ -198,6 +238,9 @@ static bool LoadScalingMode(
 				return false;
 			}
 		}
+		JsonHelper::ReadBool(elemObj, "recoveryInvalid", effect.isRecoveryInvalid);
+		if (auto raw = elemObj.FindMember("recoveryOriginal"); raw != elemObj.MemberEnd() && raw->value.IsString())
+			effect.recoveryOriginal.assign(raw->value.GetString(), raw->value.GetStringLength());
 		// Frame Rate Filter used to live in the Utility folder. Keep existing
 		// user scaling modes working after moving it to the root effect list.
 		if (effect.name == L"Utility\\FrameRate_Filter") {
@@ -286,15 +329,8 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 ) noexcept {
 	V065NormalizationStats stats;
 	for (ScalingMode& scalingMode : scalingModes) {
-		const size_t oldEffectCount = scalingMode.effects.size();
-		std::erase_if(scalingMode.effects, [](const EffectItem& effect) {
-			return effect.name == L"Diagnostics\\FrameGuidance_Depth" ||
-				effect.name == L"Diagnostics\\FrameGuidance_DepthResidual";
-		});
-		stats.removedDepthDiagnostics += static_cast<uint32_t>(
-			oldEffectCount - scalingMode.effects.size());
-
 		for (EffectItem& effect : scalingMode.effects) {
+			if (effect.isRecoveryInvalid) continue;
 
 			if (effect.name == L"DLSSNR\\DLSSNR_AI_Filter") {
 				// turing-ampere 分支历史：帧复用参数曾名 frameReuseMode（逐像素
@@ -328,7 +364,7 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 					auto it = effect.parameters.find(name);
 					if (it == effect.parameters.end()) continue;
 					const float clamped = std::isfinite(it->second) ?
-						std::clamp(it->second, 0.0f, 1.0f) : 1.0f;
+						std::clamp(it->second, 0.0f, 2.0f) : 1.0f;
 					if (clamped != it->second) {
 						it->second = clamped;
 						++stats.clampedParameters;
@@ -340,16 +376,14 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 					effect.parameters.erase(L"useEstimatedDepth"));
 			}
 
-			const bool isDlssMotionConsumer =
-				(effect.name == L"DLSS\\DLSS_SR" && !effect.parameters.contains(L"opticalFlowMethod")) ||
-				effect.name == L"DLSSFG\\DLSS_FrameGeneration" ||
-				effect.name == L"DLSSNR\\DLSSNR_AI_Filter";
-			if (isDlssMotionConsumer) {
+			if (MigrateDlssOpticalFlowParameters(effect)) ++stats.migratedMotionVectorChoices;
+
+			if (effect.name == L"DLSS\\DLSS_SR" && !effect.parameters.contains(L"opticalFlowMethod")) {
 				auto quality = effect.parameters.find(L"motionVectorQuality");
 				if (quality == effect.parameters.end()) {
 					auto legacy = effect.parameters.find(L"useMotionVectors");
 					const float migrated = legacy != effect.parameters.end() &&
-						legacy->second < 0.5f ? 0.0f : 2.0f;
+						legacy->second >= 0.5f ? 2.0f : 0.0f;
 					effect.parameters[L"motionVectorQuality"] = migrated;
 					++stats.migratedMotionVectorChoices;
 				} else {
@@ -379,12 +413,12 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 				}
 				if (family == L"DLSS") {
 					auto old = effect.parameters.find(L"motionVectorQuality");
-					const float quality = old != effect.parameters.end() ? old->second : 2.0f;
+					const float quality = old != effect.parameters.end() ? old->second : 0.0f;
 					if (effect.parameters.try_emplace(L"opticalFlowMethod", quality == 0.0f ? 0.0f : 2.0f).second) ++stats.migratedMotionVectorChoices;
 					effect.parameters.try_emplace(L"nvidiaOpticalFlowQuality", quality >= 1.0f && quality <= 5.0f ? quality : 2.0f);
 				}
 				for (const auto& [name, minimum, maximum, fallback] : {
-					std::tuple{ L"opticalFlowMethod", 0.0f, 2.0f, family == L"DLSS" ? 2.0f : 0.0f },
+					std::tuple{ L"opticalFlowMethod", 0.0f, 2.0f, 0.0f },
 					std::tuple{ L"amdOpticalFlowMode", 0.0f, 1.0f, 1.0f },
 					std::tuple{ L"nvidiaOpticalFlowQuality", 1.0f, 5.0f, 2.0f } }) {
 					auto [it, inserted] = effect.parameters.try_emplace(name, fallback);
@@ -442,17 +476,13 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 			}
 		}
 
-		if (oldEffectCount != 0 && scalingMode.effects.empty()) {
-			EffectItem& fallback = scalingMode.effects.emplace_back();
-			fallback.name = L"Bilinear";
-			fallback.scalingType = ScalingType::Fit;
-			++stats.insertedFallbacks;
-		}
 	}
 	return stats;
 }
 
-bool ScalingModesService::Import(const rapidjson::GenericObject<true, rapidjson::Value>& root, bool loadingSettings) noexcept {
+bool ScalingModesService::Import(const rapidjson::GenericObject<true, rapidjson::Value>& root, bool loadingSettings,
+	uint32_t* renamedCount) noexcept {
+	if (renamedCount) *renamedCount = 0;
 	auto scalingModesNode = root.FindMember("scalingModes");
 	if (scalingModesNode == root.MemberEnd()) {
 		return true;
@@ -493,6 +523,14 @@ bool ScalingModesService::Import(const rapidjson::GenericObject<true, rapidjson:
 		return true;
 	}
 
+	bool migratedR1 = false;
+	for (auto& mode : scalingModes) for (auto& effect : mode.effects)
+		migratedR1 |= MigrateEffectParametersR1(effect);
+	if (migratedR1) {
+		Logger::Get().Info("v0.6.7-r1: migrated RTX Video strength / DLSSNR automatic HDR parameters");
+		if (loadingSettings) AppSettings::Get().MarkConfigMigrationNeeded();
+	}
+
 	const V065NormalizationStats normalization =
 		NormalizeV065ScalingModes(scalingModes);
 	if (normalization.Changed()) {
@@ -515,6 +553,22 @@ bool ScalingModesService::Import(const rapidjson::GenericObject<true, rapidjson:
 	}
 
 	std::vector<ScalingMode>& settings = AppSettings::Get().ScalingModes();
+	// Preserve legacy groups on startup so the user can identify and rename them.
+	// Explicit imports keep every chain while assigning unique names in batch order.
+	if (!loadingSettings) {
+		for (size_t i = 0; i < scalingModes.size(); ++i) {
+			auto& mode = scalingModes[i];
+			const auto uniqueName = ScalingModeNames::Unique(mode.name, [&](std::wstring_view candidate) {
+				if (ScalingModeNames::Contains(settings, candidate)) return true;
+				for (size_t j = 0; j < i; ++j) {
+					if (ScalingModeNames::Equal(scalingModes[j].name, candidate)) return true;
+				}
+				return false;
+			});
+			if (ScalingModeNames::Trim(mode.name) != uniqueName && renamedCount) ++*renamedCount;
+			mode.name = uniqueName;
+		}
+	}
 	settings.insert(
 		settings.end(),
 		std::make_move_iterator(scalingModes.begin()),

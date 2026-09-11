@@ -46,6 +46,8 @@ v0.5.7 实验二进制包使用的社区修改版 `nvngx_dlssnr.dll` 是独立 R
 
 ## Release policy / 发布策略
 
+0.6.7 本地 HDR 组件使用官方 RTX Video SDK 1.1，来源为 [NVIDIA NGC 的 DLPP 1.5 文件目录](https://catalog.ngc.nvidia.com/orgs/nvidia/multimedia/models/dlpp/1.5/file-browser)。`scripts/Fetch-RtxVideoSdk.ps1` 校验固定归档 SHA-256。自有 `Magpie.RtxVideo.dll` 独立链接 SDK 库，运行包携带官方 `nvngx_truehdr.dll` 和完整 `NVIDIA-RTX-VIDEO-LICENSE.pdf`；原 VSR／DLSS 组件沿用原来源。SDK 和第三方运行库不进入源码仓库，当前本地部署不代表已完成公开发布审核。详情见 [HDR 实施记录](experimental/reviews/20260908-v0.6.7-hdr-conversion-effects-plan.md)。
+
 The safe default for this experimental fork is:
 
 1. Publish the GPLv3 source and dependency acquisition/build instructions.

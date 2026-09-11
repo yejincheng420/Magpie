@@ -7,6 +7,101 @@
       xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
       mc:Ignorable="d">
 	<Page.Resources>
+		<Style x:Key="EffectPickerPresenterStyle" TargetType="FlyoutPresenter"
+		       BasedOn="{StaticResource DefaultFlyoutPresenterStyle}">
+			<Setter Property="MaxWidth" Value="1000" />
+			<Setter Property="MaxHeight" Value="900" />
+			<Setter Property="Padding" Value="4" />
+		</Style>
+		<Style x:Key="EffectPickerButtonStyle" TargetType="Button"
+		       BasedOn="{StaticResource DefaultButtonStyle}">
+			<Setter Property="FontSize" Value="13" />
+			<Setter Property="Background" Value="Transparent" />
+			<Setter Property="BorderThickness" Value="0" />
+			<Setter Property="Padding" Value="10,8" />
+			<Setter Property="MinWidth" Value="0" />
+			<Setter Property="MinHeight" Value="0" />
+			<Setter Property="HorizontalAlignment" Value="Stretch" />
+			<Setter Property="HorizontalContentAlignment" Value="Stretch" />
+		</Style>
+		<Style x:Key="EffectPickerLetterButtonStyle" TargetType="Button"
+		       BasedOn="{StaticResource EffectPickerButtonStyle}">
+			<Setter Property="Width" Value="18" />
+			<Setter Property="Height" Value="18" />
+			<Setter Property="FontSize" Value="10" />
+			<Setter Property="Padding" Value="0" />
+			<Setter Property="HorizontalContentAlignment" Value="Center" />
+			<Setter Property="VerticalContentAlignment" Value="Center" />
+			<Setter Property="UseSystemFocusVisuals" Value="True" />
+			<Setter Property="FocusVisualMargin" Value="0" />
+			<Setter Property="Template">
+				<Setter.Value>
+					<ControlTemplate TargetType="Button">
+						<Grid x:Name="LetterRoot" Background="{TemplateBinding Background}"
+						      CornerRadius="{TemplateBinding CornerRadius}">
+							<VisualStateManager.VisualStateGroups>
+								<VisualStateGroup x:Name="CommonStates">
+									<VisualState x:Name="Normal" />
+									<VisualState x:Name="PointerOver">
+										<VisualState.Setters>
+											<Setter Target="LetterRoot.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+										</VisualState.Setters>
+									</VisualState>
+									<VisualState x:Name="Pressed">
+										<VisualState.Setters>
+											<Setter Target="LetterRoot.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}" />
+										</VisualState.Setters>
+									</VisualState>
+									<VisualState x:Name="Disabled">
+										<VisualState.Setters>
+											<Setter Target="LetterContent.Opacity" Value="0.3" />
+										</VisualState.Setters>
+									</VisualState>
+								</VisualStateGroup>
+							</VisualStateManager.VisualStateGroups>
+							<ContentPresenter x:Name="LetterContent"
+							                  Content="{TemplateBinding Content}"
+							                  ContentTemplate="{TemplateBinding ContentTemplate}"
+							                  Foreground="{TemplateBinding Foreground}"
+							                  FontFamily="{TemplateBinding FontFamily}"
+							                  FontSize="{TemplateBinding FontSize}"
+							                  FontWeight="{TemplateBinding FontWeight}"
+							                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+							                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+						</Grid>
+					</ControlTemplate>
+				</Setter.Value>
+			</Setter>
+		</Style>
+		<SolidColorBrush x:Key="EffectPickerCategoryBackground" Color="{ThemeResource SystemBaseHighColor}" Opacity="0.025" />
+		<SolidColorBrush x:Key="EffectPickerListBackground" Color="{ThemeResource SystemBaseHighColor}" Opacity="0.06" />
+		<SolidColorBrush x:Key="EffectPickerDetailBackground" Color="{ThemeResource SystemBaseHighColor}" Opacity="0.10" />
+		<Style x:Key="EffectPickerPaneStyle" TargetType="Border">
+			<Setter Property="Background" Value="{ThemeResource EffectPickerListBackground}" />
+			<Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
+			<Setter Property="CornerRadius" Value="4" />
+		</Style>
+		<Style x:Key="EffectPickerCategoryPaneStyle" TargetType="Border"
+		       BasedOn="{StaticResource EffectPickerPaneStyle}">
+			<Setter Property="Background" Value="{ThemeResource EffectPickerCategoryBackground}" />
+		</Style>
+		<Style x:Key="EffectPickerDetailPaneStyle" TargetType="Border"
+		       BasedOn="{StaticResource EffectPickerPaneStyle}">
+			<Setter Property="Background" Value="{ThemeResource EffectPickerDetailBackground}" />
+		</Style>
+		<Style x:Key="EffectPickerCategoryStyle" TargetType="Border">
+			<Setter Property="Background" Value="Transparent" />
+			<Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
+			<Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+		</Style>
+		<Style x:Key="EffectPickerSelectedCategoryStyle" TargetType="Border"
+		       BasedOn="{StaticResource EffectPickerCategoryStyle}">
+			<Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+		</Style>
+		<DataTemplate x:Key="EffectPickerSelectionMark">
+			<Border Width="3" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
+			        Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="1.5" />
+		</DataTemplate>
 		<DataTemplate x:Key="EffectParametersFlyout"
 		              x:DataType="local:EffectParametersViewModel">
 			<ScrollViewer Width="{x:Bind ContentWidth, Mode=OneWay}"
@@ -165,6 +260,8 @@
 		                        HorizontalAlignment="Stretch"
 		                        ChildrenTransitions="{StaticResource SettingsCardsAnimations}"
 		                        Orientation="Vertical">
+			<muxc:InfoBar x:Uid="ScalingModes_DuplicateNames" IsClosable="False"
+			              IsOpen="{x:Bind ViewModel.HasDuplicateNames, Mode=OneWay}" Severity="Warning" />
 			<!--  Padding 是为了缓解一个动画 bug  -->
 			<ListView Padding="0,0,0,44"
 			          ItemsSource="{x:Bind ViewModel.ScalingModes, Mode=OneTime}"
@@ -291,6 +388,9 @@
 														<local:TextMenuFlyout />
 													</TextBox.ContextFlyout>
 												</TextBox>
+												<TextBlock MaxWidth="280" Margin="0,0,0,12" TextWrapping="Wrap"
+												           Text="{x:Bind RenameProblem, Mode=OneWay}"
+												           Visibility="{x:Bind HasRenameProblem, Mode=OneWay}" />
 												<Button x:Uid="ScalingModes_RenameFlyout_OK"
 												        MinWidth="80"
 												        HorizontalAlignment="Right"
@@ -352,6 +452,7 @@
 									<ListView.ItemTemplate>
 										<DataTemplate x:DataType="local:ScalingModeEffectItem">
 											<local:SettingsCard Header="{x:Bind Name}"
+											                    Description="{x:Bind IssueDescription}"
 											                    Loaded="EffectSettingsCard_Loaded"
 											                    Style="{StaticResource DefaultSettingsExpanderItemStyle}">
 												<local:SimpleStackPanel Orientation="Horizontal">
@@ -513,14 +614,18 @@
 								</ListView>
 							</local:SettingsExpander.Items>
 							<local:SettingsExpander.ItemsHeader>
-								<muxc:InfoBar x:Uid="ScalingModes_HasUnkownEffects"
-								              MinHeight="0"
-								              Margin="0,0,0,-4"
-								              BorderThickness="0,0,0,0"
-								              CornerRadius="0"
-								              IsClosable="False"
-								              IsOpen="{x:Bind HasUnkownEffects, Mode=OneWay}"
-								              Severity="Warning" />
+								<local:SimpleStackPanel>
+									<muxc:InfoBar x:Uid="ScalingModes_NameConflict" IsClosable="False"
+									              IsOpen="{x:Bind HasNameConflict, Mode=OneWay}" Severity="Warning" />
+									<muxc:InfoBar x:Uid="ScalingModes_HasUnkownEffects"
+									              MinHeight="0"
+									              Margin="0,0,0,-4"
+									              BorderThickness="0,0,0,0"
+									              CornerRadius="0"
+									              IsClosable="False"
+									              IsOpen="{x:Bind HasUnkownEffects, Mode=OneWay}"
+									              Severity="Warning" />
+								</local:SimpleStackPanel>
 							</local:SettingsExpander.ItemsHeader>
 							<local:SettingsExpander.ItemsFooter>
 								<local:SettingsCard Style="{StaticResource DefaultSettingsExpanderItemStyle}">

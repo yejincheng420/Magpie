@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "SrcTracker.h"
+#include "ScalingWindow.h"
+#include "SourceWindowGeometry.h"
 #include "Logger.h"
 #include "SmallVector.h"
 #include "Win32Helper.h"
@@ -96,6 +98,27 @@ ScalingError SrcTracker::Set(HWND hWnd, const ScalingOptions& options, bool& isI
 	if (!Win32Helper::GetClientScreenRect(hWnd, clientRect)) {
 		Logger::Get().Win32Error("GetClientScreenRect 失败");
 		return ScalingError::SourceWindowGeometryFailed;
+	}
+
+	// Reject fullscreen sources before cropping, creating scaling windows or
+	// initializing capture/GPU resources. Borderless fullscreen need not carry
+	// the maximized flag, and its window kind varies between applications.
+	if (options.IsWindowedMode() || !options.RealIsAllowScalingMaximized()) {
+		MONITORINFO monitorInfo{ .cbSize = sizeof(monitorInfo) };
+		if (!GetMonitorInfoW(hMon, &monitorInfo)) {
+			Logger::Get().Win32Error("Read source monitor bounds before scaling failed");
+			return ScalingError::DisplayLayoutFailed;
+		}
+		if (SourceWindowCoversMonitor(_windowFrameRect, clientRect, monitorInfo.rcMonitor)) {
+			Logger::Get().Info(fmt::format(
+				"Scaling preflight: fullscreen source; switch the source application to a window. "
+				"frame=({},{},{},{}) client=({},{},{},{}) monitor=({},{},{},{})",
+				_windowFrameRect.left, _windowFrameRect.top, _windowFrameRect.right, _windowFrameRect.bottom,
+				clientRect.left, clientRect.top, clientRect.right, clientRect.bottom,
+				monitorInfo.rcMonitor.left, monitorInfo.rcMonitor.top,
+				monitorInfo.rcMonitor.right, monitorInfo.rcMonitor.bottom));
+			return options.IsWindowedMode() ? ScalingError::BannedInWindowedMode : ScalingError::Maximized;
+		}
 	}
 
 	// 计算窗口样式
@@ -196,7 +219,9 @@ bool SrcTracker::UpdateState(
 		}
 	}
 
-	if (_isFocused != (hwndFore == _hWnd)) {
+	// Internal parameter input keeps the scaling session active while the actual
+	// Windows keyboard focus belongs exclusively to its input host.
+	if (_isFocused != (hwndFore == _hWnd || ScalingWindow::Get().IsParameterInputWindow(hwndFore))) {
 		_isFocused = !_isFocused;
 		focusedChanged = true;
 	}
@@ -540,6 +565,14 @@ ScalingError SrcTracker::_CalcSrcRect(
 	if (_srcRect.right - _srcRect.left < MIN_SRC_SIZE || _srcRect.bottom - _srcRect.top < MIN_SRC_SIZE) {
 		Logger::Get().Error("源窗口太小");
 		return ScalingError::SourceWindowTooSmall;
+	}
+
+	// Reject invalid values before rounding or extending the capture rectangle.
+	if (!IsValidSourceCropping(options.cropping.Left, options.cropping.Top,
+		options.cropping.Right, options.cropping.Bottom,
+		double(_srcRect.right) - _srcRect.left, double(_srcRect.bottom) - _srcRect.top, MIN_SRC_SIZE)) {
+		Logger::Get().Error("Scaling preflight: reduce cropping to leave at least 64 pixels on each axis");
+		return ScalingError::InvalidCropping;
 	}
 
 	_srcRect = {

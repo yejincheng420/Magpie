@@ -136,6 +136,10 @@ Contributor: [GitHub 用户名](https://github.com/用户名) 具体贡献。
 
 发布构建使用 `scripts/Build-Release.ps1`。正式附件至少满足：
 
+构建直接输出到 `release/<版本>/Magpie-Experimental-x64/`，中间文件归入该版本的 `obj/`；不使用 `source/bin` 或额外 `.build` 作为发布输出。正式打包脚本会重建可分发目录、分离符号并生成 ZIP。
+
+维护者当前使用的 `0.6.7-local` 是持续覆盖的本地运行目录，由 `scripts/Deploy-Local067.ps1` 更新；该脚本使用增量完整解决方案构建并保留本地配置、日志和自定义文件。正式打包脚本拒绝将该目录作为可清空的打包目标。本地更新没有创建 GitHub Draft、上传或发布的含义。
+
 - 工作区无未提交修改，`build-manifest.json` 中 `sourceDirty` 为 `false`；
 - Release x64 构建为 0 error，运行时必需文件齐全；
 - 清单中的版本、完整提交 SHA、平台、功能开关与文件哈希正确；

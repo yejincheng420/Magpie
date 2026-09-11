@@ -4,12 +4,25 @@
 #include <memory>
 #include "EffectParameterPersistence.h"
 #include "FramePacingOptions.h"
+#include "HdrComponents.h"
 #include "OverlayWindowGeometry.h"
 #include <mutex>
+#include <functional>
 
 namespace Magpie {
 
 enum class OverlayAction { Profiler, EffectParameters, Screenshot, ToolbarPin, Comparison };
+
+struct ToolbarShortcutLabels {
+	std::string profiler;
+	std::string parameters;
+	std::string screenshot;
+	std::string pin;
+	std::string comparison;
+	std::string fullscreen;
+	std::string windowed;
+	bool operator==(const ToolbarShortcutLabels&) const = default;
+};
 
 enum class CaptureMethod {
 	GraphicsCapture,
@@ -180,6 +193,8 @@ struct EffectParameterSessionState {
 		std::vector<EffectOption> desired;
 		FrameSyncSettings frameSync;
 		uint64_t revision = 0;
+		bool applying = false;
+		bool applyFailed = false;
 	};
 
 	explicit EffectParameterSessionState(const std::vector<EffectOption>& effects,
@@ -225,6 +240,18 @@ struct EffectParameterSessionState {
 		_snapshot.frameSync = value;
 		++_snapshot.revision;
 	}
+	void Applying(bool applying, bool failed = false) {
+		std::scoped_lock lock(_mutex);
+		_snapshot.applying = applying;
+		_snapshot.applyFailed = failed;
+		++_snapshot.revision;
+	}
+	void RevertDesired(uint32_t effect, const std::string& parameter, float expected, float previous) {
+		std::scoped_lock lock(_mutex);
+		if (effect >= _snapshot.desired.size()) return;
+		if (RestoreRejectedEffectParameter(_snapshot.desired[effect].parameters, parameter, expected, previous))
+			++_snapshot.revision;
+	}
 private:
 	mutable std::mutex _mutex;
 	Snapshot _snapshot;
@@ -261,12 +288,14 @@ enum class ToolbarState {
 	COUNT
 };
 
-// Transient state for rebuilding the current effect group, not global defaults.
+enum class ParameterPanelState : uint8_t { Closed, Edit, Preview };
+
 struct OverlaySessionState {
 	bool toolbarVisible = false;
 	bool toolbarPinned = false;
 	bool profilerVisible = false;
 	bool effectParametersVisible = false;
+	ParameterPanelState parameterPanelState = ParameterPanelState::Closed;
 };
 
 struct OverlayOptions {
@@ -362,7 +391,22 @@ enum class ScalingError {
 	ExportWriteFailed,
 	FileDialogFailed,
 	PassThroughUnavailable,
-	NgxRestartRequired
+	NgxRestartRequired,
+	ScreenshotIntermediateEncodeFailed,
+	ConfigurationRecoveredBackup,
+	ConfigurationRecoveredPartial,
+	ConfigurationRepaired,
+	ConfigurationResetDefaults,
+	CaptureMethodUnavailable,
+	HdrComponentExpectedHdr,
+	HdrComponentExpectedSdr,
+	HdrComponentMissingPair,
+	HdrComponentInvalidParameters,
+	HdrCaptureRequired,
+	HdrDisplayRequired,
+	HdrCaptureMethodRequired,
+	RtxHdrUnavailable,
+	DuplicateScalingModeNames
 };
 
 struct ScalingFlags {
@@ -386,6 +430,7 @@ struct ScalingFlags {
 	static constexpr uint32_t BenchmarkMode = 1 << 20;
 	static constexpr uint32_t DeveloperMode = 1 << 21;
 	static constexpr uint32_t DisableTopmost = 1 << 22;
+	static constexpr uint32_t EnableHdrCompatibility = 1 << 23;
 };
 
 struct ScalingOptions {
@@ -408,8 +453,19 @@ struct ScalingOptions {
 	DEFINE_FLAG_ACCESSOR(IsCaptureTitleBar, ScalingFlags::CaptureTitleBar, flags)
 	DEFINE_FLAG_ACCESSOR(IsAdjustCursorSpeed, ScalingFlags::AdjustCursorSpeed, flags)
 	DEFINE_FLAG_ACCESSOR(IsDirectFlipDisabled, ScalingFlags::DisableDirectFlip, flags)
+	DEFINE_FLAG_ACCESSOR(IsHdrCompatibilityEnabled, ScalingFlags::EnableHdrCompatibility, flags)
 
 	std::vector<EffectOption> effects;
+	// Session-only plan. Persisted HDR flags remain retired; explicit components
+	// select capture and output independently before creating graphics resources.
+	HdrComponentPlan hdrComponents;
+	bool IsHdrCaptureEnabled() const noexcept {
+		return hdrComponents.enabled ? hdrComponents.captureHdr : IsHdrCompatibilityEnabled();
+	}
+	bool IsEffectHdrEnabled(size_t index) const noexcept {
+		return hdrComponents.enabled && index < hdrComponents.stages.size()
+			? hdrComponents.stages[index].inputHdr : IsHdrCompatibilityEnabled();
+	}
 	uint32_t scalingModeIdx = 0;
 	std::shared_ptr<EffectParameterSessionState> parameterSession;
 	std::wstring scalingModeName;
@@ -419,9 +475,11 @@ struct ScalingOptions {
 	float minFrameRate = 0.0f;
 	std::optional<float> maxFrameRate;
 	bool isFrontEdgeSyncEnabled = true;
+	bool isParameterFocusSwitchingEnabled = false;
 	bool isVRREnabled = false;
 	// 0 targets the display refresh rate, divided by FG multiplier for base FPS.
 	float frontEdgeSyncFrameRate = 60.0f;
+	FrameSyncMode frameSyncMode = FrameSyncMode::FrontEdge;
 	float cursorScaling = 1.0f;
 	CaptureMethod captureMethod = CaptureMethod::GraphicsCapture;
 	MultiMonitorUsage multiMonitorUsage = MultiMonitorUsage::Closest;
@@ -437,11 +495,13 @@ struct ScalingOptions {
 
 	// 下面的成员支持在缩放时修改
 	OverlayOptions overlayOptions;
+	ToolbarShortcutLabels toolbarShortcutLabels;
 
 	void (*showToast)(HWND hwndTarget, std::wstring_view msg) noexcept = nullptr;
-	void (*showError)(HWND hwndTarget, ScalingError error) noexcept = nullptr;
-	void (*reportErrorDetails)(HWND hwndTarget, ScalingError error,
-		std::string_view context, uint32_t systemError) noexcept = nullptr;
+	std::function<void(HWND hwndTarget, ScalingError error)> showError;
+	std::function<void(HWND hwndTarget, ScalingError error,
+		std::string_view context, uint32_t systemError)> reportErrorDetails;
+	std::function<void(uint32_t, const EffectOption&, const std::string&, float, float)> revertEffectParameter;
 	void (*save)(const ScalingOptions& options, HWND hwndScaling) noexcept = nullptr;
 	bool (*requestEffectParameters)(
 		const ScalingOptions& sessionOptions,

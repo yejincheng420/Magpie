@@ -423,6 +423,17 @@ void ProfileViewModel::AutoScale(int value) {
 	}
 }
 
+bool ProfileViewModel::IsParameterFocusSwitchingEnabled() const noexcept {
+	return _data->isParameterFocusSwitchingEnabled;
+}
+
+void ProfileViewModel::IsParameterFocusSwitchingEnabled(bool value) {
+	if (_data->isParameterFocusSwitchingEnabled == value) return;
+	_data->isParameterFocusSwitchingEnabled = value;
+	AppSettings::Get().SaveAsync();
+	RaisePropertyChanged(L"IsParameterFocusSwitchingEnabled");
+}
+
 bool ProfileViewModel::Is3DGameMode() const noexcept {
 	return _data->Is3DGameMode();
 }
@@ -436,6 +447,21 @@ void ProfileViewModel::Is3DGameMode(bool value) {
 	AppSettings::Get().SaveAsync();
 
 	RaisePropertyChanged(L"Is3DGameMode");
+}
+
+bool ProfileViewModel::IsHdrCompatibilityEnabled() const noexcept {
+	return _data->IsHdrCompatibilityEnabled();
+}
+
+void ProfileViewModel::IsHdrCompatibilityEnabled(bool value) {
+	if (_data->IsHdrCompatibilityEnabled() == value) {
+		return;
+	}
+
+	_data->IsHdrCompatibilityEnabled(value);
+	AppSettings::Get().SaveAsync();
+
+	RaisePropertyChanged(L"IsHdrCompatibilityEnabled");
 }
 
 bool ProfileViewModel::HasMultipleMonitors() const noexcept {

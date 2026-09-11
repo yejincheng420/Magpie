@@ -1,5 +1,5 @@
 // Experimental NVIDIA DLSS neural same-resolution filter. The native D3D12
-// backend replaces this pass and supplies explicit zero motion/depth guides.
+// backend replaces this pass and uses shared optical flow with zero depth.
 
 //!MAGPIE EFFECT
 //!VERSION 4
@@ -97,15 +97,31 @@ float reflectionGlowMultiplier;
 
 //!PARAMETER
 //!GROUP Detail Control
+//!LABEL Optical Flow Method
+//!DEFAULT 0
+//!OPTION 0 None
+//!OPTION 1 AMDOF
+//!OPTION 2 NVOF
+int opticalFlowMethod;
+
+//!PARAMETER
+//!GROUP Detail Control
+//!LABEL OF Quality
+//!DEFAULT 1
+//!OPTION 0 Performance
+//!OPTION 1 Quality
+int amdOpticalFlowMode;
+
+//!PARAMETER
+//!GROUP Detail Control
 //!LABEL OF Quality
 //!DEFAULT 2
-//!OPTION 0 None
 //!OPTION 1 Performance
-//!OPTION 2 Balanced (Recommended)
+//!OPTION 2 Balanced
 //!OPTION 3 Quality
 //!OPTION 4 High Quality (High Cost)
 //!OPTION 5 Highest Quality (Very High Cost)
-int motionVectorQuality;
+int nvidiaOpticalFlowQuality;
 
 //!PARAMETER
 //!GROUP DLSSNR
@@ -121,7 +137,7 @@ int style;
 //!LABEL NR Intensity
 //!DEFAULT 1
 //!MIN 0
-//!MAX 1
+//!MAX 2
 //!STEP 0.05
 float intensity;
 
@@ -130,7 +146,7 @@ float intensity;
 //!LABEL Local Tone Strength
 //!DEFAULT 1
 //!MIN 0
-//!MAX 1
+//!MAX 2
 //!STEP 0.05
 float localToneStrength;
 
@@ -139,15 +155,15 @@ float localToneStrength;
 //!LABEL Local Structure Strength
 //!DEFAULT 1
 //!MIN 0
-//!MAX 1
+//!MAX 2
 //!STEP 0.05
 float localStructureStrength;
 
 //!PARAMETER
 //!GROUP DLSSNR
 //!LABEL Skin Structure Strength
-//!DEFAULT -1
-//!MIN -1
+//!DEFAULT 0
+//!MIN 0
 //!MAX 2
 //!STEP 0.05
 float skinStructureStrength;

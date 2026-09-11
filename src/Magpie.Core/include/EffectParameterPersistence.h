@@ -5,6 +5,15 @@
 
 namespace Magpie {
 
+// A failed backend update may restore its own edit, never a newer UI value.
+template<typename Map, typename Key>
+bool RestoreRejectedEffectParameter(Map& values, const Key& name, float rejected, float previous) {
+	auto it = values.find(name);
+	if (it == values.end() || it->second != rejected) return false;
+	it->second = previous;
+	return true;
+}
+
 enum class EffectParametersSaveError : uint8_t {
 	None, WriteFailed, Conflict, SessionExpired, SourceUnavailable
 };

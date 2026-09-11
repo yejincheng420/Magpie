@@ -1,7 +1,12 @@
 #include "pch.h"
 #include "AppSettings.h"
+#include "ConfigRecovery.h"
+#include "ConfigLocations.h"
+#include "OpticalFlowDefaults.h"
 #include "App.h"
 #include "ErrorService.h"
+#include "EffectsService.h"
+#include "EffectDesc.h"
 #include "AutoStartHelper.h"
 #include "CommonSharedConstants.h"
 #include "JsonHelper.h"
@@ -18,14 +23,14 @@
 #include <rapidjson/prettywriter.h>
 #include <ShellScalingApi.h>
 #include <ShlObj.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 
 using namespace winrt;
 using namespace winrt::Magpie;
 
 namespace Magpie {
 
-// 如果配置文件和已发布的正式版本不再兼容，应提高此版本号
-static constexpr uint32_t CONFIG_VERSION = 4;
+// Enhanced settings use an isolated v4e directory; legacy v4 is import-only.
 static constexpr uint32_t EXPERIMENTAL_DLSSNR_SETTINGS_VERSION = 2;
 static constexpr uint32_t EXPERIMENTAL_DLSS_SR_SETTINGS_VERSION = 1;
 
@@ -83,6 +88,8 @@ static void WriteProfile(rapidjson::PrettyWriter<rapidjson::StringBuffer>& write
 		writer.String(StrHelper::UTF16ToUTF8(profile.launchParameters).c_str());
 	}
 
+	writer.Key("parameterFocusSwitching");
+	writer.Bool(profile.isParameterFocusSwitchingEnabled);
 	writer.Key("scalingMode");
 	writer.Int(profile.scalingMode);
 	writer.Key("captureMethod");
@@ -123,6 +130,8 @@ static void WriteProfile(rapidjson::PrettyWriter<rapidjson::StringBuffer>& write
 	writer.Bool(profile.IsAdjustCursorSpeed());
 	writer.Key("disableDirectFlip");
 	writer.Bool(profile.IsDirectFlipDisabled());
+	writer.Key("enableHdrCompatibility");
+	writer.Bool(profile.IsHdrCompatibilityEnabled());
 
 	writer.Key("cursorScaling");
 	writer.Uint((uint32_t)profile.cursorScaling);
@@ -164,13 +173,42 @@ static void ReplaceIcon(HINSTANCE hInst, HWND hWnd, bool large) noexcept {
 	}
 }
 
+struct StartupDiagnostic {
+	std::filesystem::path path;
+	std::wstring details;
+	std::wstring copied;
+	std::wstring copyFailed;
+	std::wstring openFailed;
+};
+
 static HRESULT CALLBACK TaskDialogCallback(
 	HWND hWnd,
 	UINT msg,
-	WPARAM /*wParam*/,
+	WPARAM wParam,
 	LPARAM /*lParam*/,
-	LONG_PTR /*lpRefData*/
+	LONG_PTR lpRefData
 ) {
+	if (msg == TDN_BUTTON_CLICKED && (wParam == 100 || wParam == 101)) {
+		auto& diagnostic = *reinterpret_cast<StartupDiagnostic*>(lpRefData);
+		std::wstring feedback;
+		try {
+			if (wParam == 100) {
+				if (!Win32Helper::ShellOpen(diagnostic.path.parent_path().c_str())) feedback = diagnostic.openFailed;
+			} else {
+				Windows::ApplicationModel::DataTransfer::DataPackage data;
+				data.SetText(diagnostic.details);
+				Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(data);
+				feedback = diagnostic.copied;
+			}
+		} catch (...) {
+			feedback = diagnostic.copyFailed;
+		}
+		if (!feedback.empty()) {
+			const auto content = diagnostic.details + L"\n\n" + feedback;
+			SendMessageW(hWnd, TDM_SET_ELEMENT_TEXT, TDE_CONTENT, reinterpret_cast<LPARAM>(content.c_str()));
+		}
+		return S_FALSE;
+	}
 	if (msg == TDN_CREATED) {
 		// 将任务栏图标替换为 Magpie 的图标
 		// GetModuleHandle 获取 exe 文件的句柄
@@ -186,23 +224,33 @@ static HRESULT CALLBACK TaskDialogCallback(
 	return S_OK;
 }
 
-static void ShowErrorMessage(const wchar_t* mainInstruction, const wchar_t* content) noexcept {
+static void ShowErrorMessage(const wchar_t* mainInstruction, const wchar_t* content,
+	const std::filesystem::path& path, uint32_t systemError = 0) noexcept {
 	ResourceLoader resourceLoader =
 		ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
 	const hstring errorStr = resourceLoader.GetString(L"AppSettings_Dialog_Error");
 	const hstring exitStr = resourceLoader.GetString(L"AppSettings_Dialog_Exit");
-
-	TASKDIALOG_BUTTON button{ IDCANCEL, exitStr.c_str() };
+	const hstring openStr = resourceLoader.GetString(L"ErrorDetails_OpenConfigDirectory");
+	const hstring copyStr = resourceLoader.GetString(L"ErrorDetails_Copy");
+	StartupDiagnostic diagnostic{ path, content,
+		std::wstring(resourceLoader.GetString(L"ErrorDetails_Copied")),
+		std::wstring(resourceLoader.GetString(L"AppSettings_CopyFailed")),
+		std::wstring(resourceLoader.GetString(L"ErrorDetails_OpenConfigFailed")) };
+	if (systemError) diagnostic.details += L"\n" + std::wstring(resourceLoader.GetString(L"ErrorDetails_SystemCode")) +
+		fmt::format(L": {} (0x{:08X})", systemError, systemError);
+	TASKDIALOG_BUTTON buttons[] = { { 100, openStr.c_str() }, { 101, copyStr.c_str() }, { IDCANCEL, exitStr.c_str() } };
 	TASKDIALOGCONFIG tdc{
 		.cbSize = sizeof(TASKDIALOGCONFIG),
 		.dwFlags = TDF_SIZE_TO_CONTENT,
 		.pszWindowTitle = errorStr.c_str(),
 		.pszMainIcon = TD_ERROR_ICON,
 		.pszMainInstruction = mainInstruction,
-		.pszContent = content,
-		.cButtons = 1,
-		.pButtons = &button,
-		.pfCallback = TaskDialogCallback
+		.pszContent = diagnostic.details.c_str(),
+		.cButtons = static_cast<UINT>(std::size(buttons)),
+		.pButtons = buttons,
+		.nDefaultButton = IDCANCEL,
+		.pfCallback = TaskDialogCallback,
+		.lpCallbackData = reinterpret_cast<LONG_PTR>(&diagnostic)
 	};
 	TaskDialogIndirect(&tdc, nullptr, nullptr, nullptr);
 }
@@ -212,13 +260,14 @@ AppSettings::~AppSettings() {}
 bool AppSettings::Initialize() noexcept {
 	Logger& logger = Logger::Get();
 
-	// 若程序所在目录存在配置文件则为便携模式
-	_isPortableMode = Win32Helper::FileExists(StrHelper::Concat(
-		CommonSharedConstants::CONFIG_DIR, L"\\", CommonSharedConstants::CONFIG_FILENAME).c_str());
-
 	std::filesystem::path existingConfigPath;
 	if (!_UpdateConfigPath(&existingConfigPath)) {
+		const DWORD pathError = GetLastError();
 		logger.Error("_UpdateConfigPath 失败");
+		const auto loader = ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+		const auto path = _configPath.empty() ? Win32Helper::GetExePath() : _configPath;
+		const auto content = std::wstring(loader.GetString(L"AppSettings_ConfigLocationFailed")) + L"\n" + path.native();
+		ShowErrorMessage(loader.GetString(L"AppSettings_ErrorDialog_ReadFailed").c_str(), content.c_str(), path, pathError);
 		return false;
 	}
 
@@ -235,65 +284,146 @@ bool AppSettings::Initialize() noexcept {
 	// 此时 ResourceLoader 使用“首选语言”
 	
 	std::string configText;
-	if (!Win32Helper::ReadTextFile(existingConfigPath.c_str(), configText)) {
+	uint32_t readError = 0;
+	if (!ConfigPersistence::ReadFileBytes(existingConfigPath, configText, &readError)) {
 		logger.Error("读取配置文件失败");
 		ResourceLoader resourceLoader =
 			ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
 		hstring title = resourceLoader.GetString(L"AppSettings_ErrorDialog_ReadFailed");
 		hstring content = resourceLoader.GetString(L"AppSettings_ErrorDialog_ConfigLocation");
-		ShowErrorMessage(title.c_str(),
-			fmt::format(fmt::runtime(std::wstring_view(content)), existingConfigPath.native()).c_str());
+		const auto guidance = resourceLoader.GetString(readError == ERROR_ACCESS_DENIED ?
+			L"AppSettings_ReadAccessDenied" : L"AppSettings_ReadFailedGuidance");
+		const auto details = std::wstring(guidance) + L"\n\n" +
+			fmt::format(fmt::runtime(std::wstring_view(content)), existingConfigPath.native());
+		ShowErrorMessage(title.c_str(), details.c_str(), existingConfigPath, readError);
 		return false;
 	}
 
-    bool recovered = false;
-    if (!ConfigPersistence::IsValid(configText)) {
-        // Preserve the exact source before any recovery or migration writes.
-        const auto damagedPath = std::filesystem::path(existingConfigPath.native() +
-            L".corrupt-" + std::to_wstring(std::chrono::system_clock::now().time_since_epoch().count()));
-        if (!CopyFileW(existingConfigPath.c_str(), damagedPath.c_str(), TRUE)) {
-            logger.Win32Error("Unable to preserve damaged configuration");
-            return false;
-        }
-        std::string replacement = ConfigPersistence::Read(
-            std::filesystem::path(existingConfigPath.native() + L".bak"));
-        const bool fromBackup = ConfigPersistence::IsValid(replacement);
-        if (!fromBackup) replacement = ConfigPersistence::RecoverPrefix(configText);
-        if (replacement.empty()) replacement = "{}";
-        configText = std::move(replacement);
-        logger.Warn(fromBackup ? "Recovered configuration from backup" :
-            "Recovered complete configuration entries; missing entries use defaults");
-        recovered = true;
-    }
-    rapidjson::Document doc;
-    doc.ParseInsitu(configText.data());
-
-	_LoadSettings(((const rapidjson::Document&)doc).GetObj());
-	if (recovered && _scalingModes.empty()) _SetDefaultScalingModes();
-
-	// 迁移旧版配置后立刻保存，_SetDefaultShortcuts 用于确保快捷键不为空
-	if (_SetDefaultShortcuts() || recovered || _isConfigMigrationNeeded ||
-		!Win32Helper::FileExists(_configPath.c_str()))
-	{
-		SaveAsync();
+	const auto loader = ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+	auto failRecovery = [&](const wchar_t* key, const std::filesystem::path& path, DWORD error) {
+		const auto details = std::wstring(loader.GetString(key)) + L"\n" + path.native();
+		ShowErrorMessage(loader.GetString(L"AppSettings_Dialog_Error").c_str(), details.c_str(), path, error);
+		return false;
+	};
+	try {
+		const std::string recoveredName = StrHelper::UTF16ToUTF8(loader.GetString(L"AppSettings_RecoveredGroup"));
+		const ConfigRecovery::ParameterRules rules = [](std::string_view effectName, std::string_view parameterName)
+			-> std::optional<ConfigRecovery::ParameterRule> {
+			const auto* effect = EffectsService::Get().GetEffect(StrHelper::UTF8ToUTF16(effectName));
+			if (!effect) return std::nullopt;
+			const auto it = std::ranges::find(effect->params, parameterName, &EffectParameterDesc::name);
+			if (it == effect->params.end()) return std::nullopt;
+			return std::visit([&](const auto& constant) -> ConfigRecovery::ParameterRule {
+				ConfigRecovery::ParameterRule rule{ static_cast<float>(constant.minValue),
+					static_cast<float>(constant.maxValue), static_cast<float>(constant.defaultValue),
+					std::is_integral_v<decltype(constant.defaultValue)>, {} };
+				for (const auto& choice : it->choices) rule.choices.push_back(choice.value);
+				return rule;
+			}, it->constant);
+		};
+		auto plan = ConfigRecovery::Prepare(configText,
+			ConfigPersistence::Read(existingConfigPath.native() + L".bak"), recoveredName, rules);
+		const auto files = ConfigRecovery::FilesFor(_configPath, configText);
+		bool recovered = plan.kind != ConfigRecovery::Kind::None;
+		bool reused = false;
+		if (recovered) {
+			if (!ConfigRecovery::Preserve(existingConfigPath, configText, files))
+				return failRecovery(L"AppSettings_BackupFailed", files.original, GetLastError());
+			if (Win32Helper::FileExists(files.result.c_str())) {
+				const auto previous = ConfigPersistence::Read(files.result);
+				if (ConfigPersistence::IsValid(previous)) {
+					auto cached = ConfigRecovery::Prepare(previous, {}, recoveredName, rules);
+					if (cached.kind == ConfigRecovery::Kind::None) {
+						plan.document = std::move(cached.document);
+						plan.defaultModes = false;
+						reused = true;
+					}
+				}
+				// An unusable cache never blocks repair of the preserved input.
+				if (!reused) logger.Warn("Rebuilding an outdated or damaged configuration recovery record");
+			}
+		}
+		if (plan.defaultModes) _SetDefaultScalingModes();
+		_LoadSettings(static_cast<const rapidjson::Document&>(plan.document).GetObj());
+		_isConfigMigrationNeeded |= ApplyOpticalFlowDefaultsMigration(
+			_scalingModes, _experimentalOpticalFlowDefaultsVersion);
+		// Retire the hidden HDR toggle in every loaded profile, including the
+		// default and older versioned configurations. Preserve all other flags.
+		bool hdrSettingsChanged = false;
+		const auto disableHdr = [&](Profile& profile) {
+			if (!profile.IsHdrCompatibilityEnabled()) return;
+			profile.IsHdrCompatibilityEnabled(false);
+			hdrSettingsChanged = true;
+		};
+		disableHdr(_defaultProfile);
+		for (Profile& profile : _profiles) disableHdr(profile);
+		if (hdrSettingsChanged) logger.Info("HDR compatibility temporarily disabled in saved profiles");
+		const bool shortcutsChanged = _SetDefaultShortcuts();
+		// Existing versioned migrations also preserve the input before their first write.
+		if (_isConfigMigrationNeeded && !recovered) {
+			if (!ConfigRecovery::Preserve(existingConfigPath, configText, files))
+				return failRecovery(L"AppSettings_BackupFailed", files.original, GetLastError());
+			recovered = true;
+			plan.kind = ConfigRecovery::Kind::Repaired;
+			plan.fields.push_back("/experimental settings migration");
+		}
+		if (recovered) {
+			const std::string result = _Serialize(*this);
+			ConfigSaveState recoverySave;
+			if (!reused && !ConfigPersistence::WriteAtomic(files.result, result, 1, recoverySave))
+				return failRecovery(L"AppSettings_RecoveryWriteFailed", files.result, GetLastError());
+			// Finish persistence before startup succeeds. A write failure leaves the
+			// original and completed recovery available for a subsequent save attempt.
+			if (!ConfigPersistence::WriteAtomic(_configPath, result, ++_saveState->nextRevision, *_saveState))
+				return failRecovery(L"AppSettings_RecoveryWriteFailed", _configPath, GetLastError());
+			// Successful imports, migrations and selective repairs stay silent.
+			// Unusable items are explained in their effect rows. Only a total reset
+			// needs a startup notice because no original groups could be recovered.
+			if (plan.kind == ConfigRecovery::Kind::Defaults) _recoveredConfigPath = files.original;
+			_recoveryNotice = plan.kind == ConfigRecovery::Kind::Backup ? ScalingError::ConfigurationRecoveredBackup :
+				plan.kind == ConfigRecovery::Kind::Defaults ? ScalingError::ConfigurationResetDefaults :
+				plan.kind == ConfigRecovery::Kind::Repaired ? ScalingError::ConfigurationRepaired :
+				ScalingError::ConfigurationRecoveredPartial;
+			for (const auto& field : plan.fields) _recoveryDetails += "\n" + field;
+			logger.Warn(fmt::format("Configuration recovery completed: kind={} reused={} repairedFields={} original={}",
+				static_cast<int>(plan.kind), reused, plan.fields.size(), StrHelper::UTF16ToUTF8(files.original.native())));
+		} else if (hdrSettingsChanged || shortcutsChanged || !Win32Helper::FileExists(_configPath.c_str())) {
+			SaveAsync();
+		}
+		return true;
+	} catch (...) {
+		logger.Error("Configuration recovery failed with an exception");
+		return failRecovery(L"AppSettings_RecoveryWriteFailed", _configPath, ERROR_INVALID_DATA);
 	}
+}
 
-	return true;
+void AppSettings::PublishStartupNotice() noexcept {
+	if (ScalingModesService::Get().HasDuplicateNames()) {
+		ErrorService::Get().Report(ScalingError::DuplicateScalingModeNames);
+	}
+	if (_recoveredConfigPath.empty()) return;
+	ErrorService::Get().Report(_recoveryNotice,
+		StrHelper::UTF16ToUTF8(_recoveredConfigPath.native()) + _recoveryDetails);
 }
 
 bool AppSettings::Save() noexcept {
+	const uint64_t revision = ++_saveState->nextRevision;
+	const uint64_t issueRevision = ErrorService::Get().Revision();
     try {
         _UpdateWindowPlacement();
-        const uint64_t revision = ++_saveState->nextRevision;
         const std::string json = _Serialize(*this);
-        if (ConfigPersistence::WriteAtomic(_configPath, json, revision, *_saveState)) return true;
+		if (ConfigPersistence::WriteAtomic(_configPath, json, revision, *_saveState)) {
+			ErrorService::Get().ConfigurationSaved(revision, issueRevision);
+			return true;
+		}
         const DWORD error = GetLastError();
         Logger::Get().Win32Error("Save configuration failed");
         ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed,
-            StrHelper::UTF16ToUTF8(_configPath.native()), nullptr, error);
+            StrHelper::UTF16ToUTF8(_configPath.native()), nullptr, error, {}, revision);
     } catch (...) {
         Logger::Get().Error("Save configuration failed with an exception");
-        ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed);
+        ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed,
+			StrHelper::UTF16ToUTF8(_configPath.native()), nullptr, 0, {}, revision);
     }
     return false;
 }
@@ -301,25 +431,28 @@ bool AppSettings::Save() noexcept {
 fire_and_forget AppSettings::SaveAsync(std::function<void(bool)> onCompleted) noexcept {
 	bool succeeded = false;
 	std::filesystem::path path;
+	const uint64_t revision = ++_saveState->nextRevision;
+	const uint64_t issueRevision = ErrorService::Get().Revision();
 	try {
 		path = _configPath;
 		_UpdateWindowPlacement();
 		// Snapshot on the UI thread; background work owns only serialized data.
 		const std::string json = _Serialize(*this);
 		const auto state = _saveState;
-		const uint64_t revision = ++state->nextRevision;
 		co_await resume_background();
 		succeeded = ConfigPersistence::WriteAtomic(path, json, revision, *state);
 		if (!succeeded) {
 			const DWORD error = GetLastError();
 			Logger::Get().Win32Error("Save configuration failed");
 			ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed,
-				StrHelper::UTF16ToUTF8(path.native()), nullptr, error);
+				StrHelper::UTF16ToUTF8(path.native()), nullptr, error, {}, revision);
+		} else {
+			ErrorService::Get().ConfigurationSaved(revision, issueRevision);
 		}
 	} catch (...) {
 		Logger::Get().Error("Save configuration failed with an exception");
 		ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed,
-			StrHelper::UTF16ToUTF8(path.native()));
+			StrHelper::UTF16ToUTF8(path.native()), nullptr, 0, {}, revision);
 	}
 	// This callback must not access UI objects. Parameter saves only publish an
 	// atomic result into shared state, including after their overlay is closed.
@@ -331,29 +464,40 @@ fire_and_forget AppSettings::SaveAsync(std::function<void(bool)> onCompleted) no
 }
 
 void AppSettings::IsPortableMode(bool value) noexcept {
-	if (_isPortableMode == value) {
+	if (_isPortableMode == value) return;
+	const auto previousPath = _configPath;
+	const auto previousDirectory = _configDir;
+	const bool previousPortable = _isPortableMode;
+	auto restoreLocation = [&]() {
+		_isPortableMode = previousPortable;
+		_configPath = previousPath;
+		_configDir = previousDirectory;
+	};
+	_isPortableMode = value;
+	// Commit a newer revision to the destination before removing our old
+	// portable file. Pending older saves then cannot recreate that file.
+	if (!_UpdateConfigPath()) {
+		const auto failedPath = _configPath;
+		const DWORD error = GetLastError();
+		restoreLocation();
+		ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed,
+			StrHelper::UTF16ToUTF8(failedPath.native()), nullptr, error);
 		return;
 	}
-
-	if (!value) {
-		// 关闭便携模式需删除本地配置文件
-		if (!DeleteFile((_configDir / CommonSharedConstants::CONFIG_FILENAME).c_str())) {
-			if (GetLastError() != ERROR_FILE_NOT_FOUND) {
-				Logger::Get().Win32Error("删除本地配置文件失败");
-				return;
-			}
+	if (!Save()) {
+		restoreLocation();
+		return;
+	}
+	if (!value && !DeleteFileW(previousPath.c_str())) {
+		const DWORD error = GetLastError();
+		if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+			restoreLocation();
+			ErrorService::Get().Report(ScalingError::ConfigurationWriteFailed,
+				StrHelper::UTF16ToUTF8(previousPath.native()), nullptr, error);
+			return;
 		}
 	}
-
-	_isPortableMode = value;
-
-	if (_UpdateConfigPath()) {
-		Logger::Get().Info(value ? "已开启便携模式" : "已关闭便携模式");
-		SaveAsync();
-	} else {
-		Logger::Get().Error(value ? "开启便携模式失败" : "关闭便携模式失败");
-		_isPortableMode = !value;
-	}
+	Logger::Get().Info(value ? "Portable configuration enabled" : "User configuration enabled");
 }
 
 void AppSettings::Language(int value) {
@@ -673,10 +817,14 @@ std::string AppSettings::_Serialize(const _AppSettingsData& data) {
 	writer.Bool(data._isStatisticsForDynamicDetectionEnabled);
 	writer.Key("frontEdgeSync");
 	writer.Bool(data._isFrontEdgeSyncEnabled);
+	writer.Key("stopEffectsOnTaskSwitch");
+	writer.Bool(data._isStopEffectsOnTaskSwitchEnabled);
 	writer.Key("vrr");
 	writer.Bool(data._isVRREnabled);
 	writer.Key("frontEdgeSyncFrameRate");
 	writer.Double(data._frontEdgeSyncFrameRate);
+	writer.Key("frameSyncMode");
+	writer.Uint(static_cast<uint32_t>(data._frameSyncMode));
 	writer.Key("minFrameRate");
 	writer.Double(data._minFrameRate);
 	writer.Key("disableFP16");
@@ -687,6 +835,8 @@ std::string AppSettings::_Serialize(const _AppSettingsData& data) {
 	writer.Uint(data._experimentalDlssSrSettingsVersion);
 	writer.Key("experimentalDepthRemovalVersion");
 	writer.Uint(data._experimentalDepthRemovalVersion);
+	writer.Key("experimentalOpticalFlowDefaultsVersion");
+	writer.Uint(data._experimentalOpticalFlowDefaultsVersion);
 
 	ScalingModesService::Export(writer, data._scalingModes);
 
@@ -741,6 +891,9 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 	_experimentalDlssSrSettingsVersion = 0;
 	JsonHelper::ReadUInt(root, "experimentalDlssSrSettingsVersion",
 		_experimentalDlssSrSettingsVersion);
+	_experimentalOpticalFlowDefaultsVersion = 0;
+	JsonHelper::ReadUInt(root, "experimentalOpticalFlowDefaultsVersion",
+		_experimentalOpticalFlowDefaultsVersion);
 	_experimentalDepthRemovalVersion = 0;
 	JsonHelper::ReadUInt(root, "experimentalDepthRemovalVersion",
 		_experimentalDepthRemovalVersion);
@@ -917,9 +1070,20 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 	JsonHelper::ReadBool(root, "enableStatisticsForDynamicDetection", _isStatisticsForDynamicDetectionEnabled);
 	JsonHelper::ReadFloat(root, "minFrameRate", _minFrameRate);
 	JsonHelper::ReadBool(root, "frontEdgeSync", _isFrontEdgeSyncEnabled);
+	// Migrate the former global choice only while loading existing profiles.
+	bool legacyParameterFocusSwitching = false;
+	JsonHelper::ReadBool(root, "parameterFocusSwitching", legacyParameterFocusSwitching);
+	_defaultProfile.isParameterFocusSwitchingEnabled = legacyParameterFocusSwitching;
+	if (root.HasMember("parameterFocusSwitching")) _isConfigMigrationNeeded = true;
+	_isStopEffectsOnTaskSwitchEnabled = false;
+	JsonHelper::ReadBool(root, "stopEffectsOnTaskSwitch", _isStopEffectsOnTaskSwitchEnabled);
 	JsonHelper::ReadBool(root, "vrr", _isVRREnabled);
 	JsonHelper::ReadFloat(root, "frontEdgeSyncFrameRate", _frontEdgeSyncFrameRate);
 	_frontEdgeSyncFrameRate = SanitizePresentationFrameRate(_frontEdgeSyncFrameRate);
+	uint32_t frameSyncMode = 0;
+	JsonHelper::ReadUInt(root, "frameSyncMode", frameSyncMode);
+	_frameSyncMode = IsValidFrameSyncMode(static_cast<FrameSyncMode>(frameSyncMode))
+		? static_cast<FrameSyncMode>(frameSyncMode) : FrameSyncMode::FrontEdge;
 	JsonHelper::ReadBool(root, "disableFP16", _isFP16Disabled);
 
 	[[maybe_unused]] bool result = ScalingModesService::Get().Import(root, true);
@@ -985,7 +1149,7 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 		if (size > 0) {
 			if (scaleProfilesArray[0].IsObject()) {
 				// 解析默认缩放配置不会失败
-				_LoadProfile(scaleProfilesArray[0].GetObj(), _defaultProfile, true);
+				_LoadProfile(scaleProfilesArray[0].GetObj(), _defaultProfile, true, legacyParameterFocusSwitching);
 			}
 
 			if (size > 1) {
@@ -996,7 +1160,7 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 					}
 
 					Profile& rule = _profiles.emplace_back();
-					if (!_LoadProfile(scaleProfilesArray[i].GetObj(), rule)) {
+					if (!_LoadProfile(scaleProfilesArray[i].GetObj(), rule, false, legacyParameterFocusSwitching)) {
 						_profiles.pop_back();
 						continue;
 					}
@@ -1070,8 +1234,11 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 bool AppSettings::_LoadProfile(
 	const rapidjson::GenericObject<true, rapidjson::Value>& profileObj,
 	Profile& profile,
-	bool isDefault
+	bool isDefault,
+	bool legacyParameterFocusSwitching
 ) const noexcept {
+	profile.isParameterFocusSwitchingEnabled = legacyParameterFocusSwitching;
+	JsonHelper::ReadBool(profileObj, "parameterFocusSwitching", profile.isParameterFocusSwitchingEnabled);
 	if (!isDefault) {
 		if (!JsonHelper::ReadString(profileObj, "name", profile.name, true)) {
 			return false;
@@ -1229,6 +1396,7 @@ bool AppSettings::_LoadProfile(
 	}
 	JsonHelper::ReadBoolFlag(profileObj, "adjustCursorSpeed", ScalingFlags::AdjustCursorSpeed, profile.scalingFlags);
 	JsonHelper::ReadBoolFlag(profileObj, "disableDirectFlip", ScalingFlags::DisableDirectFlip, profile.scalingFlags);
+	JsonHelper::ReadBoolFlag(profileObj, "enableHdrCompatibility", ScalingFlags::EnableHdrCompatibility, profile.scalingFlags);
 
 	{
 		uint32_t cursorScaling = (uint32_t)CursorScaling::NoScaling;
@@ -1387,7 +1555,8 @@ void AppSettings::_SetDefaultScalingModes() noexcept {
 		vsrUltra.effects.resize(2);
 		vsrUltra.effects[0].name = L"FrameRate_Filter";
 		auto& vsrEffect = vsrUltra.effects[1];
-		vsrEffect.name = L"RTXVideo\\RTXVideo_VSR_Ultra";
+		vsrEffect.name = L"RTXVideo\\RTXVideo_VSR";
+		vsrEffect.parameters[L"strength"] = 1.0f;
 		vsrEffect.scalingType = ::Magpie::ScalingType::Fit;
 	}
 	// DLSS Frame Generation
@@ -1428,80 +1597,37 @@ void AppSettings::ResetScalingModes() noexcept {
 	SaveAsync();
 }
 
-static std::wstring FindOldConfig(const wchar_t* localAppDataDir) noexcept {
-	for (uint32_t version = CONFIG_VERSION - 1; version >= 2; --version) {
-		std::wstring oldConfigPath = fmt::format(
-			L"{}\\Magpie\\{}\\v{}\\{}",
-			localAppDataDir,
-			CommonSharedConstants::CONFIG_DIR,
-			version,
-			CommonSharedConstants::CONFIG_FILENAME
-		);
-
-		if (Win32Helper::FileExists(oldConfigPath.c_str())) {
-			return oldConfigPath;
-		}
-	}
-
-	// v1 版本的配置文件不在子目录中
-	std::wstring v1ConfigPath = StrHelper::Concat(
-		localAppDataDir,
-		L"\\Magpie\\",
-		CommonSharedConstants::CONFIG_DIR,
-		L"\\",
-		CommonSharedConstants::CONFIG_FILENAME
-	);
-
-	if (Win32Helper::FileExists(v1ConfigPath.c_str())) {
-		return v1ConfigPath;
-	}
-
-	return {};
-}
-
 bool AppSettings::_UpdateConfigPath(std::filesystem::path* existingConfigPath) noexcept {
-	if (_isPortableMode) {
-		std::wstring value;
-		HRESULT hr = wil::GetFullPathNameW(CommonSharedConstants::CONFIG_DIR, value);
-		if (FAILED(hr)) {
-			Logger::Get().ComError("GetFullPathNameW 失败", hr);
+	wil::unique_cotaskmem_string localAppData;
+	const HRESULT hr = SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, localAppData.put());
+	if (FAILED(hr)) {
+		Logger::Get().ComError("SHGetKnownFolderPath failed", hr);
+		SetLastError(HRESULT_FACILITY(hr) == FACILITY_WIN32 ? HRESULT_CODE(hr) : static_cast<DWORD>(hr));
+		return false;
+	}
+	const auto exeDirectory = std::filesystem::path(Win32Helper::GetExePath()).parent_path();
+	if (existingConfigPath) {
+		const auto selected = ConfigLocations::Select(exeDirectory, localAppData.get());
+		_configPath = selected.destination;
+		_configDir = _configPath.parent_path();
+		if (selected.error) {
+			SetLastError(selected.error);
+			Logger::Get().Win32Error("Inspect configuration location failed");
+			SetLastError(selected.error);
 			return false;
 		}
-		_configDir = std::move(value);
-
-		_configPath = _configDir / CommonSharedConstants::CONFIG_FILENAME;
-
-		if (existingConfigPath) {
-			if (Win32Helper::FileExists(_configPath.c_str())) {
-				*existingConfigPath = _configPath;
-			}
-		}
+		_isPortableMode = selected.portable;
+		*existingConfigPath = selected.source;
 	} else {
-		wil::unique_cotaskmem_string localAppDataDir;
-		HRESULT hr = SHGetKnownFolderPath(
-			FOLDERID_LocalAppData, KF_FLAG_DEFAULT, NULL, localAppDataDir.put());
-		if (FAILED(hr)) {
-			Logger::Get().ComError("SHGetKnownFolderPath 失败", hr);
-			return false;
-		}
-
-		_configDir = fmt::format(L"{}\\Magpie\\{}\\v{}\\",
-			localAppDataDir.get(), CommonSharedConstants::CONFIG_DIR, CONFIG_VERSION);
+		_configDir = ConfigLocations::Directory(exeDirectory, localAppData.get(), _isPortableMode);
 		_configPath = _configDir / CommonSharedConstants::CONFIG_FILENAME;
-
-		if (existingConfigPath) {
-			if (Win32Helper::FileExists(_configPath.c_str())) {
-				*existingConfigPath = _configPath;
-			} else {
-				// 查找旧版本配置文件
-				*existingConfigPath = FindOldConfig(localAppDataDir.get());
-			}
-		}
 	}
 
 	// 确保配置文件夹存在
 	if (!Win32Helper::CreateDir(_configDir.native(), true)) {
+		const DWORD error = GetLastError();
 		Logger::Get().Win32Error("创建配置文件夹失败");
+		SetLastError(error);
 		return false;
 	}
 

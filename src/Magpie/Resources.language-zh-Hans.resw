@@ -426,6 +426,9 @@
   <data name="Profile_General_3DGameMode.Header" xml:space="preserve">
     <value>3D 游戏模式</value>
   </data>
+  <data name="Profile_General_HdrCompatibility.Header" xml:space="preserve">
+    <value>HDR 兼容</value>
+  </data>
   <data name="Profile_General_AutoScale.Header" xml:space="preserve">
     <value>位于前台时自动启用效果组</value>
   </data>
@@ -812,13 +815,13 @@
     <value>效果组初始化失败。请停用效果组、重新打开目标窗口并重试；如果仍然失败，请重新启动 Magpie。</value>
   </data>
   <data name="Message_CaptureFailed" xml:space="preserve">
-    <value>无法捕获这个窗口。请确认窗口没有最小化，并在当前配置中将捕获方式改为“默认”或 Graphics Capture 后重试。</value>
+    <value>请还原目标窗口，再启用效果组。若仍无法捕获，请打开“查看详情”，核对捕获步骤和错误码。</value>
   </data>
   <data name="Message_CreateFenceFailed" xml:space="preserve">
-    <value>所选显卡或驱动不支持效果处理所需的同步功能。请在当前配置的“性能”中切换显卡，或更新显卡驱动后重试。</value>
+    <value>所选显示卡未能创建同步资源。请打开下方配置 → 性能 → 显示卡，选择另一张可用显示卡后重试；若仍失败，可更新对应驱动，并提供详情和日志。</value>
   </data>
   <data name="Message_NvidiaVsrPathUnsupported" xml:space="preserve">
-    <value>NVIDIA VSR 初始化失败（错误 -2）。请将 Magpie 完整解压到仅含英文字母和数字的路径，所有上级目录都不要包含中文或特殊字符，例如 C:\Magpie\，然后重新运行。</value>
+    <value>NVIDIA VSR 暂未启动（错误 -2）。请退出 Magpie，把完整发行包重新解压到例如 C:\Magpie\ 的目录，再从该目录运行 Magpie.exe 并重试。路径兼容性是可能原因；若仍失败，请复制详情并附上日志。</value>
   </data>
   <data name="Message_ScalingFailed" xml:space="preserve">
     <value>无法启用效果组</value>
@@ -869,7 +872,7 @@
     <value>取消操作</value>
   </data>
   <data name="Message_BannedInWindowedMode" xml:space="preserve">
-    <value>当前窗口已最大化或处于全屏状态。请先还原窗口或退出全屏，也可以改用全屏模式。</value>
+    <value>源应用已最大化或处于全屏状态。请先在源应用中切换为窗口化，并将窗口还原到小于屏幕的尺寸，再启动窗口模式效果。</value>
   </data>
   <data name="Message_InvalidCropping" xml:space="preserve">
     <value>裁剪后的区域过小或无效。请减小裁剪值，确保宽高至少为 64 像素，或关闭自定义裁剪。</value>
@@ -941,10 +944,13 @@
     <value>性能分析器窗口</value>
   </data>
   <data name="Message_Windowed3DGameMode" xml:space="preserve">
-    <value>当前配置启用了 3D 游戏模式，无法使用窗口模式。请关闭 3D 游戏模式，或改用全屏模式。</value>
+    <value>要使用窗口模式，请先在下方配置中关闭“3D 游戏模式”，再启用效果组。也可以保留此设置，使用主页的全屏模式快捷键启用。</value>
   </data>
   <data name="Profile_General_3DGameMode.Description" xml:space="preserve">
     <value>针对 3D 游戏优化，不支持工具栏和窗口模式</value>
+  </data>
+  <data name="Profile_General_HdrCompatibility.Description" xml:space="preserve">
+    <value>启用实验性 HDR 捕获到效果兼容路径。除非正在测试 HDR 支持，请保持关闭</value>
   </data>
   <data name="Home_Toolbar_ScreenshotSaveDirectory.Header" xml:space="preserve">
     <value>截图保存目录</value>
@@ -1022,10 +1028,10 @@
     <value>打开日志位置</value>
   </data>
   <data name="Message_WindowedDesktopDuplication" xml:space="preserve">
-    <value>Desktop Duplication 不支持窗口模式。请将捕获方式改为“默认”或 Graphics Capture，或改用全屏模式。</value>
+    <value>要使用窗口模式，请在下方配置的“捕获方式”中选择 Graphics Capture，再启用效果组。要保留 Desktop Duplication，可使用主页的全屏模式快捷键启用。</value>
   </data>
   <data name="Profile_General_DesktopDuplicationWarning.Title" xml:space="preserve">
-    <value>Desktop Duplication 不支持窗口模式。请改用“默认”或 Graphics Capture，或使用全屏模式。</value>
+    <value>要使用窗口模式，请在上方“捕获方式”中选择 Graphics Capture；保留 Desktop Duplication 时，请使用全屏模式。</value>
   </data>
   <data name="Settings_Launch_RunAtStartup.Description" xml:space="preserve">
     <value>启用了“在系统托盘上显示应用程序”时将不会显示主窗口</value>
@@ -1093,7 +1099,7 @@
   <data name="Settings_General_SmoothMotionCompatibilityMode.Description" xml:space="preserve">
     <value>每次停用效果组后重启 Magpie，释放 NVIDIA Smooth Motion 驱动驻留的显存。仅在已为 Magpie 启用 Smooth Motion 时开启。</value>
   </data>
-  <data name="Overlay_Toolbar_EffectParameters" xml:space="preserve"><value>效果参数</value></data>
+  <data name="Overlay_Toolbar_EffectParameters" xml:space="preserve"><value>实时参数修改</value></data>
   <data name="Overlay_EffectParameters" xml:space="preserve"><value>效果参数</value></data>
   <data name="Overlay_EffectParameters_Live" xml:space="preserve"><value>实时</value></data>
   <data name="Overlay_EffectParameters_RestartRequired" xml:space="preserve"><value>重启</value></data>
@@ -1104,30 +1110,30 @@
   <data name="Overlay_EffectParameters_ApplyAndRestart" xml:space="preserve"><value>应用并重新启用效果组</value></data>
   <data name="Overlay_EffectParameters_NoParameters" xml:space="preserve"><value>当前效果链没有暴露参数。</value></data>
   <data name="Overlay_EffectParameters_Saved" xml:space="preserve"><value>效果参数已保存。</value></data>
-  <data name="Overlay_EffectParameters_LiveApplyFailed" xml:space="preserve"><value>实时参数应用失败，画面继续使用上一次成功的值。</value></data>
-  <data name="Overlay_EffectParameters_SessionExpired" xml:space="preserve"><value>运行会话已变化，参数未保存。</value></data>
-  <data name="Overlay_EffectParameters_SourceUnavailable" xml:space="preserve"><value>源窗口已不可用。</value></data>
-  <data name="Overlay_EffectParameters_ScalingModeConflict" xml:space="preserve"><value>运行期间效果组结构已变化，未覆盖任何配置。</value></data>
-  <data name="Overlay_EffectParameters_SaveFailed" xml:space="preserve"><value>自动保存失败，修改参数可重试。</value></data>
-  <data name="Overlay_EffectParameters_Invalid" xml:space="preserve"><value>此参数的元数据或运行时绑定无效，当前无法调节。</value></data>
+  <data name="Overlay_EffectParameters_LiveApplyFailed" xml:space="preserve"><value>此参数暂未应用到画面，仍使用上一次成功值。请恢复此前可用值，或点击“应用并重新启用效果组”。</value></data>
+  <data name="Overlay_EffectParameters_SessionExpired" xml:space="preserve"><value>当前运行已更新，本次请求未保存。请重新打开效果参数面板，确认最新值后再调整。</value></data>
+  <data name="Overlay_EffectParameters_SourceUnavailable" xml:space="preserve"><value>目标窗口已不可用，本次重新启用未完成。请打开目标程序并切到前台，再启用效果组并确认参数。</value></data>
+  <data name="Overlay_EffectParameters_ScalingModeConflict" xml:space="preserve"><value>效果组或参数已在其他位置更新，本面板修改未保存。请停用并重新启用效果组，载入最新配置后再调整。</value></data>
+  <data name="Overlay_EffectParameters_SaveFailed" xml:space="preserve"><value>参数尚未保存。请到主页 → 最近一次问题 → 查看详情，处理原因后点击“重试保存”。</value></data>
+  <data name="Overlay_EffectParameters_Invalid" xml:space="preserve"><value>此参数暂不可调节。请重新启用效果组后再打开面板；若仍无效，请从完整发行包恢复该效果器，并提供效果器名称和日志。</value></data>
   <data name="Overlay_EffectParameters_Reason_Inline" xml:space="preserve"><value>此参数已编译进着色器。</value></data>
   <data name="Overlay_EffectParameters_Reason_Native" xml:space="preserve"><value>此原生效果只在启动时读取该参数。</value></data>
   <data name="Overlay_EffectParameters_Reason_Resources" xml:space="preserve"><value>此参数会改变效果资源或处理尺寸。</value></data>
   <data name="Overlay_EffectParameters_Reason_Guidance" xml:space="preserve"><value>此参数会改变帧引导提供器。</value></data>
   <data name="Overlay_EffectParameters_Reason_FrameGeneration" xml:space="preserve"><value>此参数会改变帧生成 Feature 或呈现环。</value></data>
-  <data name="Message_OpticalFlowProviderUnavailable" xml:space="preserve"><value>当前版本未提供所选光流提供者。请选择其他光流方法或“无”。</value></data>
-  <data name="Message_NvidiaOpticalFlowUnsupported" xml:space="preserve"><value>当前 GPU 或驱动无法初始化 NVIDIA 光流。请选择 AMD OF 或“无”。</value></data>
-  <data name="Message_NvidiaOpticalFlowQualityUnsupported" xml:space="preserve"><value>所选 NVIDIA 光流质量需要当前 GPU 或驱动不支持的输出网格。请选择较低质量、AMD OF 或“无”。</value></data>
-  <data name="Message_AmdOpticalFlowUnsupported" xml:space="preserve"><value>当前 GPU 不满足 AMD FidelityFX 光流所需的 D3D12、着色器模型、Wave 运算或格式能力。请选择界面中其他可用的光流方法，或选择“无”。</value></data>
-  <data name="Message_OpticalFlowInteropFailed" xml:space="preserve"><value>所选光流方法无法创建 D3D11/D3D12 共享资源。请选择其他光流方法或“无”。</value></data>
-  <data name="Message_ConflictingFrameGenerationEffects" xml:space="preserve"><value>同一效果组只能包含一个帧生成效果器。请移除 DLSSFG、XeSSFG x2 或 XeSS 多帧生成中的冲突项后重试。</value></data>
+  <data name="Message_OpticalFlowProviderUnavailable" xml:space="preserve"><value>请打开详情所列效果器，将光流改为界面中其他可选方法，或选择“无／不使用”后重新启用。当前构建未提供所请求的光流方法。</value></data>
+  <data name="Message_NvidiaOpticalFlowUnsupported" xml:space="preserve"><value>NVIDIA 光流暂未启动。请在详情中确认受影响的效果器，打开该效果组，把对应光流选项设为“无”或“不使用”，再启用。需要光流时，可尝试界面中可选的 AMD 光流。</value></data>
+  <data name="Message_NvidiaOpticalFlowQualityUnsupported" xml:space="preserve"><value>请打开详情所列效果器，降低其 NVIDIA 光流质量后重新启用效果组；也可先将光流设为“无”或“不使用”。当前档位未能通过显卡或驱动的能力检查。</value></data>
+  <data name="Message_AmdOpticalFlowUnsupported" xml:space="preserve"><value>AMD 光流暂未启动。请打开详情所列效果器，将光流设为“无”或“不使用”后重新启用；需要光流时，可尝试该效果器提供的其他方法。具体能力检查结果见详情和日志。</value></data>
+  <data name="Message_OpticalFlowInteropFailed" xml:space="preserve"><value>光流所需的共享资源创建失败。请打开详情所列效果器，将光流设为“无”或“不使用”后重新启用；需要光流时，可尝试该效果器提供的其他方法。</value></data>
+  <data name="Message_ConflictingFrameGenerationEffects" xml:space="preserve"><value>下方效果组包含多个补帧效果器。请在详情中查看实际冲突项，再打开该效果组，保留要使用的一项并移除其余补帧项，然后重新启用。</value></data>
   <data name="Message_XeSSMfgRequiresIntel" xml:space="preserve"><value>XeSS 多帧生成 x3/x4 需要受支持的 Intel Arc 显卡。请在当前显卡上改用 XeSS 帧生成 x2。</value></data>
   <data name="Message_XeSSMfgUnsupported" xml:space="preserve"><value>当前 Intel 显卡或驱动无法初始化 XeSS 多帧生成。请更新驱动，或改用 XeSS 帧生成 x2。</value></data>
   <data name="Message_XeSSMfgMultiplierUnsupported" xml:space="preserve"><value>当前显卡或驱动不支持所选 XeSS 多帧生成倍率。请选择较低的 MFG 倍率，或改用 XeSS 帧生成 x2。</value></data>
   <data name="Home_Toolbar_Profiler.Header" xml:space="preserve"><value>性能监测</value></data>
   <data name="Home_Toolbar_Profiler_ShortcutControl.Title" xml:space="preserve"><value>性能监测</value></data>
-  <data name="Home_Toolbar_EffectParameters.Header" xml:space="preserve"><value>效果参数</value></data>
-  <data name="Home_Toolbar_EffectParameters_ShortcutControl.Title" xml:space="preserve"><value>效果参数</value></data>
+  <data name="Home_Toolbar_EffectParameters.Header" xml:space="preserve"><value>打开／关闭实时参数面板</value></data>
+  <data name="Home_Toolbar_EffectParameters_ShortcutControl.Title" xml:space="preserve"><value>打开／关闭实时参数面板</value></data>
   <data name="Home_Toolbar_Screenshot.Header" xml:space="preserve"><value>截屏</value></data>
   <data name="Home_Toolbar_Screenshot_ShortcutControl.Title" xml:space="preserve"><value>截屏</value></data>
   <data name="Home_Toolbar_ToolbarPin.Header" xml:space="preserve"><value>固定工具栏</value></data>
@@ -1208,12 +1214,6 @@
   <data name="EffectParam_CRT_GTU_v050_signalResolutionQ_Label" xml:space="preserve"><value>Q 信号分辨率</value></data>
   <data name="EffectParam_CRT_GTU_v050_signalResolution_Label" xml:space="preserve"><value>Y 信号分辨率</value></data>
   <data name="EffectParam_CRT_GTU_v050_tvVerticalResolution_Label" xml:space="preserve"><value>电视垂直分辨率</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Label" xml:space="preserve"><value>光流质量</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Option_0" xml:space="preserve"><value>无</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Option_1" xml:space="preserve"><value>性能</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Option_2" xml:space="preserve"><value>均衡（推荐）</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Option_3" xml:space="preserve"><value>质量</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Option_4" xml:space="preserve"><value>高质量（高开销）</value></data>
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_multiplier_Label" xml:space="preserve"><value>帧数倍率</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_DLSSNR" xml:space="preserve"><value>DLSSNR</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Detail_Control" xml:space="preserve"><value>细节控制</value></data>
@@ -1223,12 +1223,6 @@
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Label" xml:space="preserve"><value>NR 强度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Label" xml:space="preserve"><value>局部结构强度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Label" xml:space="preserve"><value>局部色调强度</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Label" xml:space="preserve"><value>光流质量</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Option_0" xml:space="preserve"><value>无</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Option_1" xml:space="preserve"><value>性能</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Option_2" xml:space="preserve"><value>均衡（推荐）</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Option_3" xml:space="preserve"><value>质量</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Option_4" xml:space="preserve"><value>高质量（高开销）</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>反射／辉光控制</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>残差明度倍率</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>残差倍率</value></data>
@@ -1320,7 +1314,7 @@
   <data name="ErrorDetails_Time" xml:space="preserve"><value>时间</value></data>
   <data name="ErrorDetails_Code" xml:space="preserve"><value>问题编号</value></data>
   <data name="ErrorDetails_Version" xml:space="preserve"><value>版本</value></data>
-  <data name="ErrorDetails_Context" xml:space="preserve"><value>相关效果器或路径</value></data>
+  <data name="ErrorDetails_Context" xml:space="preserve"><value>失败步骤、相关项目或路径</value></data>
   <data name="ErrorDetails_SystemCode" xml:space="preserve"><value>系统错误码</value></data>
   <data name="ErrorDetails_Count" xml:space="preserve"><value>连续发生次数</value></data>
   <data name="ErrorDetails_Logs" xml:space="preserve"><value>日志目录</value></data>
@@ -1328,25 +1322,25 @@
   <data name="ErrorAdvice_FileBusy" xml:space="preserve"><value>文件正被其他程序占用。请关闭正在编辑该文件的程序或等待同步完成后重试。</value></data>
   <data name="ErrorAdvice_DiskFull" xml:space="preserve"><value>目标磁盘空间不足。请释放空间，或选择其他磁盘上的目录后重试。</value></data>
   <data name="ErrorAdvice_PathMissing" xml:space="preserve"><value>文件或目录已不存在。请重新连接对应磁盘，或选择现有位置后重试。</value></data>
-  <data name="Message_ScalingModeNotSelected" xml:space="preserve"><value>此配置尚未选择有效的效果组。请在配置中选择已有的效果组，然后重新启用效果组。</value></data>
-  <data name="Message_ScalingModeEmpty" xml:space="preserve"><value>当前效果组没有效果器。请在效果组中添加效果器，或选择其他效果组。</value></data>
-  <data name="Message_ScalingModeUnknownEffect" xml:space="preserve"><value>效果组引用了不可用的效果器。请从完整发行包恢复对应的 effects 文件，或替换该效果器。</value></data>
+  <data name="Message_ScalingModeNotSelected" xml:space="preserve"><value>请打开下方配置，选择一个有效的效果组，再启用效果组。此配置目前尚未选择可用的效果组。</value></data>
+  <data name="Message_ScalingModeEmpty" xml:space="preserve"><value>下方效果组目前为空。请打开“效果组”，找到该组并添加效果器；也可以在程序配置中选择其他效果组。</value></data>
+  <data name="Message_ScalingModeUnknownEffect" xml:space="preserve"><value>请在“查看详情”中确认不可用效果器的名称和序号，再打开下方效果组，替换对应项；如需保留它，请从当前版本的完整发行包恢复对应 effects 文件后重启 Magpie。</value></data>
   <data name="Message_GraphicsDeviceInitFailed" xml:space="preserve"><value>无法初始化图形设备。请检查所选显卡，关闭其他占用显卡较多的程序后重试；若仍失败，请更新显卡驱动并重启 Windows。</value></data>
   <data name="Message_PresentationInitFailed" xml:space="preserve"><value>无法创建画面输出。请尝试切换窗口或全屏模式；若使用了补帧，请先尝试不含补帧的效果组。</value></data>
   <data name="Message_EffectCompileFailed" xml:space="preserve"><value>效果器编译失败。请在详情中查看名称，从对应发行包恢复该效果器，或将其移出效果组后重试。具体编译错误见日志。</value></data>
   <data name="Message_EffectResourceFailed" xml:space="preserve"><value>效果器无法创建纹理或渲染资源。请尝试降低输出尺寸、减少效果器数量，并检查详情所列效果器的文件。</value></data>
-  <data name="Message_NativeEffectInitFailed" xml:space="preserve"><value>AI 效果器初始化失败。请确认该效果器支持当前显卡、完整发行包已解压；可更新显卡驱动，或改用其他效果器。</value></data>
-  <data name="Message_FrameGenerationInitFailed" xml:space="preserve"><value>补帧初始化失败。请尝试降低倍率或关闭光流，确认显卡支持情况和驱动版本；也可先使用不含补帧的模式。</value></data>
+  <data name="Message_NativeEffectInitFailed" xml:space="preserve"><value>下方效果器未能启动。请打开详情查看本次初始化的失败步骤，再按所列文件或错误码排查；也可打开效果组，先替换该效果器以继续使用。原因不明确时，请复制详情并附上日志。</value></data>
+  <data name="Message_FrameGenerationInitFailed" xml:space="preserve"><value>补帧暂未启动。请打开详情查看失败步骤；可在下方效果组中关闭补帧效果器的光流，或在倍率可调时降低倍率后重试。也可先使用不含补帧的效果组。</value></data>
   <data name="Message_OverlayInitFailed" xml:space="preserve"><value>工具栏或光标叠加层初始化失败。请重新解压完整发行包后再次启用效果组；若仍失败，请提供详情和日志。</value></data>
   <data name="Message_SharedTextureOpenFailed" xml:space="preserve"><value>图形设备无法共享输出画面。请尝试让捕获和输出使用同一显卡，或关闭补帧；若仍失败，请更新显卡驱动。</value></data>
-  <data name="Message_DlssNrUnavailable" xml:space="preserve"><value>DLSSNR 初始化失败，当前画面仅透传，未进行 NR 处理。运行中参数暂不可用。请检查显卡支持情况和完整发行文件，然后重新启用效果组。</value></data>
+  <data name="Message_DlssNrUnavailable" xml:space="preserve"><value>DLSSNR 暂未参与图像处理，画面会继续显示，其他效果按原顺序处理。请打开详情查看 DLSSNR 的失败步骤，处理后重新启用效果组；恢复前，DLSSNR 参数暂不可调节。</value></data>
   <data name="Message_FrameGenerationDisabled" xml:space="preserve"><value>补帧连续失败，已在本次运行中停用，原始帧会继续显示。请尝试降低倍率或更换光流设置，然后重新启用效果组。</value></data>
-  <data name="Message_ConfigurationWriteFailed" xml:space="preserve"><value>最近的修改未能写入配置文件。请根据详情检查路径、写入权限和磁盘空间；先保持 Magpie 打开，处理后修改一项设置以重试保存。</value></data>
-  <data name="Message_EffectParameterConflict" xml:space="preserve"><value>同一参数已在其他位置被修改，本面板的修改未覆盖保存。请结束并重新启用效果组以载入最新保存值，再进行调整。</value></data>
-  <data name="Message_EffectParameterLiveFailed" xml:space="preserve"><value>效果器拒绝了本次实时更新，仍使用此前的运行值。已保存的设置可能与运行值不同；请重新启用效果组以应用，或恢复此前可用的参数值。</value></data>
+  <data name="Message_ConfigurationWriteFailed" xml:space="preserve"><value>最近的修改尚未保存到磁盘。请先保持 Magpie 打开，在“查看详情”中核对配置路径和失败原因；处理后点击“重试保存”。保存成功后再退出。</value></data>
+  <data name="Message_EffectParameterConflict" xml:space="preserve"><value>效果组或参数已在其他位置更新，本面板的修改未覆盖保存。请停用并重新启用效果组，载入最新配置后再调整。</value></data>
+  <data name="Message_EffectParameterLiveFailed" xml:space="preserve"><value>本次更新未应用，效果器仍使用此前的运行值。请尝试较低或此前可用的参数值；若仍失败，请提供 logs\magpie.log。</value></data>
   <data name="Message_ScreenshotDirectoryFailed" xml:space="preserve"><value>无法创建截图目录。请根据详情检查路径和权限，或在主页的“截图保存目录”中选择可写入的目录后重试。</value></data>
   <data name="Message_ScreenshotWriteFailed" xml:space="preserve"><value>无法写入截图文件。请检查磁盘空间、文件是否只读或被占用，也可更换截图保存目录后重试。</value></data>
-  <data name="Message_ScreenshotEncodeFailed" xml:space="preserve"><value>图像编码失败。请尝试将效果器的最终输出截为 PNG；若仍失败，请提供详情、日志及效果器名称。</value></data>
+  <data name="Message_ScreenshotEncodeFailed" xml:space="preserve"><value>当前画面暂未能编码为截图。请重新启用效果组后再次点击工具栏“截图”；若仍失败，请复制详情并附上日志。</value></data>
   <data name="Message_ScreenshotReadbackFailed" xml:space="preserve"><value>无法从显卡读取截图画面。请重新启用效果组后重试；若仍失败，可尝试降低输出尺寸、减少效果器，并提供详情和日志。</value></data>
   <data name="Overlay_EffectParameters_Unavailable" xml:space="preserve"><value>不可用</value></data>
   <data name="Overlay_EffectParameters_BackendUnavailable" xml:space="preserve"><value>DLSSNR 后端未初始化，当前仅透传。请查看主页 → 最近一次问题，处理后重新启用效果组。</value></data>
@@ -1362,7 +1356,7 @@
   <data name="Message_ImportReadFailed" xml:space="preserve"><value>无法读取所选文件。请确认路径可访问、文件已完成下载或同步，然后重新选择。</value></data>
   <data name="Message_ImportEmpty" xml:space="preserve"><value>所选文件为空或不包含任何效果组。请从 Magpie 导出效果组，或取得完整的效果组文件后重试。</value></data>
   <data name="Message_ImportInvalidJson" xml:space="preserve"><value>文件不是有效的 JSON。请重新下载或导出；详情提供出错字节位置和解析原因，便于定位损坏内容。</value></data>
-  <data name="Message_ImportWrongFileType" xml:space="preserve"><value>此 JSON 不包含 scalingModes 数组。请选择由 Magpie 导出的效果组文件；将其他文件改名为 .json 不会转换其格式。</value></data>
+  <data name="Message_ImportWrongFileType" xml:space="preserve"><value>所选文件不是 Magpie 效果组文件。请在导出方的 Magpie“效果组”页面使用“导出”，取得导出的 JSON 文件后再导入；文件由他人提供时，请向对方索取该文件。</value></data>
   <data name="Message_ImportIncompatible" xml:space="preserve"><value>效果组条目的结构不兼容。请使用兼容的 Magpie 版本重新导出。本次未导入该文件中的任何效果组。</value></data>
   <data name="Message_ExportWriteFailed" xml:space="preserve"><value>效果组文件未能完整写入。请检查路径、磁盘空间和写入权限，并重新导出到可写入的目录。</value></data>
   <data name="Message_FileDialogFailed" xml:space="preserve"><value>Windows 文件选择器无法打开或返回位置。请重新运行 Magpie 后重试；若仍失败，请提供详情和日志。</value></data>
@@ -1448,21 +1442,19 @@
   <data name="EffectParam_FSR3_FSR3_SR_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
   <data name="EffectParam_FSR4_FSR4_SR_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
   <data name="EffectParam_XeSS_XeSS_SR_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
-  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_motionVectorQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_motionVectorQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
   <data name="EffectParam_XeSSFG_XeSS_FrameGeneration_x2_ZeroMV_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
   <data name="Motion_Nvidia_5" xml:space="preserve"><value>最高质量</value></data>
   <data name="Home_FrameSync.Header" xml:space="preserve"><value>帧同步</value></data>
-  <data name="Home_FrameSync.Description" xml:space="preserve"><value>修改自动保存，重新启用效果组后生效。</value></data>
-  <data name="Home_FrameSync_FrontEdgeSync.Header" xml:space="preserve"><value>Front Edge Sync</value></data>
-  <data name="Home_FrameSync_FrontEdgeSync.Description" xml:space="preserve"><value>稳定帧提交节奏；启用 FG 时控制补帧前的真实帧输入。可能增加延迟。</value></data>
-  <data name="Home_FrameSync_Target.Header" xml:space="preserve"><value>目标帧率（FPS）</value></data>
-  <data name="Home_FrameSync_Target.Description" xml:space="preserve"><value>0 为自动：按显示器刷新率设置，FG 按倍率折算基础帧率。目标需同步限制帧率。</value></data>
+  <data name="Home_FrameSync.Description" xml:space="preserve"><value>自动保存，重新启用缩放后生效。</value></data>
+  <data name="Home_FrameSync_FrontEdgeSync.Header" xml:space="preserve"><value>启用帧同步</value></data>
+  <data name="Home_FrameSync_FrontEdgeSync.Description" xml:space="preserve"><value>控制 Magpie 的帧处理节奏。</value></data>
+  <data name="Home_FrameSync_Target.Header" xml:space="preserve"><value>目标基础帧率（FPS）</value></data>
+  <data name="Home_FrameSync_Target.Description" xml:space="preserve"><value>0 为自动，补帧时按倍率折算。请同步设置源应用帧率上限。</value></data>
   <data name="Home_FrameSync_Target_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>目标帧率</value></data>
   <data name="Home_FrameSync_VRR.Header" xml:space="preserve"><value>VRR（可变刷新率）</value></data>
   <data name="Home_FrameSync_VRR.Description" xml:space="preserve"><value>允许兼容 FreeSync / G-SYNC 的呈现。需同时在显示器和驱动中开启 VRR；未生效时可能出现撕裂。</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Label" xml:space="preserve"><value>帧率模式</value></data>
-  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>基于 Front Edge Sync</value></data>
+  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>跟随帧同步目标</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_1" xml:space="preserve"><value>自定义</value></data>
   <data name="Overlay_EffectParameters_AutoRestart" xml:space="preserve"><value>自动重启</value></data>
   <data name="Overlay_EffectParameters_Reason_AutoRestart" xml:space="preserve"><value>编辑结束后自动停用效果组，等待 500 毫秒再重新启用，以重建 DLSSNR 历史。</value></data>
@@ -1470,12 +1462,186 @@
     <value>帧同步</value>
   </data>
   <data name="Overlay_FrameSync_Target" xml:space="preserve">
-    <value>目标帧率（FPS）</value>
+    <value>目标基础帧率（FPS）</value>
   </data>
   <data name="Overlay_FrameSync_Help" xml:space="preserve">
-    <value>修改自动保存；点击“应用并重新启用”后生效。0 为自动；请同步限制目标程序帧率。</value>
+    <value>修改自动保存，点击应用并重新启用后生效。0 为自动；源应用的帧率上限需单独设置。</value>
   </data>
   <data name="Message_NgxRestartRequired" xml:space="preserve">
     <value>NVIDIA 效果运行异常。请从托盘完全退出 Magpie 并重新打开，再启用 DLSSNR 或 DLSS 补帧。</value>
   </data>
+  <data name="Message_CaptureFailed_TryGraphicsCapture" xml:space="preserve"><value>请还原目标窗口，再打开下方配置，将“捕获方式”改为 Graphics Capture 后重新启用效果组。仍失败时，请复制详情并附上日志。</value></data>
+  <data name="Message_CaptureFailed_AlreadyGraphicsCapture" xml:space="preserve"><value>当前已使用 Graphics Capture。请还原目标窗口并重新启用效果组；若仍失败，请在详情中核对失败步骤和错误码，复制详情并附上日志。</value></data>
+  <data name="Message_CreateFenceFailed_SingleAdapter" xml:space="preserve"><value>显示卡未能创建同步资源。请更新该显示卡驱动，重新启动 Magpie 后重试；若仍失败，请复制详情并附上日志。</value></data>
+  <data name="Message_ScreenshotIntermediateEncodeFailed" xml:space="preserve"><value>此中间结果暂未能保存。请直接点击工具栏“截图”，尝试保存当前画面；当前画面会自动保存为 PNG。若仍失败，请复制详情并附上日志。</value></data>
+  <data name="Message_ConfigurationRecoveredBackup" xml:space="preserve"><value>配置文件出现损坏，已载入备份。请检查效果组和程序配置是否符合预期；损坏原件已保留，具体路径见详情，可点击“打开配置目录”查看。</value></data>
+  <data name="Message_ConfigurationRecoveredPartial" xml:space="preserve"><value>配置文件出现损坏，已载入能够恢复的项目，其余设置使用默认值。请检查效果组和快捷键；损坏原件已保留，具体路径见详情，可点击“打开配置目录”查看。</value></data>
+  <data name="ErrorAdvice_ReadAccessDenied" xml:space="preserve"><value>Windows 拒绝读取此文件。请在文件资源管理器中确认当前账户有读取权限，并确认文件已下载到本机后重新选择。</value></data>
+  <data name="ErrorAdvice_OperationAccessDenied" xml:space="preserve"><value>Windows 拒绝了此步骤的访问请求。请按上方提示重试，并在仍失败时提供下方操作步骤和错误码。</value></data>
+  <data name="ErrorDetails_Profile" xml:space="preserve"><value>配置</value></data>
+  <data name="ErrorDetails_Group" xml:space="preserve"><value>效果组</value></data>
+  <data name="ErrorDetails_Window" xml:space="preserve"><value>目标窗口</value></data>
+  <data name="ErrorDetails_Capture" xml:space="preserve"><value>捕获方式</value></data>
+  <data name="ErrorDetails_RetrySave" xml:space="preserve"><value>重试保存</value></data>
+  <data name="ErrorDetails_OpenProfile" xml:space="preserve"><value>打开此配置</value></data>
+  <data name="ErrorDetails_OpenEffects" xml:space="preserve"><value>打开效果组</value></data>
+  <data name="ErrorDetails_OpenConfigDirectory" xml:space="preserve"><value>打开配置目录</value></data>
+  <data name="ErrorDetails_OpenConfigFailed" xml:space="preserve"><value>目录暂未能打开。请把配置路径复制到文件资源管理器，查看其所在目录。</value></data>
+  <data name="ErrorDetails_ProfileChanged" xml:space="preserve"><value>该配置已被删除、改名或更换匹配规则。请关闭详情，在左侧配置列表中选择要调整的配置。</value></data>
+  <data name="ErrorDetails_Saving" xml:space="preserve"><value>正在保存当前修改…</value></data>
+  <data name="ErrorDetails_SaveSucceeded" xml:space="preserve"><value>本次修改已保存到磁盘。</value></data>
+  <data name="ErrorDetails_SaveStillFailed" xml:space="preserve"><value>保存仍未完成。请关闭并重新打开详情，查看最新原因；处理后可再次点击“重试保存”。</value></data>
+  <data name="ErrorDetails_PreviousRun" xml:space="preserve"><value>上次运行：{}</value></data>
+  <data name="ErrorDetails_PreviousRunHint" xml:space="preserve"><value>以下是上次运行保留的诊断。旧会话的未保存修改不会随此记录恢复；请先核对当前状态，再参考下方步骤。日志仍保留在所列目录。</value></data>
+  <data name="ErrorDetails_SaveFailedToast" xml:space="preserve"><value>修改尚未保存，请保持 Magpie 打开并到主页重试保存。</value></data>
+  <data name="ErrorDetails_RecoveryToast" xml:space="preserve"><value>已从损坏配置中恢复设置，请到主页检查恢复说明。</value></data>
+  <data name="Home_RecentIssue_Reopen.Content" xml:space="preserve"><value>查看最近问题</value></data>
+  <data name="AppSettings_ReadFailedGuidance" xml:space="preserve"><value>请在文件资源管理器中打开下方位置，确认磁盘已连接、文件已下载到本机且当前账户可以读取，然后重新启动 Magpie。原配置未被修改。</value></data>
+  <data name="AppSettings_ReadAccessDenied" xml:space="preserve"><value>请在文件资源管理器中打开下方位置，确认当前账户具有该文件的读取权限，然后重新启动 Magpie。原配置未被修改。</value></data>
+  <data name="AppSettings_CopyFailed" xml:space="preserve"><value>暂未能复制。请记录下方路径和错误码，处理后重新启动 Magpie。</value></data>
+  <data name="AppSettings_ConfigLocationFailed" xml:space="preserve"><value>暂未能访问配置位置。请确认配置所在磁盘已连接、当前账户有访问和写入权限，然后重新启动 Magpie。相关位置：</value></data>
+  <data name="AppSettings_BackupFailed" xml:space="preserve"><value>暂未能保留配置原件。请检查下方备份路径的写入权限和磁盘空间，再重新启动 Magpie；原配置仍可用于恢复。备份目标：</value></data>
+  <data name="Message_ConfigurationRepaired" xml:space="preserve"><value>已修复旧配置中的失效设置，其余设置已保留。请检查效果组和程序配置后重新尝试缩放；详情列出了修复项目，可点击“打开配置目录”查看原件备份。</value></data>
+  <data name="Message_ConfigurationResetDefaults" xml:space="preserve"><value>原配置及备份均无法恢复，已生成默认设置。可以重新尝试缩放，再按需设置效果组和快捷键；点击“打开配置目录”可查看保留的原配置。</value></data>
+  <data name="AppSettings_RecoveredGroup" xml:space="preserve"><value>已恢复的效果组</value></data>
+  <data name="AppSettings_RecoveryRecordFailed" xml:space="preserve"><value>已找到这份配置的恢复记录，但记录暂不可用。请打开下方目录，从保留的原件或其他备份中选择可用配置，替换 config.json 后重新启动 Magpie。</value></data>
+  <data name="AppSettings_RecoveryWriteFailed" xml:space="preserve"><value>暂未能完成配置恢复。请检查配置目录的写入权限、文件占用及磁盘空间，再重新启动 Magpie；已保存的恢复结果会继续使用。相关位置：</value></data>
+  <data name="Message_CaptureMethodUnavailable" xml:space="preserve"><value>当前系统会话无法使用所选捕获方式。请打开下方配置，改选另一种捕获方式后重试（可先尝试 Graphics Capture，若已选用则尝试 GDI）。仍失败时，请复制详情并附上日志。</value></data>
+  <data name="Overlay_EffectParameters_Applying" xml:space="preserve">
+    <value>正在应用参数…</value>
+  </data>
+  <data name="Overlay_EffectParameters_ApplyRolledBack" xml:space="preserve">
+    <value>已恢复原档位。请尝试较低档位；仍失败时提供日志。</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_Denoise_strength_Label" xml:space="preserve">
+    <value>强度</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_Denoise_strength_Option_0" xml:space="preserve">
+    <value>低</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_Denoise_strength_Option_1" xml:space="preserve">
+    <value>中</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_Denoise_strength_Option_2" xml:space="preserve">
+    <value>高</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_Denoise_strength_Option_3" xml:space="preserve">
+    <value>极高</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_VSR_strength_Label" xml:space="preserve">
+    <value>强度</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_VSR_strength_Option_0" xml:space="preserve">
+    <value>低</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_VSR_strength_Option_1" xml:space="preserve">
+    <value>中</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_VSR_strength_Option_2" xml:space="preserve">
+    <value>高</value>
+  </data>
+  <data name="EffectParam_RTXVideo_RTXVideo_VSR_strength_Option_3" xml:space="preserve">
+    <value>极高</value>
+  </data>
+  <data name="Message_HdrComponentExpectedHdr" xml:space="preserve"><value>HDR → SDR 前面的画面已经是 SDR。请移除重复的 HDR → SDR，或把它移到产生 HDR 的组件之后。</value></data>
+  <data name="Message_HdrComponentExpectedSdr" xml:space="preserve"><value>SDR → HDR 或 RTX Video HDR 需要 SDR 输入。请移除前一个 HDR 扩展组件，或在本项之前添加 HDR → SDR。</value></data>
+  <data name="Message_HdrComponentMissingPair" xml:space="preserve"><value>当前没有可恢复的兼容映射。请在前面添加 HDR → SDR 并选择兼容配对，或将 SDR → HDR 改为自动／原生 SDR 映射。</value></data>
+  <data name="Message_HdrComponentInvalidParameters" xml:space="preserve"><value>HDR 组件参数超出可用范围。请打开效果组参数，恢复该组件的默认值后重试；仍有问题时复制详情。</value></data>
+  <data name="Message_HdrCaptureRequired" xml:space="preserve"><value>HDR → SDR 需要保留 HDR 源画面。请在 Windows 显示设置中开启源应用所在屏幕的 HDR；处理原生 SDR 时可直接使用 SDR 效果，再按需添加 SDR → HDR。</value></data>
+  <data name="Message_HdrDisplayRequired" xml:space="preserve"><value>效果组输出 HDR。请在 Windows 显示设置中开启目标屏幕的 HDR，或在效果组末尾使用 HDR → SDR 的显示映射。跨屏输出时，各目标屏幕都需要开启 HDR。</value></data>
+  <data name="Message_HdrCaptureMethodRequired" xml:space="preserve"><value>请在当前配置中将捕获方式改为 Graphics Capture，再尝试 HDR → SDR。该路径可以保留 HDR 捕获的亮度范围。</value></data>
+  <data name="Message_RtxHdrUnavailable" xml:space="preserve"><value>RTX Video HDR 未能完成处理。请更新 NVIDIA 驱动，确认使用 RTX 20 系或更新显卡，并检查本程序目录中的 Magpie.RtxVideo.dll 与 nvngx_truehdr.dll 是否完整。可先将本项替换为 SDR → HDR 的原生 SDR 映射；仍失败时完全退出 Magpie，重新打开并复制详情。</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_mode_Label" xml:space="preserve"><value>转换模式</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_mode_Option_0" xml:space="preserve"><value>兼容配对</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_mode_Option_1" xml:space="preserve"><value>SDR 显示映射</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_whiteNits_Label" xml:space="preserve"><value>SDR 白点（尼特）</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_peakNits_Label" xml:space="preserve"><value>HDR 峰值（尼特）</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_exposure_Label" xml:space="preserve"><value>曝光</value></data>
+  <data name="EffectParam_Color_HDR_to_SDR_shoulder_Label" xml:space="preserve"><value>高光压缩</value></data>
+  <data name="EffectParam_Color_SDR_to_HDR_mode_Label" xml:space="preserve"><value>转换模式</value></data>
+  <data name="EffectParam_Color_SDR_to_HDR_mode_Option_0" xml:space="preserve"><value>自动：配对恢复／SDR 白点映射</value></data>
+  <data name="EffectParam_Color_SDR_to_HDR_mode_Option_1" xml:space="preserve"><value>原生 SDR 白点映射</value></data>
+  <data name="EffectParam_Color_SDR_to_HDR_mode_Option_2" xml:space="preserve"><value>恢复兼容配对</value></data>
+  <data name="EffectParam_Color_SDR_to_HDR_whiteNits_Label" xml:space="preserve"><value>原生 SDR 白点（尼特）</value></data>
+  <data name="EffectParam_Color_SDR_to_HDR_exposure_Label" xml:space="preserve"><value>原生 SDR 曝光</value></data>
+  <data name="EffectParam_RTXVideo_RTXVideo_HDR_contrast_Label" xml:space="preserve"><value>对比度</value></data>
+  <data name="EffectParam_RTXVideo_RTXVideo_HDR_saturation_Label" xml:space="preserve"><value>饱和度</value></data>
+  <data name="EffectParam_RTXVideo_RTXVideo_HDR_middleGray_Label" xml:space="preserve"><value>中间灰</value></data>
+  <data name="EffectParam_RTXVideo_RTXVideo_HDR_peakNits_Label" xml:space="preserve"><value>峰值亮度（尼特）</value></data>
+  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge Sync</value></data>
+  <data name="FrameSync_Mode_Async.Content" xml:space="preserve"><value>Async</value></data>
+  <data name="FrameSync_Mode_Reflex.Content" xml:space="preserve"><value>NVIDIA Reflex</value></data>
+  <data name="Home_FrameSync_Mode.Header" xml:space="preserve"><value>同步模式</value></data>
+  <data name="Home_FrameSync_Mode.Description" xml:space="preserve"><value>Front Edge：提交节奏；Async：捕获间隔；Reflex：驱动基础限帧，包含 DLSS FG。</value></data>
+  <data name="Overlay_FrameSync_Enable" xml:space="preserve"><value>启用帧同步</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Option_0" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Option_1" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_1" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_2" xml:space="preserve"><value>均衡</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_3" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_4" xml:space="preserve"><value>高质量（高开销）</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Label" xml:space="preserve"><value>光流方法</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Option_0" xml:space="preserve"><value>无</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Option_1" xml:space="preserve"><value>AMD 光流</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Option_2" xml:space="preserve"><value>NVIDIA 光流</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_amdOpticalFlowMode_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_amdOpticalFlowMode_Option_0" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_amdOpticalFlowMode_Option_1" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_nvidiaOpticalFlowQuality_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_nvidiaOpticalFlowQuality_Option_1" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_nvidiaOpticalFlowQuality_Option_2" xml:space="preserve"><value>均衡（推荐）</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_nvidiaOpticalFlowQuality_Option_3" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_nvidiaOpticalFlowQuality_Option_4" xml:space="preserve"><value>高质量（高开销）</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_opticalFlowMethod_Label" xml:space="preserve"><value>光流方法</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_opticalFlowMethod_Option_0" xml:space="preserve"><value>无</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_opticalFlowMethod_Option_1" xml:space="preserve"><value>AMD 光流</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_opticalFlowMethod_Option_2" xml:space="preserve"><value>NVIDIA 光流</value></data>
+  <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_amdOpticalFlowMode_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_amdOpticalFlowMode_Option_0" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_amdOpticalFlowMode_Option_1" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_nvidiaOpticalFlowQuality_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_nvidiaOpticalFlowQuality_Option_1" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_nvidiaOpticalFlowQuality_Option_2" xml:space="preserve"><value>均衡（推荐）</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_nvidiaOpticalFlowQuality_Option_3" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_nvidiaOpticalFlowQuality_Option_4" xml:space="preserve"><value>高质量（高开销）</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_opticalFlowMethod_Label" xml:space="preserve"><value>光流方法</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_opticalFlowMethod_Option_0" xml:space="preserve"><value>无</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_opticalFlowMethod_Option_1" xml:space="preserve"><value>AMD 光流</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_opticalFlowMethod_Option_2" xml:space="preserve"><value>NVIDIA 光流</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Motion_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_amdOpticalFlowMode_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_amdOpticalFlowMode_Option_0" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_amdOpticalFlowMode_Option_1" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_nvidiaOpticalFlowQuality_Label" xml:space="preserve"><value>光流质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_nvidiaOpticalFlowQuality_Option_1" xml:space="preserve"><value>性能</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_nvidiaOpticalFlowQuality_Option_2" xml:space="preserve"><value>均衡（推荐）</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_nvidiaOpticalFlowQuality_Option_3" xml:space="preserve"><value>质量</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_nvidiaOpticalFlowQuality_Option_4" xml:space="preserve"><value>高质量（高开销）</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_opticalFlowMethod_Label" xml:space="preserve"><value>光流方法</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_opticalFlowMethod_Option_0" xml:space="preserve"><value>无</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_opticalFlowMethod_Option_1" xml:space="preserve"><value>AMD 光流</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_opticalFlowMethod_Option_2" xml:space="preserve"><value>NVIDIA 光流</value></data>
+  <data name="EffectParam_Diagnostics_FrameGuidance_Confidence_nvidiaOpticalFlowQuality_Option_5" xml:space="preserve"><value>最高质量（极高开销）</value></data>
+  <data name="ScalingModes_RecoveryInvalid_Name" xml:space="preserve"><value>失效效果器</value></data>
+  <data name="ScalingModes_RecoveryInvalid_Description" xml:space="preserve"><value>此项配置无法完整恢复。请移除此项，并重新添加所需效果器。</value></data>
+  <data name="ScalingModes_MissingEffect_Description" xml:space="preserve"><value>找不到对应效果文件。请恢复该文件，或移除此项并添加替代效果器。</value></data>
+  <data name="ScalingModes_NameRequired" xml:space="preserve"><value>请输入效果组名称。</value></data>
+  <data name="ScalingModes_NameAlreadyExists" xml:space="preserve"><value>名称已存在，请换一个名称；仅修改大小写或首尾空格不能区分效果组。</value></data>
+  <data name="ScalingModes_DuplicateNames.Title" xml:space="preserve"><value>请更新重名效果组</value></data>
+  <data name="ScalingModes_DuplicateNames.Message" xml:space="preserve"><value>旧配置中存在同名效果组，请使用铅笔按钮逐个修改名称；效果内容和关联配置已保留。</value></data>
+  <data name="ScalingModes_NameConflict.Message" xml:space="preserve"><value>此名称与其他效果组重复，请点击铅笔按钮修改名称。</value></data>
+  <data name="ScalingModes_ImportRenamed" xml:space="preserve"><value>效果组已全部导入，重复名称已自动添加序号；可使用铅笔按钮重新命名。</value></data>
+  <data name="Message_DuplicateScalingModeNames" xml:space="preserve"><value>旧配置中存在同名效果组，请打开“效果组”，使用铅笔按钮修改名称；全部效果组已保留。</value></data>
+  <data name="Overlay_Parameters_Edit" xml:space="preserve"><value>编辑</value></data>
+  <data name="Overlay_Parameters_Preview" xml:space="preserve"><value>预览</value></data>
+  <data name="Overlay_Parameters_InputHint" xml:space="preserve"><value>Ctrl+单击滑条输入数值。Esc：编辑→预览→关闭；点击预览面板继续编辑。面板开关快捷键：</value></data>
+  <data name="Overlay_Parameters_FocusFailed" xml:space="preserve"><value>请点击游戏窗口恢复控制</value></data>
+  <data name="Profile_General_ParameterFocusSwitching.Header" xml:space="preserve"><value>参数调整焦点切换</value></data>
+  <data name="Profile_General_ParameterFocusSwitching.Description" xml:space="preserve"><value>参数实时调整时启用焦点切换，但在部分窗口上运行时可能不稳定。</value></data>
+  <data name="Home_Advanced_StopEffectsOnTaskSwitch.Header" xml:space="preserve"><value>切屏时自动停用生效效果组</value></data>
+  <data name="Home_Advanced_StopEffectsOnTaskSwitch.Description" xml:space="preserve"><value>如果在使用 DLSSNR 时进行切屏，会让你感觉像吃了毒蘑菇，你可以尝试启用它。</value></data>
 </root>

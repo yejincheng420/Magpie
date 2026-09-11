@@ -20,6 +20,8 @@
 #include "ScalingService.h"
 #include "EffectParameterLocalization.h"
 #include "App.h"
+#include "EffectPickerModel.h"
+#include "ToastService.h"
 
 using namespace Magpie;
 
@@ -268,6 +270,7 @@ void EffectParametersViewModel::_ScalingModeParameter_PropertyChanged(
 
 	ScalingModeParameter* paramImpl = get_self<ScalingModeParameter>(
 		sender.try_as<Magpie::ScalingModeParameter>());
+	if (paramImpl->Index() >= _effectInfo->params.size()) return;
 	const std::string& effectName = _effectInfo->params[paramImpl->Index()].name;
 	_Data()[StrHelper::UTF8ToUTF16(effectName)] = paramImpl->IsBoolean()
 		? static_cast<float>(paramImpl->BooleanValue())
@@ -311,8 +314,9 @@ void EffectParametersViewModel::_RefreshConditionalVisibility() {
 
 void EffectParametersViewModel::_SynchronizeParameters() {
 	const auto& modes = AppSettings::Get().ScalingModes();
-	if (_scalingModeIdx >= modes.size() || _effectIdx >= modes[_scalingModeIdx].effects.size() ||
-		modes[_scalingModeIdx].effects[_effectIdx].name != _effectInfo->name) return;
+	if (_scalingModeIdx >= modes.size() || _effectIdx >= modes[_scalingModeIdx].effects.size()) return;
+	const auto& name = modes[_scalingModeIdx].effects[_effectIdx].name;
+	if (name != _effectInfo->name) return;
 	_synchronizing = true;
 	auto reset = wil::scope_exit([this] { _synchronizing = false; });
 	const auto& values = _Data();

@@ -3,6 +3,22 @@
 #include "StrHelper.h"
 #include <spdlog/sinks/rotating_file_sink.h>
 
+thread_local Logger::DiagnosticCapture* Logger::_diagnosticCapture = nullptr;
+
+Logger::DiagnosticCapture::DiagnosticCapture() noexcept : _previous(_diagnosticCapture) {
+	_diagnosticCapture = this;
+}
+
+Logger::DiagnosticCapture::~DiagnosticCapture() {
+	_diagnosticCapture = _previous;
+}
+
+void Logger::_CaptureSystemError(uint32_t error) noexcept {
+	for (auto* capture = _diagnosticCapture; capture; capture = capture->_previous) {
+		if (!capture->_systemError) capture->_systemError = error;
+	}
+}
+
 bool Logger::Initialize(spdlog::level::level_enum logLevel, std::wstring logFileName, int logArchiveAboveSize, int logMaxArchiveFiles) noexcept {
 	try {
 		_logger = spdlog::rotating_logger_mt(".", std::move(logFileName), logArchiveAboveSize, logMaxArchiveFiles);
@@ -35,6 +51,17 @@ void Logger::SetLevel(spdlog::level::level_enum logLevel) noexcept {
 
 void Logger::_Log(spdlog::level::level_enum logLevel, std::string_view msg, const SourceLocation& location) noexcept {
 	assert(!msg.empty());
+	if (logLevel >= spdlog::level::err) {
+		try {
+			for (auto* capture = _diagnosticCapture; capture; capture = capture->_previous) {
+				if (capture->_details.size() >= 4096) continue;
+				if (!capture->_details.empty()) capture->_details += '\n';
+				capture->_details.append(msg.substr(0, 4096 - capture->_details.size()));
+			}
+		} catch (...) {
+			// Diagnostics must never interfere with the original operation.
+		}
+	}
 
 	// 只检查一次是否附加了调试器
 	static const bool isDebuggerPresent = IsDebuggerPresent();

@@ -1,5 +1,6 @@
 #pragma once
 #include "MotionVectorRequest.h"
+#include "HdrFrame.h"
 
 namespace Magpie {
 
@@ -62,7 +63,10 @@ struct FrameGuidanceSyncPoint {
 };
 
 struct FrameGuidanceMetadata {
-	FrameGuidanceFrameId frameId = 0;
+    FrameGuidanceFrameId frameId = 0;
+    uint64_t captureSequence = 0;
+    uint64_t resourceGeneration = 0;
+    int64_t timestamp100ns = 0;
 	FrameGuidanceExtent sourceExtent{};
 	FrameGuidanceRegion validRegion{};
 	FrameGuidanceSyncPoint sync{};
@@ -136,8 +140,12 @@ inline FrameGuidanceView SelectFrameGuidanceChannels(
 struct MotionVectorProviderOutput;
 
 struct FrameGuidanceFrame {
-	ID3D11Texture2D* color = nullptr;
-	FrameGuidanceFrameId frameId = 0;
+    ID3D11Texture2D* color = nullptr;
+    FrameGuidanceFrameId frameId = 0;
+    uint64_t captureSequence = 0;
+    uint64_t resourceGeneration = 0;
+    int64_t timestamp100ns = 0;
+    ColorDescription colorDescription{};
 	FrameGuidanceExtent sourceExtent{};
 	FrameGuidanceRegion validRegion{};
 };

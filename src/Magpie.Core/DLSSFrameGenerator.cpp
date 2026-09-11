@@ -6,6 +6,9 @@
 #include "Logger.h"
 #include "NgxD3D12Core.h"
 #include "Win32Helper.h"
+#include "NativeBackendTiming.h"
+#include "FrameTrace.h"
+#include "ReflexController.h"
 
 #ifdef MP_ENABLE_DLSS_FRAME_GENERATION
 #include <d3d12.h>
@@ -42,6 +45,7 @@ struct DLSSFrameGenerator::Impl {
 	ID3D11Device5* device11 = nullptr;
 	ID3D11DeviceContext4* context11 = nullptr;
 	NgxD3D12Core* coreOwner = nullptr;
+	ReflexController* reflex = nullptr;
 	winrt::com_ptr<ID3D12Device> device12;
 	winrt::com_ptr<ID3D12CommandQueue> queue12;
 	winrt::com_ptr<ID3D12CommandAllocator> allocator12;
@@ -54,10 +58,12 @@ struct DLSSFrameGenerator::Impl {
 	winrt::com_ptr<ID3D12Resource> zeroDepth12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 4> interpolationDisable12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 4> interpolationDisableReadback12;
+	std::array<const uint8_t*, 4> interpolationDisableMapped{};
 	std::unique_ptr<FrameGuidanceD3D12Interop> guidanceInterop;
 	winrt::com_ptr<ID3D12DescriptorHeap> descriptorHeap12;
 	winrt::com_ptr<ID3D11Fence> fence11;
 	winrt::com_ptr<ID3D12Fence> fence12;
+	wil::unique_event_nothrow fenceEvent;
 	NVSDK_NGX_Handle* feature = nullptr;
 	NVSDK_NGX_Parameter* parameters = nullptr;
 	uint64_t fenceValue = 0;
@@ -75,6 +81,8 @@ struct DLSSFrameGenerator::Impl {
 	std::array<uint32_t, 4> diagnosticInterpolationReadbackFailure{};
 	uint32_t diagnosticGeneratedPublishSuccess = 0;
 	uint32_t diagnosticGeneratedPublishFailure = 0;
+	std::array<double, 4> generationFenceTotalMs{}, generationFenceMaxMs{};
+	std::array<uint32_t, 4> generationFenceSamples{};
 	DLSSFrameGenerationSettings settings{};
 	FrameGuidanceFrameId lastGuidanceResetFrameId =
 		std::numeric_limits<FrameGuidanceFrameId>::max();
@@ -449,18 +457,22 @@ static void DirectSetDlssgEvalParams(
 }
 
 static bool WaitForFence(DLSSFrameGenerator::Impl& impl, uint64_t value) noexcept {
-	if (!value || impl.fence12->GetCompletedValue() >= value) {
+	const uint64_t completed = impl.fence12->GetCompletedValue();
+	if (completed == UINT64_MAX) return false;
+	if (!value || completed >= value) {
 		return true;
 	}
 
-	wil::unique_event_nothrow event;
-	if (FAILED(event.create())) {
+	if (!impl.fenceEvent || !ResetEvent(impl.fenceEvent.get()) ||
+		FAILED(impl.fence12->SetEventOnCompletion(
+		value, impl.fenceEvent.get()))) {
 		return false;
 	}
-	if (FAILED(impl.fence12->SetEventOnCompletion(value, event.get()))) {
-		return false;
-	}
-	return WaitForSingleObject(event.get(), 3000) == WAIT_OBJECT_0;
+	// A prior timed-out registration can also signal the reusable event. Only
+	// the fence value proves this submission completed; a stale wake is failure.
+	if (WaitForSingleObject(impl.fenceEvent.get(), 3000) != WAIT_OBJECT_0) return false;
+	const uint64_t finalValue = impl.fence12->GetCompletedValue();
+	return finalValue != UINT64_MAX && finalValue >= value;
 }
 
 static bool WaitForQueue(DLSSFrameGenerator::Impl& impl) noexcept {
@@ -474,6 +486,13 @@ static bool WaitForQueue(DLSSFrameGenerator::Impl& impl) noexcept {
 DLSSFrameGenerator::Impl::~Impl() {
 	if (queue12 && fence12) {
 		WaitForQueue(*this);
+	}
+	for (size_t i = 0; i < interpolationDisableMapped.size(); ++i) {
+		if (interpolationDisableMapped[i]) {
+			const D3D12_RANGE writtenRange{};
+			interpolationDisableReadback12[i]->Unmap(0, &writtenRange);
+			interpolationDisableMapped[i] = nullptr;
+		}
 	}
 	if (feature) {
 		DWORD sehCode = 0;
@@ -653,6 +672,14 @@ static bool CreateInterpolationDisableResources(
 			"Create DLSSFG interpolation-disable readback failed", hr);
 		return false;
 	}
+	void* mapped = nullptr;
+	const D3D12_RANGE readRange{ 0, 1 };
+	hr = impl.interpolationDisableReadback12[frameIndex]->Map(0, &readRange, &mapped);
+	if (FAILED(hr) || !mapped) {
+		Logger::Get().ComError("Map DLSSFG interpolation-disable readback failed", hr);
+		return false;
+	}
+	impl.interpolationDisableMapped[frameIndex] = static_cast<const uint8_t*>(mapped);
 	return true;
 }
 
@@ -660,17 +687,13 @@ static std::optional<bool> ReadInterpolationDisabled(
 	DLSSFrameGenerator::Impl& impl,
 	uint32_t frameIndex
 ) noexcept {
-	D3D12_RANGE readRange{ 0, 1 };
-	void* mapped = nullptr;
-	const HRESULT hr = impl.interpolationDisableReadback12[frameIndex]->Map(
-		0, &readRange, &mapped);
-	if (FAILED(hr) || !mapped) {
+	const uint8_t* mapped = impl.interpolationDisableMapped[frameIndex];
+	if (!mapped) {
 		++impl.diagnosticInterpolationReadbackFailure[frameIndex];
 		return std::nullopt;
 	}
-	const bool disabled = *static_cast<const uint8_t*>(mapped) != 0;
-	D3D12_RANGE writtenRange{};
-	impl.interpolationDisableReadback12[frameIndex]->Unmap(0, &writtenRange);
+	// Draw has already waited for the GPU copy before reading this mapping.
+	const bool disabled = *mapped != 0;
 	if (disabled) {
 		++impl.diagnosticInterpolationDisabled[frameIndex];
 	} else {
@@ -705,13 +728,17 @@ bool DLSSFrameGenerator::Initialize(
 	impl->context11 = resources.GetD3DDC();
 	impl->coreOwner = &ngxCore;
 	impl->settings = _requestedSettings;
+	if (FAILED(impl->fenceEvent.create())) {
+		Logger::Get().Error("Create reusable DLSSFG fence event failed");
+		return false;
+	}
 
 	D3D11_TEXTURE2D_DESC inputDesc{};
 	input->GetDesc(&inputDesc);
 	impl->width = inputDesc.Width;
 	impl->height = inputDesc.Height;
-	const bool guidanceRequested = impl->settings.motionVectorQuality !=
-		NvidiaOpticalFlowQuality::None;
+	const bool guidanceRequested = impl->settings.motionRequest.method !=
+		OpticalFlowMethod::None;
 	const bool compatibleGuidanceExtent = guidanceRequested &&
 		guidanceExtent.IsValid() &&
 		guidanceExtent.width <= impl->width &&
@@ -1128,11 +1155,12 @@ bool DLSSFrameGenerator::Initialize(
 
 	Logger::Get().Info(fmt::format(
 		"DLSS FG_Experimental initialized: backbuffer={}x{}, render={}x{}, "
-		"multiplier={}x, requestedMotion={}, depth=zero-contract, "
+		"multiplier={}x, opticalFlowMethod={} opticalFlowQuality={}, depth=zero-contract, "
 		"motionContract=current-to-previous/source-pixels scale=1,1",
 		impl->width, impl->height, impl->renderWidth, impl->renderHeight,
 		impl->multiplier,
-		static_cast<uint32_t>(impl->settings.motionVectorQuality)));
+		static_cast<uint32_t>(impl->settings.motionRequest.method),
+		static_cast<uint32_t>(impl->settings.motionRequest.quality)));
 	_impl = std::move(impl);
 	return true;
 }
@@ -1149,8 +1177,7 @@ bool DLSSFrameGenerator::Resize(
 FrameGuidanceRequirements
 DLSSFrameGenerator::GetFrameGuidanceRequirements() const noexcept {
 	FrameGuidanceRequirements result{ .zero = true };
-	result.Add(MotionVectorRequest::Nvidia(
-		_requestedSettings.motionVectorQuality));
+	result.Add(_requestedSettings.motionRequest);
 	return result;
 }
 
@@ -1160,6 +1187,12 @@ uint32_t DLSSFrameGenerator::Multiplier() const noexcept {
 
 uint32_t DLSSFrameGenerator::MaxSupportedMultiplier() const noexcept {
 	return _impl ? _impl->maxSupportedMultiplier : 2;
+}
+
+void DLSSFrameGenerator::SetReflexController(ReflexController* controller) noexcept {
+	if (!_impl) return;
+	_impl->reflex = controller;
+	if (controller) controller->RegisterGenerationQueue(_impl->queue12.get());
 }
 
 bool DLSSFrameGenerator::Draw(
@@ -1178,22 +1211,22 @@ bool DLSSFrameGenerator::Draw(
 	};
 	const FrameGuidanceView selected = SelectFrameGuidanceChannels(
 		guidance, zeroGuidance, frameId, renderExtent,
-		impl.settings.motionVectorQuality != NvidiaOpticalFlowQuality::None);
+		impl.settings.motionRequest.method != OpticalFlowMethod::None);
 	bool sharedGuidanceBound = false;
 	bool realMotion = false;
-	if (impl.settings.motionVectorQuality != NvidiaOpticalFlowQuality::None &&
+	if (impl.settings.motionRequest.method != OpticalFlowMethod::None &&
 		selected.IsValidFor(frameId, renderExtent) &&
 		impl.guidanceInterop->Update(selected, frameId, renderExtent) &&
 		impl.guidanceInterop->WaitForProducer(impl.context11, selected)) {
 		sharedGuidanceBound = true;
-		realMotion = impl.settings.motionVectorQuality !=
-			NvidiaOpticalFlowQuality::None &&
+		realMotion = impl.settings.motionRequest.method !=
+			OpticalFlowMethod::None &&
 			!selected.motion.metadata.isZero;
 	}
 
 	const uint8_t guidanceBinding = uint8_t(realMotion) |
-		(uint8_t(impl.settings.motionVectorQuality !=
-			NvidiaOpticalFlowQuality::None) << 1) |
+		(uint8_t(impl.settings.motionRequest.method !=
+			OpticalFlowMethod::None) << 1) |
 		(uint8_t(sharedGuidanceBound) << 2);
 	const bool bindingChanged = impl.lastGuidanceBinding != UINT8_MAX &&
 		impl.lastGuidanceBinding != guidanceBinding;
@@ -1201,12 +1234,12 @@ bool DLSSFrameGenerator::Draw(
 		Logger::Get().Info(fmt::format(
 			"DLSS FG guidance frameId={}: requested motion={}, "
 			"produced motion={}, bound motion={} depth=zero, fallback={}",
-			frameId, impl.settings.motionVectorQuality !=
-				NvidiaOpticalFlowQuality::None,
+			frameId, impl.settings.motionRequest.method !=
+				OpticalFlowMethod::None,
 			guidance.motion.metadata.valid && !guidance.motion.metadata.isZero,
 			realMotion ? "real" : "zero",
 			!sharedGuidanceBound ? "interop-or-extent-zero" :
-			(impl.settings.motionVectorQuality != NvidiaOpticalFlowQuality::None && !realMotion ?
+			(impl.settings.motionRequest.method != OpticalFlowMethod::None && !realMotion ?
 				"provider-zero" : "none")));
 	}
 	const bool guidanceReset = bindingChanged ||
@@ -1391,7 +1424,15 @@ bool DLSSFrameGenerator::Draw(
 		return false;
 	}
 	ID3D12CommandList* lists[]{ impl.commandList12.get() };
+	// Reflex 生成区间标记包住整组批量提交（与上游逐帧版语义一致：标记
+	// 覆盖 Execute 的全部生成工作）。presentId 由首个生成帧消费。
+	const uint64_t reflexFrameId = impl.reflex ? impl.reflex->CaptureFrameId() : 0;
+	const uint64_t reflexPresentId = impl.reflex ? impl.reflex->NextPresentId() : 0;
+	if (impl.reflex) impl.reflex->Generation(
+		impl.queue12.get(), reflexFrameId, reflexPresentId, true);
 	impl.queue12->ExecuteCommandLists(1, lists);
+	if (impl.reflex) impl.reflex->Generation(
+		impl.queue12.get(), reflexFrameId, reflexPresentId, false);
 	const uint64_t outputReady = ++impl.fenceValue;
 	hr = impl.queue12->Signal(impl.fence12.get(), outputReady);
 	if (SUCCEEDED(hr) && sharedGuidanceBound) {
@@ -1405,12 +1446,24 @@ bool DLSSFrameGenerator::Draw(
 	}
 	// The flag is part of the SDK output, not optional telemetry. Also wait
 	// on reset/disabled frames before reusing the allocator and output buffer.
+	FrameTrace::Scope traceGenerationFence(FrameTrace::Event::GenerationFence, 0, outputReady);
+	const auto generationWaitStart = NativeBackendTiming::Now();
 	if (!WaitForFence(impl, outputReady)) return false;
+	traceGenerationFence.End();
+	if constexpr (NativeBackendTiming::Enabled) {
+		const double elapsed = NativeBackendTiming::ElapsedMilliseconds(generationWaitStart);
+		// 批量提交：单次等待覆盖整组，各 index 计入同一份耗时。
+		for (uint32_t frameIndex = 1; frameIndex <= generatedFrameCount; ++frameIndex) {
+			impl.generationFenceTotalMs[frameIndex] += elapsed;
+			impl.generationFenceMaxMs[frameIndex] = std::max(impl.generationFenceMaxMs[frameIndex], elapsed);
+			++impl.generationFenceSamples[frameIndex];
+		}
+	}
 	for (uint32_t frameIndex = 1; frameIndex <= generatedFrameCount; ++frameIndex) {
 		const auto disabled = ReadInterpolationDisabled(impl, frameIndex);
 		if (!disabled) return false;
 		if (!resetThisFrame && !*disabled) {
-			if (!publishGeneratedFrame(impl.sharedGenerated11.get())) {
+			if (!publishGeneratedFrame(impl.sharedGenerated11.get(), reflexPresentId)) {
 				++impl.diagnosticGeneratedPublishFailure;
 				return false;
 			}
@@ -1421,38 +1474,49 @@ bool DLSSFrameGenerator::Draw(
 	impl.resetHistory = false;
 	impl.lastGuidanceBinding = guidanceBinding;
 	if (guidanceReset) impl.lastGuidanceResetFrameId = frameId;
-	if (++impl.diagnosticRealFrames >= 120) {
-		Logger::Get().Info(fmt::format(
-			"DLSSFG 120-real-frame diagnostics: multiplier={}x "
-			"evaluate[index1={}/{} index2={}/{} index3={}/{}] "
-			"generatedPublish={}/{} "
-			"interpolation[index1={}/{}/{} index2={}/{}/{} index3={}/{}/{}]",
-			impl.multiplier,
-			impl.diagnosticEvaluateSuccess[1],
-			impl.diagnosticEvaluateFailure[1],
-			impl.diagnosticEvaluateSuccess[2],
-			impl.diagnosticEvaluateFailure[2],
-			impl.diagnosticEvaluateSuccess[3],
-			impl.diagnosticEvaluateFailure[3],
-			impl.diagnosticGeneratedPublishSuccess,
-			impl.diagnosticGeneratedPublishFailure,
-			impl.diagnosticInterpolationEnabled[1],
-			impl.diagnosticInterpolationDisabled[1],
-			impl.diagnosticInterpolationReadbackFailure[1],
-			impl.diagnosticInterpolationEnabled[2],
-			impl.diagnosticInterpolationDisabled[2],
-			impl.diagnosticInterpolationReadbackFailure[2],
-			impl.diagnosticInterpolationEnabled[3],
-			impl.diagnosticInterpolationDisabled[3],
-			impl.diagnosticInterpolationReadbackFailure[3]));
-		impl.diagnosticRealFrames = 0;
-		impl.diagnosticEvaluateSuccess.fill(0);
-		impl.diagnosticEvaluateFailure.fill(0);
-		impl.diagnosticInterpolationEnabled.fill(0);
-		impl.diagnosticInterpolationDisabled.fill(0);
-		impl.diagnosticInterpolationReadbackFailure.fill(0);
-		impl.diagnosticGeneratedPublishSuccess = 0;
-		impl.diagnosticGeneratedPublishFailure = 0;
+	if constexpr (NativeBackendTiming::Enabled) {
+		if (++impl.diagnosticRealFrames >= 120) {
+			for (uint32_t index = 1; index < impl.multiplier; ++index) {
+				const auto samples = impl.generationFenceSamples[index];
+				Logger::Get().Info(fmt::format(
+					"DLSSFG generation fence CPU wait: index={} samples={} avgMs={:.3f} maxMs={:.3f}",
+					index, samples, samples ? impl.generationFenceTotalMs[index] / samples : 0.0,
+					impl.generationFenceMaxMs[index]));
+			}
+			impl.generationFenceTotalMs = impl.generationFenceMaxMs = {};
+			impl.generationFenceSamples = {};
+			Logger::Get().Info(fmt::format(
+				"DLSSFG 120-real-frame diagnostics: multiplier={}x "
+				"evaluate[index1={}/{} index2={}/{} index3={}/{}] "
+				"generatedPublish={}/{} "
+				"interpolation[index1={}/{}/{} index2={}/{}/{} index3={}/{}/{}]",
+				impl.multiplier,
+				impl.diagnosticEvaluateSuccess[1],
+				impl.diagnosticEvaluateFailure[1],
+				impl.diagnosticEvaluateSuccess[2],
+				impl.diagnosticEvaluateFailure[2],
+				impl.diagnosticEvaluateSuccess[3],
+				impl.diagnosticEvaluateFailure[3],
+				impl.diagnosticGeneratedPublishSuccess,
+				impl.diagnosticGeneratedPublishFailure,
+				impl.diagnosticInterpolationEnabled[1],
+				impl.diagnosticInterpolationDisabled[1],
+				impl.diagnosticInterpolationReadbackFailure[1],
+				impl.diagnosticInterpolationEnabled[2],
+				impl.diagnosticInterpolationDisabled[2],
+				impl.diagnosticInterpolationReadbackFailure[2],
+				impl.diagnosticInterpolationEnabled[3],
+				impl.diagnosticInterpolationDisabled[3],
+				impl.diagnosticInterpolationReadbackFailure[3]));
+			impl.diagnosticRealFrames = 0;
+			impl.diagnosticEvaluateSuccess.fill(0);
+			impl.diagnosticEvaluateFailure.fill(0);
+			impl.diagnosticInterpolationEnabled.fill(0);
+			impl.diagnosticInterpolationDisabled.fill(0);
+			impl.diagnosticInterpolationReadbackFailure.fill(0);
+			impl.diagnosticGeneratedPublishSuccess = 0;
+			impl.diagnosticGeneratedPublishFailure = 0;
+		}
 	}
 	return true;
 }
@@ -1494,6 +1558,7 @@ bool DLSSFrameGenerator::Draw(
 	return false;
 }
 void DLSSFrameGenerator::RequestHistoryReset() noexcept {}
+void DLSSFrameGenerator::SetReflexController(ReflexController*) noexcept {}
 bool DLSSFrameGenerator::Drain() noexcept { return true; }
 FrameGuidanceRequirements
 DLSSFrameGenerator::GetFrameGuidanceRequirements() const noexcept { return {}; }

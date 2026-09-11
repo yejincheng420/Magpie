@@ -4,6 +4,8 @@
 
 ## 分支
 
+0.6.7 的 Beta 迭代在 `0.6.7` 分支完成；该分支现已按维护者要求合并到 `experimental`，正式分发准备在开发主线上进行。fix 等修订名称仅用于内部待办，不单独列出发布版本。以下为通常的公开分支约定。
+
 - `experimental` 是唯一默认分支，提交后必须能够完成 Release x64 构建。
 - 独立功能使用 `feature/<name>`，问题修复使用 `fix/<name>`，完成并验证后合并回 `experimental`。
 - 不直接改写已经推送的提交或移动已发布标签；需要修正时追加新提交。
@@ -58,3 +60,5 @@ git diff --cached
 3. `git diff --check` 无空白错误。
 4. `git status --short` 中没有构建产物、日志、第三方二进制或本机绝对路径。
 5. 涉及 DLSS/Frame Guidance 时，更新对应短期 TODO，并保留仍需 GPU 验收的项目为未完成状态。
+
+0.6.7 本地构建统一使用 `scripts/Deploy-Local067.ps1`，提交前使用 `-BuildOnly`；EXE／PRI／运行时直接生成到 `release/v0.6.7-local/Magpie-Experimental-x64`，中间文件统一位于该版本 `obj/`。验证和部署使用相同输出，不新增 `.build` 或 r1 构建副本。最终部署要求已提交源码，并逐项生成、核对发布清单；用户负责实际 UI／GPU 验收。

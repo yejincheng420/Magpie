@@ -1623,6 +1623,13 @@ static uint32_t CompilePasses(
 			Logger::Get().Error(fmt::format("生成 Pass{} 失败", id + 1));
 			return;
 		}
+		macros.emplace_back("MP_HDR_SATURATE",
+			(flags & EffectCompilerFlags::HdrCompatibility) ? "saturate" : "");
+		macros.emplace_back("MP_HDR_ALPHA",
+			(flags & EffectCompilerFlags::HdrCompatibility) ? "sourceAlpha" : "1.0");
+		if (flags & EffectCompilerFlags::HdrCompatibility) {
+			macros.emplace_back("MP_HDR_COMPATIBILITY", "1");
+		}
 
 		if (flags & EffectCompilerFlags::SaveSources) {
 			std::wstring fileName = desc.passes.size() == 1
@@ -1850,6 +1857,19 @@ uint32_t EffectCompiler::Compile(
 			return 1;
 		}
 	}
+	// Route-aware primary surfaces must be applied before pass source
+	// generation. GeneratePassSource derives typed SRV/UAV declarations from
+	// these descriptors, so runtime route metadata and CSO contracts stay
+	// identical.
+	const auto applySurfaceFormat = [&](uint32_t shift, EffectIntermediateTextureDesc& surface) {
+		const uint32_t encoded = (flags >> shift) & EffectCompilerFlags::SurfaceFormatMask;
+		if (encoded == 0) return;
+		const uint32_t formatIndex = encoded - 1;
+		if (formatIndex < std::size(EffectHelper::FORMAT_DESCS) - 1)
+			surface.format = static_cast<EffectIntermediateTextureFormat>(formatIndex);
+	};
+	applySurfaceFormat(EffectCompilerFlags::InputFormatShift, desc.textures[0]);
+	applySurfaceFormat(EffectCompilerFlags::OutputFormatShift, desc.textures[1]);
 
 	if (!noCompile) {
 		desc.samplers.clear();

@@ -58,6 +58,8 @@ static void SetDefaultWindowOptions(
 
 bool OverlayDrawer::Initialize(DeviceResources& deviceResources, OverlayOptions& overlayOptions) noexcept {
 	_overlayOptions = &overlayOptions;
+	_parameterFocusSwitchingEnabled = ScalingWindow::Get().Options().isParameterFocusSwitchingEnabled;
+	_imguiImpl.ParameterFocusSwitchingEnabled(_parameterFocusSwitchingEnabled);
 	SetDefaultWindowOptions(overlayOptions.windows);
 
 	if (!_imguiImpl.Initialize(deviceResources)) {
@@ -103,6 +105,15 @@ void OverlayDrawer::Draw(
 	// back buffer. Build and draw one complete ImGui frame in the same frontend
 	// render that will present it.
 	_overlayDirty = false;
+	const float dpiScale = GetDpiForWindow(ScalingWindow::Get().Handle()) / float(USER_DEFAULT_SCREEN_DPI);
+	if (dpiScale > 0 && dpiScale != _dpiScale) {
+		ClearStates();
+		const float ratio = dpiScale / _dpiScale;
+		ImGui::GetStyle().ScaleAllSizes(ratio);
+		ImGui::GetIO().FontGlobalScale *= ratio;
+		_dpiScale = dpiScale;
+		_effectParametersWindowLayoutInitialized = false;
+	}
 	if (!AnyVisibleWindow()) {
 		_lastComparisonStatusAlpha = 0.0f;
 		return;
@@ -141,12 +152,14 @@ void OverlayDrawer::Draw(
 	if (_isEffectParametersVisible && _DrawEffectParameters(itemId)) {
 		needRedraw = true;
 	}
+	if (!_isEffectParametersVisible && _parameterPanelState != ParameterPanelState::Closed) {
+		_SetParameterPanelState(ParameterPanelState::Closed);
+		_isEffectParametersVisible = _parameterPanelState != ParameterPanelState::Closed;
+	}
 	if (_effectParametersWindowLayoutDirty && !ImGui::IsAnyMouseDown()) {
 		const ScalingWindow& scalingWindow = ScalingWindow::Get();
 		const ScalingOptions& options = scalingWindow.Options();
-		if (options.save) {
-			options.save(options, scalingWindow.Handle());
-		}
+		if (options.save) options.save(options, scalingWindow.Handle());
 		_effectParametersWindowLayoutDirty = false;
 	}
 	_isEffectParameterInputActive = _isEffectParametersVisible && ImGui::IsAnyItemActive();
@@ -209,6 +222,7 @@ void OverlayDrawer::ClearStates() noexcept {
 
 void OverlayDrawer::OnPresentSucceeded() noexcept {
 	_imguiImpl.OnPresentSucceeded();
+	_UpdateParameterPreviewHost();
 }
 
 void OverlayDrawer::OnPresentFailed() noexcept {
@@ -243,14 +257,17 @@ void OverlayDrawer::ToolbarState(Magpie::ToolbarState value) noexcept {
 }
 
 OverlaySessionState OverlayDrawer::CaptureSessionState() const noexcept {
-	return { _isToolbarVisible, _isToolbarPinned, _isProfilerVisible, _isEffectParametersVisible };
+	if (!_parameterFocusSwitchingEnabled)
+		return { _isToolbarVisible, _isToolbarPinned, _isProfilerVisible, _isEffectParametersVisible };
+	const auto state = IsEditingParameters() ? _pendingParameterPanelState : _parameterPanelState;
+	return { _isToolbarVisible, _isToolbarPinned, _isProfilerVisible, state != ParameterPanelState::Closed, state };
 }
 
 void OverlayDrawer::RestoreSessionState(const OverlaySessionState& state) noexcept {
 	_isToolbarVisible = state.toolbarVisible;
 	_isToolbarPinned = state.toolbarPinned;
-	_isEffectParametersVisible = state.effectParametersVisible;
-	// Use the action path so the new backend also starts/stops timing queries.
+	_SetParameterPanelState(state.parameterPanelState == ParameterPanelState::Closed && state.effectParametersVisible
+		? ParameterPanelState::Preview : state.parameterPanelState, false);
 	if (_isProfilerVisible != state.profilerVisible) InvokeAction(OverlayAction::Profiler);
 	_overlayDirty = true;
 	_ClearStatesIfNoVisibleWindow();
@@ -264,7 +281,7 @@ void OverlayDrawer::InvokeAction(OverlayAction action) noexcept {
         else ScalingWindow::Get().Renderer().StopProfile();
         break;
     case OverlayAction::EffectParameters:
-        _isEffectParametersVisible = !_isEffectParametersVisible;
+        _ToggleParameterPanel();
         break;
     case OverlayAction::ToolbarPin:
         _isToolbarPinned = !_isToolbarPinned;
@@ -294,6 +311,8 @@ bool OverlayDrawer::AnyVisibleWindow() const noexcept {
 }
 
 bool OverlayDrawer::MessageHandler(UINT msg, WPARAM wParam, LPARAM lParam) noexcept {
+	if (const auto handled = _HandleParameterInputMessage(ScalingWindow::Get().Handle(), msg, wParam, lParam))
+		return *handled == ImGuiInputResult::Urgent;
 	if (!AnyVisibleWindow()) {
 		return false;
 	}
@@ -612,6 +631,9 @@ void OverlayDrawer::_BuildFontIcons(const char* fontPath) noexcept {
 }
 
 static std::string_view GetEffectDisplayName(const EffectDesc& effectDesc) noexcept {
+	// Match the picker aliases without changing saved IDs or effect filenames.
+	if (effectDesc.name == "XeSSFG\\XeSS_FrameGeneration_x2_ZeroMV") return "XeSS_FrameGeneration_x2";
+	if (effectDesc.name == "XeSSFG\\XeSS_MultiFrameGeneration_ZeroMV") return "XeSS_MultiFrameGeneration";
 	if (!effectDesc.sortName.empty()) {
 		return effectDesc.sortName;
 	}
@@ -805,6 +827,12 @@ static std::string IconLabel(ImWchar iconChar) noexcept {
 	return StrHelper::UTF16ToUTF8(text);
 }
 
+static std::string FormatToolbarTooltip(std::string_view name, std::string_view shortcut) {
+	std::string result(name);
+	if (!shortcut.empty()) result.append("（").append(shortcut).append("）");
+	return result;
+}
+
 bool OverlayDrawer::_DrawToolbar(uint32_t fps, int& itemId) noexcept {
 	bool needRedraw = false;
 
@@ -878,7 +906,7 @@ bool OverlayDrawer::_DrawToolbar(uint32_t fps, int& itemId) noexcept {
 			}
 		};
 
-		auto drawButton = [&](ImWchar icon, const char* tooltip, const char* description = nullptr) {
+		auto drawButton = [&](ImWchar icon, const char* tooltip) {
 			ImGui::PushFont(_fontIcons);
 			const bool clicked = ImGui::Button(IconLabel(icon).c_str());
 			if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
@@ -887,28 +915,32 @@ bool OverlayDrawer::_DrawToolbar(uint32_t fps, int& itemId) noexcept {
 			}
 			ImGui::PopFont();
 			if (ImGui::IsItemHovered()) {
-				_imguiImpl.Tooltip(tooltip, _dpiScale, description);
+				_imguiImpl.Tooltip(tooltip, _dpiScale);
 			}
 			return clicked;
 		};
 
 		// 光标不在缩放窗口上时阻止交互
-		ImGui::BeginDisabled(!ScalingWindow::Get().CursorManager().CursorHandle());
+		ImGui::BeginDisabled(!IsEditingParameters() && !ScalingWindow::Get().CursorManager().CursorHandle());
 
-		const std::string& pinStr = _GetResourceString(L"Overlay_Toolbar_Pin");
+		const auto& shortcuts = ScalingWindow::Get().Options().toolbarShortcutLabels;
+		auto tooltip = [&](std::wstring_view name, std::string_view shortcut) {
+			return FormatToolbarTooltip(_GetResourceString(name), shortcut);
+		};
+		const std::string pinStr = tooltip(L"Overlay_Toolbar_Pin", shortcuts.pin);
 		drawToggleButton(_isToolbarPinned, OverlayHelper::SegoeIcons::Pinned, pinStr.c_str());
 		ImGui::SameLine();
-		const std::string& profilerStr = _GetResourceString(L"Overlay_Toolbar_Profiler");
+		const std::string profilerStr = tooltip(L"Overlay_Toolbar_Profiler", shortcuts.profiler);
 		drawToggleButton(_isProfilerVisible, OverlayHelper::SegoeIcons::Diagnostic, profilerStr.c_str());
 		ImGui::SameLine();
-		const std::string& parametersStr =
-			_GetResourceString(L"Overlay_Toolbar_EffectParameters");
-		drawToggleButton(_isEffectParametersVisible,
-			OverlayHelper::SegoeIcons::Parameters, parametersStr.c_str());
+		const std::string parametersStr = tooltip(L"Overlay_Toolbar_EffectParameters", shortcuts.parameters);
+		bool parametersVisible = _isEffectParametersVisible;
+		drawToggleButton(parametersVisible, OverlayHelper::SegoeIcons::Parameters, parametersStr.c_str());
+		if (parametersVisible != _isEffectParametersVisible) InvokeAction(OverlayAction::EffectParameters);
 		ImGui::SameLine();
 		Renderer& renderer = ScalingWindow::Get().Renderer();
 		bool passThrough = renderer.IsPassThroughActive();
-		const std::string& comparisonTip = _GetResourceString(L"Overlay_Toolbar_PassThrough");
+		const std::string comparisonTip = tooltip(L"Overlay_Toolbar_PassThrough", shortcuts.comparison);
 		drawToggleButton(passThrough, OverlayHelper::SegoeIcons::View, comparisonTip.c_str());
 		if (passThrough != renderer.IsPassThroughActive() && renderer.SetPassThroughActive(passThrough)) {
 			_ShowComparisonStatus(passThrough);
@@ -919,9 +951,8 @@ bool OverlayDrawer::_DrawToolbar(uint32_t fps, int& itemId) noexcept {
 		drawToggleButton(_isDemoWindowVisible, OverlayHelper::SegoeIcons::Design, demoStr.c_str());
 #endif
 		ImGui::SameLine();
-		const std::string& screenshotStr = _GetResourceString(L"Overlay_Toolbar_TakeScreenshot");
-		const std::string& screenshotDescStr = _GetResourceString(L"Overlay_Toolbar_TakeScreenshot_Description");
-		if (drawButton(OverlayHelper::SegoeIcons::Camera, screenshotStr.c_str(), screenshotDescStr.c_str())) {
+		const std::string screenshotStr = tooltip(L"Overlay_Toolbar_TakeScreenshot", shortcuts.screenshot);
+		if (drawButton(OverlayHelper::SegoeIcons::Camera, screenshotStr.c_str())) {
 			ScalingWindow::Get().Renderer().TakeDisplayedScreenshot();
 		}
 		// 截图按钮右键菜单
@@ -1025,8 +1056,9 @@ bool OverlayDrawer::_DrawToolbar(uint32_t fps, int& itemId) noexcept {
 			const bool isWindowedMode = ScalingWindow::Get().Options().IsWindowedMode();
 			const ImWchar icon = isWindowedMode ?
 				OverlayHelper::SegoeIcons::FullScreen : OverlayHelper::SegoeIcons::Favicon;
-			const std::string& switchScalingStr = _GetResourceString(
-				isWindowedMode ? L"Overlay_Toolbar_SwitchToFullscreen" : L"Overlay_Toolbar_SwitchToWindowed");
+			const std::string switchScalingStr = tooltip(
+				isWindowedMode ? L"Overlay_Toolbar_SwitchToFullscreen" : L"Overlay_Toolbar_SwitchToWindowed",
+				isWindowedMode ? shortcuts.fullscreen : shortcuts.windowed);
 			if (drawButton(icon, switchScalingStr.c_str())) {
 				ScalingWindow::Dispatcher().TryEnqueue([]() {
 					ScalingWindow::Get().ToggleScaling(!ScalingWindow::Get().Options().IsWindowedMode());
@@ -1039,12 +1071,10 @@ bool OverlayDrawer::_DrawToolbar(uint32_t fps, int& itemId) noexcept {
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 0.769f, 0.169f, 0.11f, 1.0f });
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, { 0.769f, 0.169f, 0.11f, 0.8f });
 
-		const std::string& closeStr = _GetResourceString(L"Overlay_Toolbar_Close");
-		const std::string& closeDescStr = _GetResourceString(L"Overlay_Toolbar_Close_Description");
-		if (drawButton(OverlayHelper::SegoeIcons::Cancel, closeStr.c_str(), closeDescStr.c_str())) {
-			ScalingWindow::Dispatcher().TryEnqueue([]() {
-				ScalingWindow::Get().Stop();
-			});
+		const std::string closeStr = tooltip(L"Overlay_Toolbar_Close",
+			ScalingWindow::Get().Options().IsWindowedMode() ? shortcuts.windowed : shortcuts.fullscreen);
+		if (drawButton(OverlayHelper::SegoeIcons::Cancel, closeStr.c_str())) {
+			ScalingWindow::Get().RequestStop(ScalingWindow::RunId());
 		}
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
 			ScalingWindow::Dispatcher().TryEnqueue([this, runId(ScalingWindow::RunId())]() {
@@ -1173,7 +1203,7 @@ void OverlayDrawer::_InitEffectParameterValues() noexcept {
 	_draftEffectParameterValues = _startupEffectParameterValues;
 	_submittedEffectParameterValues = _startupEffectParameterValues;
 	_submittedEffectOptions = options.effects;
-	_startupFrameSync = { options.isFrontEdgeSyncEnabled, options.frontEdgeSyncFrameRate };
+	_startupFrameSync = { options.isFrontEdgeSyncEnabled, options.frontEdgeSyncFrameRate, options.frameSyncMode };
 	_draftFrameSync = _submittedFrameSync = _startupFrameSync;
 	_effectParametersInitialized = true;
 }
@@ -1188,6 +1218,9 @@ void OverlayDrawer::_SyncEffectParameterValues() noexcept {
 	}
 	if (frameSync.frameRate != _submittedFrameSync.frameRate) {
 		_draftFrameSync.frameRate = _submittedFrameSync.frameRate = frameSync.frameRate;
+	}
+	if (frameSync.mode != _submittedFrameSync.mode) {
+		_draftFrameSync.mode = _submittedFrameSync.mode = frameSync.mode;
 	}
 	const auto& descriptions = ScalingWindow::Get().Renderer().ActiveEffectDescs();
 	for (size_t i = 0; i < _draftEffectParameterValues.size(); ++i) {
@@ -1270,6 +1303,29 @@ bool OverlayDrawer::_RequestEffectParameters(EffectParametersRequestKind kind) n
 	return false;
 }
 
+static bool DrawEffectParameterSlider(const char* label, const EffectParameterDesc& parameter,
+	float& value, int& currentTick, int maximumTick, const char* displayValue) noexcept {
+	const ImGuiID id = ImGui::GetID(label);
+	const ImVec2 position = ImGui::GetCursorScreenPos();
+	const ImVec2 end(position.x + ImGui::CalcItemWidth(), position.y + ImGui::GetFrameHeight());
+	const bool textInput = ImGui::TempInputIsActive(id) ||
+		(ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+			ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(position, end));
+	if (textInput) {
+		// The slider's integer is a STEP index, not the parameter's value. Use
+		// actual units for text input, then let the caller normalize to the grid.
+		const float minimum = GetEffectParameterValueFromTick(parameter, 0, maximumTick);
+		const float maximum = GetEffectParameterValueFromTick(parameter, maximumTick, maximumTick);
+		const std::string format = "%." + std::to_string(GetEffectParameterDisplayPrecision(parameter)) + "f";
+		return ImGui::SliderFloat(label, &value, minimum, maximum, format.c_str(),
+			ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+	}
+	const bool changed = ImGui::SliderInt(label, &currentTick, 0, maximumTick,
+		displayValue, ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput);
+	if (changed) value = GetEffectParameterValueFromTick(parameter, currentTick, maximumTick);
+	return changed;
+}
+
 bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 	const ImGuiIO& resetInput = ImGui::GetIO();
 	_parameterResetGesture.Move(resetInput.MousePos.x, resetInput.MousePos.y, 4.0f * _dpiScale);
@@ -1290,7 +1346,8 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 	auto frameSyncChangeCount = [&]() noexcept -> uint32_t {
 		const auto& options = ScalingWindow::Get().Options();
 		return uint32_t(_draftFrameSync.enabled != options.isFrontEdgeSyncEnabled) +
-			uint32_t(_draftFrameSync.frameRate != options.frontEdgeSyncFrameRate);
+			uint32_t(_draftFrameSync.frameRate != options.frontEdgeSyncFrameRate) +
+			uint32_t(_draftFrameSync.mode != options.frameSyncMode);
 	};
 	uint32_t restartChangeCount = frameSyncChangeCount();
 	for (size_t effectIdx = 0; effectIdx < configuredEffectCount; ++effectIdx) {
@@ -1302,8 +1359,8 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 				_appliedEffectParameterValues[effectIdx][parameterIdx]);
 			if (changed && effectIdx < runtimeInfos.size() &&
 				parameterIdx < runtimeInfos[effectIdx].size() &&
-				runtimeInfos[effectIdx][parameterIdx].applyMode !=
-					EffectParameterApplyMode::Unavailable) {
+				runtimeInfos[effectIdx][parameterIdx].applyMode ==
+					EffectParameterApplyMode::RestartRequired) {
 				++restartChangeCount;
 			}
 		}
@@ -1332,19 +1389,26 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 		_effectParametersViewport = displaySize;
 	}
 
-	const std::string title = StrHelper::Concat(
+	const std::string title = !_parameterFocusSwitchingEnabled
+		? StrHelper::Concat(_GetResourceString(L"Overlay_EffectParameters"), "##", EFFECT_PARAMETERS_WINDOW_ID)
+		: StrHelper::Concat(
 		_GetResourceString(L"Overlay_EffectParameters"),
-		"##", EFFECT_PARAMETERS_WINDOW_ID);
+		" - ", _GetResourceString(IsEditingParameters() ? L"Overlay_Parameters_Edit" : L"Overlay_Parameters_Preview"),
+		"###", EFFECT_PARAMETERS_WINDOW_ID);
 	ImGui::PushStyleColor(
 		ImGuiCol_ResizeGrip, ImVec4(0.55f, 0.55f, 0.55f, 0.28f));
 	ImGui::PushStyleColor(
 		ImGuiCol_ResizeGripHovered, ImVec4(0.35f, 0.67f, 0.95f, 0.72f));
 	ImGui::PushStyleColor(
 		ImGuiCol_ResizeGripActive, ImVec4(0.35f, 0.67f, 0.95f, 1.0f));
-	const bool expanded = ImGui::Begin(title.c_str(), &_isEffectParametersVisible);
+	const bool expanded = ImGui::Begin(title.c_str(), _parameterFocusSwitchingEnabled ? nullptr : &_isEffectParametersVisible,
+		(!_parameterFocusSwitchingEnabled || IsEditingParameters()) ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
-	// Use the expanded size even while collapsed. A title-bar double click must
-	// not persist the collapsed height as the preferred panel size.
+	if (IsEditingParameters() && window->TitleBarRect().Contains(ImGui::GetIO().MousePos)) {
+		const std::string hint = StrHelper::Concat(_GetResourceString(L"Overlay_Parameters_InputHint"),
+			" ", ScalingWindow::Get().Options().toolbarShortcutLabels.parameters);
+		_imguiImpl.Tooltip(hint.c_str(), _dpiScale);
+	}
 	const OverlayWindowRect rect{
 		std::clamp(window->Pos.x, 0.0f, std::max(0.0f, displaySize.x - window->SizeFull.x)),
 		std::clamp(window->Pos.y, 0.0f, std::max(0.0f, displaySize.y - window->SizeFull.y)),
@@ -1359,7 +1423,6 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 		const bool resizedY = rect.height != previous.height;
 		if (moved || resizedX || resizedY) {
 			RememberOverlayWindowPosition(windowOption, rect, displaySize.x, displaySize.y, _dpiScale);
-			// Keep the user's preferred size on axes only constrained by a smaller viewport.
 			if (resizedX) windowOption.width = rect.width / _dpiScale;
 			if (resizedY) windowOption.height = rect.height / _dpiScale;
 			_effectParametersWindowLayoutDirty = true;
@@ -1372,6 +1435,7 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 		_parameterResetGesture.Clear();
 		return false;
 	}
+	if (_parameterFocusFailed) ImGui::TextWrapped("%s", _GetResourceString(L"Overlay_Parameters_FocusFailed").c_str());
 
 	if (!renderer.MotionConfigurationNotice().empty()) {
 		ImGui::TextWrapped("%s", StrHelper::UTF16ToUTF8(renderer.MotionConfigurationNotice()).c_str());
@@ -1380,36 +1444,53 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 
 	const ImGuiStyle& style = ImGui::GetStyle();
 	const float actionHeight = ImGui::GetFrameHeight() + style.ItemSpacing.y * 2.0f;
-	const float statusHeight = ImGui::GetTextLineHeight() + style.ItemSpacing.y;
+	const bool hasSaveError = (_effectParametersSaveState->result.load(std::memory_order_acquire) & 7) != 0;
+	const float statusHeight = ImGui::GetTextLineHeight() * (hasSaveError ? 3.0f : 1.0f) + style.ItemSpacing.y;
 	const float footerHeight =
 		actionHeight + statusHeight + style.ItemSpacing.y * 3.0f;
 	const float contentHeight = std::max(
 		100.0f * _dpiScale, ImGui::GetContentRegionAvail().y - footerHeight);
 	ImGui::BeginChild(
 		"##effectParametersContent", ImVec2(0.0f, contentHeight),
-		ImGuiChildFlags_None, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+		ImGuiChildFlags_None, ImGuiWindowFlags_AlwaysVerticalScrollbar |
+		(!_parameterFocusSwitchingEnabled || IsEditingParameters() ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs));
 
 	bool needRedraw = false;
 	bool queueFailure = false;
+	std::vector<std::tuple<uint32_t, uint32_t, float>> liveUpdates;
 	bool parameterEdited = false;
 	bool requestRestart = false;
 	ImGui::PushID("frameSync");
 	ImGui::SeparatorText(_GetResourceString(L"Overlay_FrameSync_Title").c_str());
-	if (ImGui::Checkbox("Front Edge Sync", &_draftFrameSync.enabled)) {
+	if (ImGui::Checkbox(_GetResourceString(L"Overlay_FrameSync_Enable").c_str(), &_draftFrameSync.enabled)) {
 		parameterEdited = needRedraw = true;
 	}
 	ImGui::SameLine();
 	ImGui::TextDisabled("%s", _GetResourceString(L"Overlay_EffectParameters_RestartRequired").c_str());
+	static constexpr const wchar_t* modeKeys[]{ L"FrameSync_Mode_FrontEdge/Content",
+		L"FrameSync_Mode_Async/Content", L"FrameSync_Mode_Reflex/Content" };
+	const auto selectedMode = static_cast<uint32_t>(_draftFrameSync.mode);
+	ImGui::BeginDisabled(!_draftFrameSync.enabled);
+	ImGui::TextUnformatted(_GetResourceString(L"Home_FrameSync_Mode/Header").c_str());
+	ImGui::SetNextItemWidth(-1.0f);
+	if (ImGui::BeginCombo("##frameSyncMode", _GetResourceString(modeKeys[selectedMode]).c_str())) {
+		for (uint32_t i = 0; i < std::size(modeKeys); ++i) {
+			if (ImGui::Selectable(_GetResourceString(modeKeys[i]).c_str(), i == selectedMode)) {
+				_draftFrameSync.mode = static_cast<FrameSyncMode>(i);
+				parameterEdited = needRedraw = true;
+			}
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::EndDisabled();
 	ImGui::TextUnformatted(_GetResourceString(L"Overlay_FrameSync_Target").c_str());
 	ImGui::SameLine();
 	ImGui::TextDisabled("%s", _GetResourceString(L"Overlay_EffectParameters_RestartRequired").c_str());
 	ImGui::SetNextItemWidth(-1.0f);
 	int targetFps = static_cast<int>(std::lround(_draftFrameSync.frameRate));
-	// Only commit on interaction: opening the panel must preserve fractional FPS
-	// values saved by Home or older versions.
 	const std::string targetFpsText = fmt::format("{:g} FPS", _draftFrameSync.frameRate);
 	if (ImGui::SliderInt("##targetFps", &targetFps, 15, 360, targetFpsText.c_str(),
-		ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput)) {
+		ImGuiSliderFlags_AlwaysClamp | (_parameterFocusSwitchingEnabled ? ImGuiSliderFlags_None : ImGuiSliderFlags_NoInput))) {
 		_draftFrameSync.frameRate = static_cast<float>(targetFps);
 		parameterEdited = needRedraw = true;
 	}
@@ -1580,13 +1661,14 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 								GetEffectParameterDisplayPrecision(parameter))
 							: fmt::format("{}",
 								static_cast<int>(std::lround(value)));
-					changed = ImGui::SliderInt(
-						"##value", &currentTick, 0, maximumTick,
-						displayValue.c_str(), ImGuiSliderFlags_AlwaysClamp);
 					const float previousValue = value;
-					if (changed) {
-						value = GetEffectParameterValueFromTick(
-							parameter, currentTick, maximumTick);
+					if (_parameterFocusSwitchingEnabled) {
+						changed = DrawEffectParameterSlider("##value", parameter, value,
+							currentTick, maximumTick, displayValue.c_str());
+					} else {
+						changed = ImGui::SliderInt("##value", &currentTick, 0, maximumTick,
+							displayValue.c_str(), ImGuiSliderFlags_AlwaysClamp);
+						if (changed) value = GetEffectParameterValueFromTick(parameter, currentTick, maximumTick);
 					}
 					if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
 						!_imguiImpl.LeftPressHasControl() && !resetInput.KeyCtrl &&
@@ -1613,11 +1695,8 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 			if (changed && parameterValid && parameterEnabled) {
 				parameterEdited = true;
 				value = NormalizeEffectParameterValue(parameter, value);
-				if (isLive && !renderer.QueueEffectParameterUpdate(
-					static_cast<uint32_t>(effectIdx),
-					static_cast<uint32_t>(parameterIdx), value)) {
-					queueFailure = true;
-				}
+				if (isLive) liveUpdates.emplace_back(static_cast<uint32_t>(effectIdx),
+					static_cast<uint32_t>(parameterIdx), value);
 				needRedraw = true;
 			}
 
@@ -1702,13 +1781,9 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 					parameterIdx <
 						_draftEffectParameterValues[effectIdx].size();
 					++parameterIdx) {
-					if (isSessionLive(effectIdx, parameterIdx) &&
-						!renderer.QueueEffectParameterUpdate(
-							static_cast<uint32_t>(effectIdx),
-							static_cast<uint32_t>(parameterIdx),
-							_draftEffectParameterValues[effectIdx][parameterIdx])) {
-						queueFailure = true;
-					}
+					if (isSessionLive(effectIdx, parameterIdx)) liveUpdates.emplace_back(
+						static_cast<uint32_t>(effectIdx), static_cast<uint32_t>(parameterIdx),
+						_draftEffectParameterValues[effectIdx][parameterIdx]);
 				}
 			}
 			needRedraw = true;
@@ -1724,22 +1799,24 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 		}
 		ImGui::EndDisabled();
 	}
-	if (queueFailure) {
-		ScalingWindow::Get().ShowToast(ScalingWindow::Get().GetLocalizedString(
-			L"Overlay_EffectParameters_LiveApplyFailed"));
-	}
-
+	bool submitted = true;
 	if (parameterEdited || requestRestart) {
-		_RequestEffectParameters(requestRestart ? EffectParametersRequestKind::SaveAndRestart
+		submitted = _RequestEffectParameters(requestRestart ? EffectParametersRequestKind::SaveAndRestart
 			: EffectParametersRequestKind::AutoSave);
 	}
+	// Publish desired values and enqueue persistence before waking the backend.
+	// Otherwise an immediate load failure could race ahead of the edit it rolls back.
+	if (submitted && !requestRestart) for (const auto& [effect, parameter, value] : liveUpdates) {
+		if (!renderer.QueueEffectParameterUpdate(effect, parameter, value)) queueFailure = true;
+	}
+	if (queueFailure) ScalingWindow::Get().ShowError(ScalingError::EffectParameterLiveFailed);
 	// Recount after this frame's edits (including Revert), keeping persistence
 	// separate from the values that have actually reached the backend.
 	restartChangeCount = frameSyncChangeCount();
 	for (size_t i = 0; i < _draftEffectParameterValues.size(); ++i) {
 		for (size_t j = 0; j < _draftEffectParameterValues[i].size(); ++j) {
 			if (i < runtimeInfos.size() && j < runtimeInfos[i].size() &&
-				runtimeInfos[i][j].applyMode != EffectParameterApplyMode::Unavailable && !ParameterValuesEqual(
+				runtimeInfos[i][j].applyMode == EffectParameterApplyMode::RestartRequired && !ParameterValuesEqual(
 				_draftEffectParameterValues[i][j], _appliedEffectParameterValues[i][j])) {
 				++restartChangeCount;
 			}
@@ -1761,6 +1838,15 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 	} else if (_effectParametersRevision) {
 		status = _GetResourceString(L"Overlay_EffectParameters_AutoSaved");
 	}
+	uint32_t livePending = 0;
+	for (size_t i = 0; i < _draftEffectParameterValues.size(); ++i)
+		for (size_t j = 0; j < _draftEffectParameterValues[i].size(); ++j)
+			if (isSessionLive(i, j) && !ParameterValuesEqual(_draftEffectParameterValues[i][j], _appliedEffectParameterValues[i][j])) ++livePending;
+	if (_parameterSessionSnapshot.applying || livePending || _parameterSessionSnapshot.applyFailed) {
+		if (!status.empty()) status += "  ";
+		status += _GetResourceString(_parameterSessionSnapshot.applyFailed && !livePending
+			? L"Overlay_EffectParameters_ApplyRolledBack" : L"Overlay_EffectParameters_Applying");
+	}
 	if (restartChangeCount > 0) {
 		if (!status.empty()) status += "  ";
 		status += fmt::format(fmt::runtime(_GetResourceString(
@@ -1772,8 +1858,11 @@ bool OverlayDrawer::_DrawEffectParameters(int& itemId) noexcept {
 		"##effectParametersStatus",
 		ImVec2(-ImGui::GetFrameHeight(), statusHeight),
 		ImGuiChildFlags_None,
-		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-	ImGui::TextDisabled("%s", status.c_str());
+		!_parameterFocusSwitchingEnabled ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+		: IsEditingParameters() ? ImGuiWindowFlags_None : ImGuiWindowFlags_NoInputs);
+	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextWrapped("%s", status.c_str());
+	ImGui::PopStyleColor();
 	if (ImGui::IsItemHovered() &&
 		ImGui::CalcTextSize(status.c_str()).x >
 		ImGui::GetContentRegionAvail().x) {

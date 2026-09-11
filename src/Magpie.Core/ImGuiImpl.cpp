@@ -27,7 +27,7 @@ static const char* GetWindowIDFromName(const char* name) noexcept {
 	if (idPos == std::string_view::npos) {
 		return name;
 	} else {
-		return name + idPos + 2;
+		return name + idPos + (name[idPos + 2] == '#' ? 3 : 2);
 	}
 }
 
@@ -135,6 +135,24 @@ bool ImGuiImpl::BuildFonts() noexcept {
 	return _backend.BuildFonts();
 }
 
+void ImGuiImpl::ParameterEditing(bool value) noexcept {
+	if (std::exchange(_parameterEditing, value) == value || !value) return;
+	_parameterPreview = false;
+	// NewFrame hit testing uses the previous frame's window flags. Restore
+	// input before feeding the activating click, rather than one frame later
+	// in Begin(), or that first control press is silently lost.
+	for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows) {
+		if (std::string_view(GetWindowIDFromName(window->RootWindow->Name)) != "effectParameters") continue;
+		window->Flags &= ~ImGuiWindowFlags_NoInputs;
+		if (window == window->RootWindow)
+			window->Flags &= ~(ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
+	}
+	// ClearStates removes the normal input snapshot. Preview has its own
+	// last-presented bounds, which authorize this first press immediately.
+	if (_presentedParameterRect)
+		_presentedWindowRects.emplace_back("effectParameters", *_presentedParameterRect);
+}
+
 void ImGuiImpl::NewFrame(
 	phmap::flat_hash_map<std::string, OverlayWindowOption>& windowOptions,
 	float fittsLawAdjustment,
@@ -143,6 +161,12 @@ void ImGuiImpl::NewFrame(
 	ImGuiIO& io = ImGui::GetIO();
 	_fittsLawAdjustment = fittsLawAdjustment;
 	_resetDragTolerance = 4.0f * dpiScale;
+	if (_parameterFocusSwitchingEnabled && !_parameterEditing) {
+		for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows) {
+			if (std::string_view(GetWindowIDFromName(window->RootWindow->Name)) == "effectParameters")
+				window->Flags |= ImGuiWindowFlags_NoInputs;
+		}
+	}
 
 	{
 		const SIZE destSize = Win32Helper::GetSizeOfRect(ScalingWindow::Get().Renderer().DestRect());
@@ -161,7 +185,7 @@ void ImGuiImpl::NewFrame(
 	_FlushPendingInput();
 
 	// 不接受键盘输入
-	if (io.WantCaptureKeyboard) {
+	if (!_parameterEditing && io.WantCaptureKeyboard) {
 		io.AddKeyEvent(ImGuiKey_Enter, true);
 		io.AddKeyEvent(ImGuiKey_Enter, false);
 	}
@@ -297,7 +321,8 @@ void ImGuiImpl::NewFrame(
 	// 调整缩放窗口大小或鼠标被前台窗口捕获时避免鼠标跳跃
 	CursorManager& cursorManager = ScalingWindow::Get().CursorManager();
 	if (!ScalingWindow::Get().IsResizingOrMoving() && !cursorManager.IsCursorCapturedOnForeground()) {
-		cursorManager.IsCursorOnOverlay(io.WantCaptureMouse);
+		cursorManager.IsCursorOnOverlay(io.WantCaptureMouse ||
+			IsParameterPreviewAt(cursorManager.CursorPos()));
 	}
 }
 
@@ -464,11 +489,20 @@ void ImGuiImpl::_FlushPendingInput() noexcept {
 			deliveredEdge = true;
 			break;
 		case PendingInputEventType::Cancel:
+			io.ClearInputKeys();
 			io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
 			for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
 				io.AddMouseButtonEvent(button, false);
 			}
 			_frameContainsCancel = true;
+			deliveredEdge = true;
+			break;
+		case PendingInputEventType::Key:
+			io.AddKeyEvent(event.key, event.down);
+			deliveredEdge = true;
+			break;
+		case PendingInputEventType::Character:
+			io.AddInputCharacterUTF16(static_cast<ImWchar16>(event.character));
 			deliveredEdge = true;
 			break;
 		}
@@ -479,18 +513,51 @@ void ImGuiImpl::_FlushPendingInput() noexcept {
 }
 
 void ImGuiImpl::_StagePresentedWindowRects() noexcept {
+	if (!_parameterFocusSwitchingEnabled) {
+		_stagedPresentedWindowRects.clear();
+		_stagedHasOpenPopup = !ImGui::GetCurrentContext()->OpenPopupStack.empty();
+		for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows | std::views::reverse) {
+			if (!window->WasActive || window->Hidden ||
+				(window->Flags & ImGuiWindowFlags_NoMouseInputs)) {
+				continue;
+			}
+			_stagedPresentedWindowRects.emplace_back(
+				GetWindowIDFromName(window->Name),
+				ImVec4(window->Pos.x, window->Pos.y,
+					window->Pos.x + window->Size.x, window->Pos.y + window->Size.y));
+			if (window->Flags & ImGuiWindowFlags_Popup) {
+				break;
+			}
+		}
+		return;
+	}
+
 	_stagedPresentedWindowRects.clear();
+	_stagedParameterRect.reset();
 	_stagedHasOpenPopup = !ImGui::GetCurrentContext()->OpenPopupStack.empty();
+	// Preview remains read-only in ImGui. A native hit target covers only the
+	// last successfully presented panel, including its title and child region.
+	for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows) {
+		if (window->Active && !window->Hidden &&
+			std::string_view(GetWindowIDFromName(window->Name)) == "effectParameters") {
+			_stagedParameterRect = ImVec4(window->Pos.x, window->Pos.y,
+				window->Pos.x + window->Size.x, window->Pos.y + window->Size.y);
+			break;
+		}
+	}
 	for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows | std::views::reverse) {
-		if (!window->WasActive || window->Hidden ||
+		if (!window->Active || window->Hidden ||
+			(!_parameterEditing && std::string_view(GetWindowIDFromName(window->RootWindow->Name)) == "effectParameters") ||
 			(window->Flags & ImGuiWindowFlags_NoMouseInputs)) {
 			continue;
 		}
 		_stagedPresentedWindowRects.emplace_back(
 			GetWindowIDFromName(window->Name),
-			ImVec4(window->Pos.x, window->Pos.y,
-				window->Pos.x + window->Size.x, window->Pos.y + window->Size.y));
-		if (window->Flags & ImGuiWindowFlags_Popup) {
+			ImVec4(window->OuterRectClipped.Min.x, window->OuterRectClipped.Min.y,
+				window->OuterRectClipped.Max.x, window->OuterRectClipped.Max.y));
+		// The input host needs both popup and parent panel regions. Outside those
+		// regions a game-area click is consumed as a complete return gesture.
+		if ((window->Flags & ImGuiWindowFlags_Popup) && !_parameterEditing) {
 			break;
 		}
 	}
@@ -511,6 +578,7 @@ void ImGuiImpl::ClearStates() noexcept {
 		ImGuiIO& io = ImGui::GetIO();
 		io.ClearEventsQueue();
 		io.ClearInputMouse();
+		io.ClearInputKeys();
 		ImGui::ClearActiveID();
 		ImGui::ClosePopupsExceptModals();
 	}
@@ -525,6 +593,7 @@ void ImGuiImpl::OnPresentSucceeded() noexcept {
 	_pendingInput.presentedSerial = std::max(
 		_pendingInput.presentedSerial, _frameConsumedSerial);
 	_presentedWindowRects = _stagedPresentedWindowRects;
+	_presentedParameterRect = _stagedParameterRect;
 	_presentedHasOpenPopup = _stagedHasOpenPopup;
 
 	const auto now = std::chrono::steady_clock::now();
@@ -563,7 +632,8 @@ void ImGuiImpl::_ReleaseOwnedMouseButtons(bool releaseCapture) noexcept {
 		ScalingWindow::Get().TryGetCursorManager()) {
 		cursorManager->IsCursorCapturedOnOverlay(false);
 	}
-	if (releaseCapture && GetCapture() == ScalingWindow::Get().Handle()) {
+	if (releaseCapture && (GetCapture() == ScalingWindow::Get().Handle() ||
+		ScalingWindow::Get().IsParameterInputWindow(GetCapture()))) {
 		ReleaseCapture();
 	}
 }
@@ -607,15 +677,94 @@ static bool IsNonClientMouseButtonDownMessage(UINT msg) noexcept {
 		msg == WM_NCMBUTTONDOWN || msg == WM_NCXBUTTONDOWN;
 }
 
+static ImGuiKey ParameterKey(WPARAM key) noexcept {
+	if (key >= '0' && key <= '9') return ImGuiKey(ImGuiKey_0 + key - '0');
+	if (key >= 'A' && key <= 'Z') return ImGuiKey(ImGuiKey_A + key - 'A');
+	if (key >= VK_NUMPAD0 && key <= VK_NUMPAD9) return ImGuiKey(ImGuiKey_Keypad0 + key - VK_NUMPAD0);
+	switch (key) {
+	case VK_TAB: return ImGuiKey_Tab;
+	case VK_LEFT: return ImGuiKey_LeftArrow;
+	case VK_RIGHT: return ImGuiKey_RightArrow;
+	case VK_UP: return ImGuiKey_UpArrow;
+	case VK_DOWN: return ImGuiKey_DownArrow;
+	case VK_HOME: return ImGuiKey_Home;
+	case VK_END: return ImGuiKey_End;
+	case VK_PRIOR: return ImGuiKey_PageUp;
+	case VK_NEXT: return ImGuiKey_PageDown;
+	case VK_DELETE: return ImGuiKey_Delete;
+	case VK_BACK: return ImGuiKey_Backspace;
+	case VK_SPACE: return ImGuiKey_Space;
+	case VK_RETURN: return ImGuiKey_Enter;
+	case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL: return ImGuiMod_Ctrl;
+	case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT: return ImGuiMod_Shift;
+	case VK_MENU: case VK_LMENU: case VK_RMENU: return ImGuiMod_Alt;
+	case VK_LWIN: case VK_RWIN: return ImGuiMod_Super;
+	default: return ImGuiKey_None;
+	}
+}
+
+bool ImGuiImpl::OwnsPointerAtCursor() const noexcept {
+	POINT point{};
+	GetCursorPos(&point);
+	return OwnsPointerAt(point);
+}
+
+bool ImGuiImpl::OwnsPointerAt(POINT point) const noexcept {
+	const RECT& dest = ScalingWindow::Get().Renderer().DestRect();
+	return _ownedMouseButtons ||
+		_GetPresentedHoveredWindowId({ float(point.x - dest.left), float(point.y - dest.top) });
+}
+
+bool ImGuiImpl::IsParameterPreviewAt(POINT point) const noexcept {
+	if (!_parameterPreview || !_presentedParameterRect) return false;
+	const RECT& dest = ScalingWindow::Get().Renderer().DestRect();
+	const auto& rect = *_presentedParameterRect;
+	return point.x >= dest.left + rect.x && point.y >= dest.top + rect.y &&
+		point.x < dest.left + rect.z && point.y < dest.top + rect.w;
+}
+
+bool ImGuiImpl::DismissParameterPopup() noexcept {
+	ImGuiContext& context = *ImGui::GetCurrentContext();
+	if (!context.OpenPopupStack.empty()) {
+		ImGui::ClosePopupToLevel(context.OpenPopupStack.Size - 1, true);
+		return true;
+	}
+	if (context.InputTextState.ID && context.ActiveId == context.InputTextState.ID) {
+		ImGui::ClearActiveID();
+		return true;
+	}
+	return false;
+}
+
 ImGuiInputResult ImGuiImpl::MessageHandler(
 	UINT msg,
 	WPARAM wParam,
-	LPARAM lParam
+	LPARAM lParam,
+	std::optional<POINT> pointerPosition
 ) noexcept {
+	if (_parameterEditing && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN ||
+		msg == WM_KEYUP || msg == WM_SYSKEYUP)) {
+		const ImGuiKey key = ParameterKey(wParam);
+		if (key != ImGuiKey_None) _pendingInput.Push(PendingInputEvent{
+			.type = PendingInputEventType::Key,
+			.down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN,
+			.key = key
+		}, true, true);
+		return ImGuiInputResult::Urgent;
+	}
+	if (_parameterEditing && msg == WM_CHAR) {
+		_pendingInput.Push(PendingInputEvent{
+			.type = PendingInputEventType::Character, .character = static_cast<unsigned int>(wParam)
+		}, true, true);
+		return ImGuiInputResult::Urgent;
+	}
 	const int mouseButton = GetMouseButtonFromMessage(msg, wParam);
 	if (mouseButton >= 0) {
 		ScalingWindow::Get().CursorManager().Update();
-		const ImVec2 mousePos = _CaptureMousePos(_fittsLawAdjustment);
+		const RECT& dest = ScalingWindow::Get().Renderer().DestRect();
+		const ImVec2 mousePos = pointerPosition
+			? ImVec2(float(pointerPosition->x - dest.left), float(pointerPosition->y - dest.top))
+			: _CaptureMousePos(_fittsLawAdjustment);
 		_QueueMove(mousePos, _ownedMouseButtons != 0);
 		const bool isDown = IsMouseButtonDownMessage(msg);
 		const uint32_t buttonMask = 1u << mouseButton;
@@ -636,7 +785,7 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 			}
 			if (!_ownedMouseButtons) {
 				ScalingWindow::Get().CursorManager().IsCursorCapturedOnOverlay(true);
-				SetCapture(ScalingWindow::Get().Handle());
+				SetCapture(_parameterEditing ? ScalingWindow::Get().Renderer().ParameterInputHandle() : ScalingWindow::Get().Handle());
 			}
 			_ownedMouseButtons |= buttonMask;
 			if (mouseButton == ImGuiMouseButton_Left) {
@@ -711,7 +860,8 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 		return ImGuiInputResult::Redraw;
 	}
 	case WM_CAPTURECHANGED:
-		if ((HWND)lParam != ScalingWindow::Get().Handle() && _ownedMouseButtons) {
+		if ((HWND)lParam != ScalingWindow::Get().Handle() &&
+			!ScalingWindow::Get().IsParameterInputWindow((HWND)lParam) && _ownedMouseButtons) {
 			_QueueCancel(_CaptureMousePos(_fittsLawAdjustment));
 			return ImGuiInputResult::Urgent;
 		}
@@ -754,6 +904,9 @@ const char* ImGuiImpl::_GetHoveredWindowId(ImVec2 mousePos) const noexcept {
 			continue;
 		}
 		if (window->Flags & ImGuiWindowFlags_NoMouseInputs) {
+			continue;
+		}
+		if (_parameterFocusSwitchingEnabled && !_parameterEditing && std::string_view(GetWindowIDFromName(window->RootWindow->Name)) == "effectParameters") {
 			continue;
 		}
 

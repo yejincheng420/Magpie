@@ -11,6 +11,7 @@ enum class FrameGuidanceDiagnosticKind : uint8_t {
 struct FrameGuidanceDiagnosticSettings {
 	FrameGuidanceDiagnosticKind kind = FrameGuidanceDiagnosticKind::Motion;
 	float gain = 0.08f;
+	MotionVectorRequest motionRequest{};
 };
 
 class FrameGuidanceDiagnostics final : public NativeEffectBackend {

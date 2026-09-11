@@ -40,12 +40,16 @@
 			              IsOpen="{x:Bind ViewModel.ShowRecentIssue, Mode=TwoWay}"
 			              IsClosable="True"
 			              Message="{x:Bind ViewModel.RecentIssueSummary, Mode=OneWay}"
-			              Severity="Warning"
+			              Severity="{x:Bind ViewModel.RecentIssueSeverity, Mode=OneWay}"
 			              SizeChanged="InfoBar_SizeChanged">
 				<Button x:Uid="Home_RecentIssue_Details"
 				        Margin="0,0,0,12"
 				        Click="{x:Bind ViewModel.ShowRecentIssueDetails}" />
 			</muxc:InfoBar>
+			<Button x:Name="RecentIssueHistoryButton"
+			        x:Uid="Home_RecentIssue_Reopen"
+			        x:Load="{x:Bind ViewModel.ShowIssueHistory, Mode=OneWay}"
+			        Click="{x:Bind ViewModel.ShowRecentIssueDetails}" />
 			<local:SettingsGroup x:Uid="Home_Activation">
 				<local:SettingsCard x:Uid="Home_Activation_FullscreenScaling"
 				                    IsWrapEnabled="True">
@@ -145,6 +149,14 @@
 						<ToggleSwitch x:Uid="ToggleSwitch" IsOn="{x:Bind ViewModel.IsFrontEdgeSyncEnabled, Mode=TwoWay}" />
 					</local:SettingsExpander.Content>
 					<local:SettingsExpander.Items>
+						<local:SettingsCard x:Uid="Home_FrameSync_Mode" IsWrapEnabled="True">
+							<ComboBox Width="225" IsEnabled="{x:Bind ViewModel.IsFrontEdgeSyncEnabled, Mode=OneWay}"
+							          SelectedIndex="{x:Bind ViewModel.FrameSyncModeIndex, Mode=TwoWay}">
+								<ComboBoxItem x:Uid="FrameSync_Mode_FrontEdge" />
+								<ComboBoxItem x:Uid="FrameSync_Mode_Async" />
+								<ComboBoxItem x:Uid="FrameSync_Mode_Reflex" />
+							</ComboBox>
+						</local:SettingsCard>
 						<local:SettingsCard x:Uid="Home_FrameSync_Target" IsWrapEnabled="True">
 							<muxc:NumberBox x:Uid="Home_FrameSync_Target_Input" Width="160"
 							                IsEnabled="{x:Bind ViewModel.IsFrontEdgeSyncEnabled, Mode=OneWay}"
@@ -284,6 +296,11 @@
 				              Severity="Warning" />
 			</local:SettingsGroup>
 			<local:SettingsGroup x:Uid="Home_Advanced">
+				<local:SettingsCard x:Uid="Home_Advanced_StopEffectsOnTaskSwitch" IsWrapEnabled="True">
+					<local:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE8B9;" /></local:SettingsCard.HeaderIcon>
+					<ToggleSwitch x:Uid="ToggleSwitch"
+					              IsOn="{x:Bind ViewModel.IsStopEffectsOnTaskSwitchEnabled, Mode=TwoWay}" />
+				</local:SettingsCard>
 				<local:SettingsCard x:Uid="Home_Advanced_AllowScalingMaximized">
 					<local:SettingsCard.HeaderIcon>
 						<FontIcon Glyph="&#xEECA;"

@@ -96,7 +96,11 @@ static POINT ScalingToSrc(POINT pt, RoundMethod roundType = RoundMethod::Round) 
 	return result;
 }
 
+CursorManager::CursorManager() :
+	_lifetime(std::make_shared<ScalingSessionLifetime>(ScalingWindow::RunId())) {}
+
 CursorManager::~CursorManager() noexcept {
+	BeginShutdown();
 	_ShowSystemCursor(true, true);
 	_RestoreClipCursor();
 
@@ -332,7 +336,9 @@ void CursorManager::_ReliableSetCursorPos(POINT pos) const noexcept {
 }
 
 winrt::fire_and_forget CursorManager::_SrcHitTestAsync(POINT screenPos) noexcept {
-	const uint32_t runId = ScalingWindow::RunId();
+	// Retain the creation-time session, including queries requested during cleanup.
+	const auto lifetime = _lifetime;
+	if (!lifetime->IsCurrent(ScalingWindow::RunId())) co_return;
 	const uint32_t id = _nextHitTestId++;
 	const auto traceRequest = FrameTrace::Tick();
 	FrameTrace::Mark(FrameTrace::Event::HitTestRequest, id);
@@ -342,13 +348,22 @@ winrt::fire_and_forget CursorManager::_SrcHitTestAsync(POINT screenPos) noexcept
 
 	const int16_t area = Win32Helper::AdvancedWindowHitTest(hwndSrc, screenPos, 100);
 
-	co_await ScalingWindow::Get().Dispatcher();
-
-	if (runId == ScalingWindow::RunId()) {
-		FrameTrace::Record(FrameTrace::Event::HitTestComplete, traceRequest, FrameTrace::Tick(),
-			FrameTrace::Frame(), id, area);
+	if (lifetime->IsStopping()) co_return;
+	try {
+		co_await ScalingWindow::Get().Dispatcher();
+	} catch (...) {
+		// The scaling dispatcher may be shutting down while the hit test returns.
+		co_return;
 	}
-	if (runId != ScalingWindow::RunId() || id <= _lastCompletedHitTestId) {
+
+	// Check the retained token before touching this; the original cursor manager
+	// may already be destroyed, or its address reused by a successor session.
+	if (!lifetime->IsCurrent(ScalingWindow::RunId())) co_return;
+	auto& window = ScalingWindow::Get();
+	if (!window || !window.TryGetRenderer() || window.TryGetCursorManager() != this) co_return;
+	FrameTrace::Record(FrameTrace::Event::HitTestComplete, traceRequest, FrameTrace::Tick(),
+		FrameTrace::Frame(), id, area);
+	if (id <= _lastCompletedHitTestId) {
 		co_return;
 	}
 
@@ -479,7 +494,34 @@ static bool IsEdgeArea(int16_t area) noexcept {
 	return area >= HTSIZEFIRST && area <= HTSIZELAST;
 }
 
+bool CursorManager::_UpdateParameterCursor() noexcept {
+	const Renderer& renderer = ScalingWindow::Get().Renderer();
+	POINT point{};
+	const bool hasPoint = GetCursorPos(&point);
+	const POINT displayedPoint = _isUnderCapture ? SrcToScaling(point, false) : point;
+	if (!renderer.IsEditingParameters() && (!hasPoint || !renderer.IsParameterPreviewAt(displayedPoint)))
+		return false;
+	// Editing, and hovering the bounded preview target, both need the native
+	// cursor at the displayed point before USER32 chooses the click's window.
+	// This must precede the unconditional 3D-game confinement branch.
+	if (_isUnderCapture && hasPoint) {
+		_StopCapture(point, true);
+		ClipCursor(nullptr);
+		_ReliableSetCursorPos(point);
+	}
+	_RestoreClipCursor();
+	_isCapturedOnForeground = false;
+	_shouldDrawCursor = false;
+	_ClearHitTestResult();
+	_ShowSystemCursor(true);
+	return true;
+}
+
 void CursorManager::_UpdateCursorState() noexcept {
+	// Overlay cleanup still clears its flags, but must not initiate hit tests,
+	// cursor capture or renderer work once shutdown has begun.
+	if (_lifetime->IsStopping()) return;
+	if (_UpdateParameterCursor()) return;
 	if (ScalingWindow::Get().IsResizingOrMoving()) {
 		_RestoreClipCursor();
 		return;
@@ -1050,6 +1092,13 @@ void CursorManager::_ClipCursorOnSrcMoving() noexcept {
 }
 
 void CursorManager::_UpdateCursorPos() noexcept {
+	if (_lifetime->IsStopping()) return;
+	if (ScalingWindow::Get().Renderer().IsEditingParameters()) {
+		GetCursorPos(&_cursorPos);
+		// The host uses the native cursor. Do not also draw a scaled copy.
+		_hCursor = nullptr;
+		return;
+	}
 	if (_shouldDrawCursor) {
 		CURSORINFO ci{ .cbSize = sizeof(CURSORINFO) };
 		if (!GetCursorInfo(&ci)) {

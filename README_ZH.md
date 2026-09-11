@@ -73,6 +73,7 @@ Front Edge Sync 用于控制 Magpie 的帧提交节奏，启用 FG 时控制补�
 - [Kristijan1001](https://github.com/Kristijan1001)：[缩放期间实时编辑效果参数的参考实现](https://github.com/SAOG0721/Magpie/pull/4)，为本项目参数面板的设计与实现提供了参考。
 - [LCPD15](https://github.com/LCPD15)：[窗口模式 1.0× 倍率修复](https://github.com/SAOG0721/Magpie/pull/3)，允许同分辨率效果按原尺寸显示，避免输出被额外放大。
 - [TurnX-alt](https://github.com/TurnX-alt)：[构建、界面与仓库一致性改进](https://github.com/SAOG0721/Magpie/pull/23)，包括 ClangCL 无 SDK 构建修复、预设参数与反馈链接修正、窄窗口文字换行优化、缩放开始提示，以及仓库一致性检查套件。
+- [konodiodaaaaa1](https://github.com/konodiodaaaaa1)：[HDR 支持与兼容性适配](https://github.com/SAOG0721/Magpie/pull/24)。
 
 欢迎通过 Issues 和 Pull Requests 参与；代码贡献记录见 [Contributors](https://github.com/SAOG0721/Magpie/graphs/contributors)。
 

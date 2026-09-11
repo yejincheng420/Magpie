@@ -20,7 +20,10 @@ public:
 	) noexcept override;
 
 	bool EndFrame(bool waitForGpu = false) noexcept override;
+	void SetReflexController(ReflexController* controller) noexcept override;
+	void SetReflexFrame(uint64_t frameId, uint64_t presentId, bool generated) noexcept override;
 	bool WaitForFrameCapacity(DWORD timeout) noexcept override;
+	bool WasFrameCapacityBusy() const noexcept override { return _frameCapacityBusy; }
 	bool SupportsDeferredPresent() const noexcept override {
 		return !_isDCompPresenting && !_isResized && !_isSwitchingToSwapChain;
 	}
@@ -34,6 +37,12 @@ public:
 	void OnEndResize(bool& shouldRedraw) noexcept override;
 
 private:
+	bool _frameCapacityBusy = false;
+	ReflexController* _reflex = nullptr;
+	uint64_t _reflexFrameId = 0;
+	uint64_t _reflexPresentId = 0;
+	bool _reflexGenerated = false;
+	bool _reflexRendering = false;
 	bool _ResizeSwapChain() noexcept;
 
 	bool _ResizeDCompVisual(HWND hwndAttach = NULL) noexcept;

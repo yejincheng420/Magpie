@@ -1,4 +1,5 @@
 #pragma once
+#include "HdrCaptureProcessor.h"
 
 namespace Magpie {
 
@@ -37,6 +38,7 @@ public:
 	// Backend-thread state. A sequence changes only on a real capture discontinuity;
 	// the first valid frame must reach temporal consumers even if its pixels match.
 	uint64_t CaptureSequence() const noexcept { return _captureSequence; }
+	uint64_t ResourceGeneration() const noexcept { return _resourceGeneration; }
 	bool IsCaptureInterrupted() const noexcept { return _captureInterrupted; }
 	int64_t CaptureTimestamp100ns() const noexcept { return _captureTimestamp100ns; }
 	const char* CaptureErrorContext() const noexcept { return _captureErrorContext; }
@@ -46,9 +48,35 @@ public:
 		_forceDuplicateFrameDetection = value;
 	}
 
-	ID3D11Texture2D* GetOutput() noexcept {
-		return _output.get();
+	// Compatibility getter. HDR callers must use GetCanonicalFrame(); SDR keeps
+	// the original raw capture texture contract.
+	ID3D11Texture2D* GetOutput() noexcept { return _hdrEnabled ?
+		_hdrProcessor.GetCanonicalTexture() : _output.get(); }
+
+	ID3D11Texture2D* GetPipelineTexture() const noexcept {
+		return _hdrEnabled ? _hdrProcessor.GetCanonicalTexture() : _output.get();
 	}
+
+	HdrFrame GetCanonicalFrame() const noexcept {
+		if (!_hdrEnabled) return {};
+		HdrFrame frame{
+			.texture = _hdrProcessor.GetCanonicalTexture(),
+			.metadata = _hdrProcessor.GetFrameMetadata(),
+			.workingFormat = DXGI_FORMAT_R16G16B16A16_FLOAT
+		};
+		return frame;
+	}
+
+	// Raw capture is an internal capture-front-end input. Renderer/effect code
+	// must use GetCanonicalFrame() in HDR mode.
+	ID3D11Texture2D* GetRawCaptureTexture() const noexcept { return _output.get(); }
+
+	const HdrFrameMetadata& GetHdrFrameMetadata() const noexcept {
+		return _hdrProcessor.GetFrameMetadata();
+	}
+
+	bool PrepareHdrOutputForResize() noexcept;
+	bool IsHdrFrameReady() const noexcept { return !_hdrEnabled || _hdrFrameReady; }
 
 	std::pair<uint32_t, uint32_t> GetStatisticsForDynamicDetection() const noexcept;
 
@@ -61,6 +89,7 @@ public:
 	virtual void OnCursorVisibilityChanged(bool /*isVisible*/, bool /*onDestory*/) noexcept {};
 
 protected:
+	virtual ColorDescription _GetSourceColorDescription() const noexcept;
 	uint64_t _captureSequence = 0;
 	bool _captureInterrupted = false;
 	int64_t _captureTimestamp100ns = 0;
@@ -85,6 +114,12 @@ protected:
 	DeviceResources* _deviceResources = nullptr;
 	BackendDescriptorStore* _descriptorStore = nullptr;
 	winrt::com_ptr<ID3D11Texture2D> _output;
+	HdrCaptureProcessor _hdrProcessor;
+	bool _hdrEnabled = false;
+	bool _hdrFrameReady = false;
+	uint64_t _hdrFrameSequence = 0;
+	uint64_t _resourceGeneration = 1;
+	bool _hdrDiagnosticsLogged = false;
 	ID3D11ShaderResourceView* _outputSrv = nullptr;
 
 	winrt::com_ptr<ID3D11Buffer> _resultBuffer;

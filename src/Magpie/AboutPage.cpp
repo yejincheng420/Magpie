@@ -4,6 +4,7 @@
 #include "AboutPage.g.cpp"
 #endif
 #include "CommonSharedConstants.h"
+#include "LocalizationService.h"
 #include "ToastService.h"
 #include "Win32Helper.h"
 #include "XamlHelper.h"
@@ -33,6 +34,20 @@ void AboutPage::FeatureRequest_Click(IInspectable const&, RoutedEventArgs const&
 
 void AboutPage::Discussions_Click(IInspectable const&, RoutedEventArgs const&) {
 	Win32Helper::ShellOpen(L"https://github.com/yejincheng420/Magpie/discussions");
+}
+
+void AboutPage::FAQ_Click(IInspectable const&, RoutedEventArgs const&) {
+	const bool chinese = std::wstring_view(LocalizationService::Get().Language()).starts_with(L"zh");
+	Win32Helper::ShellOpen(chinese ?
+		L"https://github.com/SAOG0721/Magpie/blob/experimental/docs/FAQ.md" :
+		L"https://github.com/SAOG0721/Magpie/blob/experimental/docs/FAQ%20(EN).md");
+}
+
+void AboutPage::ContributionGuidelines_Click(IInspectable const&, RoutedEventArgs const&) {
+	const bool chinese = std::wstring_view(LocalizationService::Get().Language()).starts_with(L"zh");
+	Win32Helper::ShellOpen(chinese ?
+		L"https://github.com/SAOG0721/Magpie/blob/experimental/CONTRIBUTING_ZH.md" :
+		L"https://github.com/SAOG0721/Magpie/blob/experimental/CONTRIBUTING.md");
 }
 
 void AboutPage::InfoBar_SizeChanged(IInspectable const& sender, SizeChangedEventArgs const&) const {

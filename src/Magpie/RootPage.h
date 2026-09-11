@@ -71,6 +71,8 @@ struct RootPage : RootPageT<RootPage> {
 		Input::PointerRoutedEventArgs const& args);
 
 	void NavigateToAboutPage();
+	bool NavigateToIssueProfile(std::wstring_view name, std::wstring_view pathRule, std::wstring_view classRule);
+	void NavigateToScalingModes();
 
 	TitleBarControl& TitleBar();
 

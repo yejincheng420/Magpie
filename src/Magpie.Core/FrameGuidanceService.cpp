@@ -3,6 +3,7 @@
 #include "DeviceResources.h"
 #include "Logger.h"
 #include "DirectXHelper.h"
+#include "ScalingWindow.h"
 
 namespace Magpie {
 
@@ -216,8 +217,12 @@ struct FrameGuidanceService::AdapterCache {
 			}
 		}
 		static constexpr float ZERO[4]{};
-		for (const auto& uav : entry->zeroUavs) {
-			context->ClearUnorderedAccessViewFloat(uav.get(), ZERO);
+		static constexpr float ONE[4]{ 1.0f, 1.0f, 1.0f, 1.0f };
+		const float* depthClear = (!ScalingWindow::Get().Options().hdrComponents.enabled && ScalingWindow::Get().Options().IsHdrCompatibilityEnabled())
+			? ONE : ZERO;
+		for (size_t i = 0; i < entry->zeroUavs.size(); ++i) {
+			context->ClearUnorderedAccessViewFloat(
+				entry->zeroUavs[i].get(), i == 1 ? depthClear : ZERO);
 		}
 		Entry* result = entry.get();
 		entries.push_back(std::move(entry));
@@ -507,7 +512,11 @@ bool FrameGuidanceService::Initialize(
 const FrameGuidanceView& FrameGuidanceService::BeginFrame(
 	FrameGuidanceFrameId frameId,
 	ID3D11Texture2D* sourceFrame,
-	const FrameGuidanceRequirements& requirements
+	const FrameGuidanceRequirements& requirements,
+	uint64_t captureSequence,
+	uint64_t resourceGeneration,
+	int64_t timestamp100ns,
+	const ColorDescription& colorDescription
 ) noexcept {
 	const FrameGuidanceExtent extent = GetTextureExtent(sourceFrame);
 	if (_hasCachedFrame && _cachedFrameId == frameId && extent == _sourceExtent) {
@@ -521,6 +530,10 @@ const FrameGuidanceView& FrameGuidanceService::BeginFrame(
 	return _Produce({
 		.color = sourceFrame,
 		.frameId = frameId,
+		.captureSequence = captureSequence,
+		.resourceGeneration = resourceGeneration,
+		.timestamp100ns = timestamp100ns,
+		.colorDescription = colorDescription,
 		.sourceExtent = _sourceExtent,
 		.validRegion = FrameGuidanceRegion::Full(_sourceExtent)
 	}, requirements);

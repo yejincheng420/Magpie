@@ -3,6 +3,7 @@
 #include "DeviceResources.h"
 #include "DirectXHelper.h"
 #include "Logger.h"
+#include "ScalingWindow.h"
 
 #ifdef MP_ENABLE_XESS_ZEROMV
 #include <d3d12.h>
@@ -41,6 +42,7 @@ struct XeSSUpscaler::Impl {
 	uint32_t outputHeight = 0;
 	uint64_t lastSubmittedValue = 0;
 	bool convertInputToRgba = false;
+	bool hdrEnabled = false;
 	bool enableOpticalFlow = false;
 	bool resetHistory = true;
 	FrameGuidanceFrameId lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
@@ -50,6 +52,20 @@ static constexpr char COLOR_CONVERT_HLSL[] = R"(
 Texture2D<float4> InputColor : register(t0);
 RWTexture2D<float4> OutputColor : register(u0);
 
+[numthreads(8, 8, 1)]
+void ConvertToRgba(uint3 tid : SV_DispatchThreadID) {
+    uint width, height;
+    OutputColor.GetDimensions(width, height);
+    if (tid.x >= width || tid.y >= height) return;
+    float4 color = InputColor.Load(int3(tid.xy, 0));
+    // XeSS-SR does not preserve alpha; make the shared color contract opaque.
+    OutputColor[tid.xy] = float4(color.bgr, 1.0);
+}
+)";
+
+static constexpr char COLOR_CONVERT_LDR_HLSL[] = R"(
+Texture2D<float4> InputColor : register(t0);
+RWTexture2D<float4> OutputColor : register(u0);
 [numthreads(8, 8, 1)]
 void ConvertToRgba(uint3 tid : SV_DispatchThreadID) {
     uint width, height;
@@ -185,19 +201,44 @@ bool XeSSUpscaler::Initialize(
 	D3D11_TEXTURE2D_DESC outputDesc{};
 	input->GetDesc(&inputDesc);
 	output->GetDesc(&outputDesc);
+	const bool hdrEnabled = ScalingWindow::Get().Options().IsHdrCompatibilityEnabled();
 	if (inputDesc.Width > outputDesc.Width || inputDesc.Height > outputDesc.Height) {
 		Logger::Get().Error(fmt::format(
 			"XeSS Zero-MV only supports upscaling: {}x{} -> {}x{}",
 			inputDesc.Width, inputDesc.Height, outputDesc.Width, outputDesc.Height));
 		return false;
 	}
-	const bool supportedInputFormat = inputDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-		inputDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
-	if (!supportedInputFormat || outputDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) {
-		Logger::Get().Error(fmt::format(
-			"XeSS Zero-MV unsupported texture formats: input={}, output={}",
-			(uint32_t)inputDesc.Format, (uint32_t)outputDesc.Format));
-		return false;
+	if (!hdrEnabled) {
+		const bool supportedInputFormat =
+			inputDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+			inputDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
+		if (!supportedInputFormat || outputDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) {
+			Logger::Get().Error(fmt::format(
+				"XeSS Zero-MV unsupported texture formats: input={}, output={}",
+				(uint32_t)inputDesc.Format, (uint32_t)outputDesc.Format));
+			return false;
+		}
+	} else {
+		const auto isXeSSColorFormat = [](DXGI_FORMAT format) noexcept {
+			return format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+				format == DXGI_FORMAT_R11G11B10_FLOAT ||
+				format == DXGI_FORMAT_R10G10B10A2_UNORM ||
+				format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+				format == DXGI_FORMAT_B8G8R8A8_UNORM;
+		};
+		const bool supportedOutputFormat =
+			outputDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+			isXeSSColorFormat(outputDesc.Format);
+		const bool compatiblePair = inputDesc.Format == outputDesc.Format ||
+			(inputDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM &&
+			 outputDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
+		if (!isXeSSColorFormat(inputDesc.Format) ||
+			!supportedOutputFormat || !compatiblePair) {
+			Logger::Get().Error(fmt::format(
+				"XeSS Zero-MV unsupported texture formats: input={}, output={}",
+				(uint32_t)inputDesc.Format, (uint32_t)outputDesc.Format));
+			return false;
+		}
 	}
 	const float scaleX = (float)outputDesc.Width / inputDesc.Width;
 	const float scaleY = (float)outputDesc.Height / inputDesc.Height;
@@ -210,7 +251,12 @@ bool XeSSUpscaler::Initialize(
 	impl->inputHeight = inputDesc.Height;
 	impl->outputWidth = outputDesc.Width;
 	impl->outputHeight = outputDesc.Height;
+	impl->hdrEnabled = hdrEnabled;
 	impl->convertInputToRgba = inputDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
+	const bool hdrColorInput =
+		impl->hdrEnabled && (inputDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ||
+		inputDesc.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
+		inputDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
 
 	HRESULT hr = D3D12CreateDevice(deviceResources.GetGraphicsAdapter(), D3D_FEATURE_LEVEL_11_0,
 		IID_PPV_ARGS(impl->device12.put()));
@@ -238,7 +284,8 @@ bool XeSSUpscaler::Initialize(
 	}
 
 	D3D11_TEXTURE2D_DESC xessInputDesc = inputDesc;
-	xessInputDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	xessInputDesc.Format = impl->convertInputToRgba ?
+		DXGI_FORMAT_R8G8B8A8_UNORM : inputDesc.Format;
 	xessInputDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	if (!CreateSharedTexture(*impl, xessInputDesc, impl->sharedInput11, impl->sharedInput12) ||
 		!CreateSharedTexture(*impl, outputDesc, impl->sharedOutput11, impl->sharedOutput12)) {
@@ -250,7 +297,8 @@ bool XeSSUpscaler::Initialize(
 			impl->sharedInput11.get(), nullptr, impl->sharedInputUav11.put());
 		winrt::com_ptr<ID3DBlob> shaderBlob;
 		if (SUCCEEDED(hr) && !DirectXHelper::CompileComputeShader(
-			COLOR_CONVERT_HLSL, "ConvertToRgba", shaderBlob.put(), "XeSSColorConvert")) {
+			(impl->hdrEnabled ? COLOR_CONVERT_HLSL : COLOR_CONVERT_LDR_HLSL),
+			"ConvertToRgba", shaderBlob.put(), "XeSSColorConvert")) {
 			hr = E_FAIL;
 		}
 		if (SUCCEEDED(hr)) hr = impl->device11->CreateComputeShader(
@@ -420,7 +468,10 @@ bool XeSSUpscaler::Initialize(
 	xess_d3d12_init_params_t initParams{};
 	initParams.outputResolution = { outputDesc.Width, outputDesc.Height };
 	initParams.qualitySetting = quality;
-	initParams.initFlags = XESS_INIT_FLAG_LDR_INPUT_COLOR | XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
+	initParams.initFlags = XESS_INIT_FLAG_RESPONSIVE_PIXEL_MASK;
+	if (!hdrColorInput) {
+		initParams.initFlags |= XESS_INIT_FLAG_LDR_INPUT_COLOR;
+	}
 	if (!impl->enableOpticalFlow) initParams.initFlags |= XESS_INIT_FLAG_HIGH_RES_MV;
 	if (!XessSucceeded(xessD3D12Init(impl->xessContext, &initParams), "xessD3D12Init") ||
 		!XessSucceeded(xessSetVelocityScale(impl->xessContext, 1.0f, 1.0f), "xessSetVelocityScale")) {
@@ -430,9 +481,9 @@ bool XeSSUpscaler::Initialize(
 	}
 
 	Logger::Get().Info(fmt::format(
-		"XeSS experimental D3D11/D3D12 backend initialized (quality {}, {}, BGRA conversion={}): {}x{} -> {}x{}",
+		"XeSS experimental D3D11/D3D12 backend initialized (quality {}, {}, BGRA conversion={}, color={}): {}x{} -> {}x{}",
 		(int)quality, impl->enableOpticalFlow ? "Shared optical flow" : "Zero-MV",
-		impl->convertInputToRgba,
+		impl->convertInputToRgba, hdrColorInput ? "linear HDR" : "LDR UNORM",
 		inputDesc.Width, inputDesc.Height, outputDesc.Width, outputDesc.Height));
 	_impl = std::move(impl);
 	return true;

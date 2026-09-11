@@ -8,7 +8,7 @@
 //!PARAMETER
 //!LABEL Frame Rate Mode
 //!DEFAULT 0
-//!OPTION 0 Based on Front Edge Sync
+//!OPTION 0 Follow frame synchronization
 //!OPTION 1 Custom
 int frameRateMode;
 

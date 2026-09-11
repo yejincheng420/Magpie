@@ -19,6 +19,11 @@ struct Win32Helper {
 	// 相比 \\.\DISPLAY1 之类的 GDI 名称，在显示器插拔和顺序变化后更稳定。
 	static std::vector<DisplayMonitorInfo> GetDisplayMonitors() noexcept;
 
+	// Returns the Windows HDR SDR-white calibration for a monitor in nits.
+	// The value is unavailable on older paths or when the display driver does
+	// not expose the calibration; callers should keep their explicit fallback.
+	static float GetMonitorSdrWhiteNits(HMONITOR monitor) noexcept;
+
 	static SIZE GetSizeOfRect(const RECT& rect) noexcept {
 		return { rect.right - rect.left, rect.bottom - rect.top };
 	}
@@ -73,9 +78,9 @@ struct Win32Helper {
 
 	static bool WriteFile(const wchar_t* fileName, std::span<uint8_t> buffer) noexcept;
 
-	static bool ReadTextFile(const wchar_t* fileName, std::string& result) noexcept;
+	static bool ReadTextFile(const wchar_t* fileName, std::string& result, uint32_t* systemError = nullptr) noexcept;
 
-	static bool WriteTextFile(const wchar_t* fileName, std::string_view text) noexcept;
+	static bool WriteTextFile(const wchar_t* fileName, std::string_view text, uint32_t* systemError = nullptr) noexcept;
 
 	static bool FileExists(const wchar_t* fileName) noexcept;
 

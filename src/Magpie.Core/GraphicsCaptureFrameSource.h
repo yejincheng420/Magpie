@@ -28,6 +28,7 @@ public:
 
 protected:
 	bool _Initialize() noexcept override;
+	ColorDescription _GetSourceColorDescription() const noexcept override;
 
 	FrameSourceState _Update() noexcept override;
 

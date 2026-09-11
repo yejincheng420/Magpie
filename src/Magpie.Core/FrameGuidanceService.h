@@ -31,7 +31,11 @@ public:
 	const FrameGuidanceView& BeginFrame(
 		FrameGuidanceFrameId frameId,
 		ID3D11Texture2D* sourceFrame,
-		const FrameGuidanceRequirements& requirements
+		const FrameGuidanceRequirements& requirements,
+		uint64_t captureSequence = 0,
+		uint64_t resourceGeneration = 0,
+		int64_t timestamp100ns = 0,
+		const ColorDescription& colorDescription = {}
 	) noexcept;
 	bool Resize(
 		FrameGuidanceExtent sourceExtent,

@@ -18,7 +18,7 @@
       <PreprocessorDefinitions Condition="$(EnableDLSSSR) And '$(Platform)' == 'x64'">MP_ENABLE_DLSS_SR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories Condition="$(EnableDLSSSR) And '$(Platform)' == 'x64'">$(DLSSSdkDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions Condition="$(EnableDLSSFrameGeneration) And '$(Platform)' == 'x64'">MP_ENABLE_DLSS_FRAME_GENERATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories Condition="$(EnableDLSSFrameGeneration) And '$(Platform)' == 'x64'">$(DLSSSdkDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories Condition="$(EnableDLSSFrameGeneration) And '$(Platform)' == 'x64'">$(DLSSSdkDir)\include;$(NvapiSdkDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions Condition="$(EnableDLSSNR) And '$(Platform)' == 'x64'">MP_ENABLE_DLSSNR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories Condition="$(EnableDLSSNR) And '$(Platform)' == 'x64'">$(DLSSSdkDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions Condition="$(EnableNvidiaOpticalFlow) And '$(Platform)' == 'x64'">MP_ENABLE_NVIDIA_OPTICAL_FLOW;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -113,7 +113,11 @@
   <Import Project="$(MSBuildThisFileDirectory)\Shared\Shared.vcxitems" Label="Shared" />
 
   <!-- Conan 依赖 -->
-  <Import Project="$(SolutionDir)\obj\$(Platform)\$(Configuration)\_ConanDeps\$(MSBuildProjectName)\conandeps.props" Condition="Exists('$(SolutionDir)\obj\$(Platform)\$(Configuration)\_ConanDeps\$(MSBuildProjectName)\conandeps.props')" />
+  <PropertyGroup>
+    <_MagpieConanRoot>$(SolutionDir)\obj\$(Platform)\$(Configuration)\</_MagpieConanRoot>
+    <_MagpieConanRoot Condition="'$(MagpieIntermediateRoot)' != ''">$(MagpieIntermediateRoot)</_MagpieConanRoot>
+  </PropertyGroup>
+  <Import Project="$(_MagpieConanRoot)_ConanDeps\$(MSBuildProjectName)\conandeps.props" Condition="Exists('$(_MagpieConanRoot)_ConanDeps\$(MSBuildProjectName)\conandeps.props')" />
 
   <!-- HybridCRT -->
   <Import Project="$(MSBuildThisFileDirectory)\HybridCRT.props" />

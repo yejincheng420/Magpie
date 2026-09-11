@@ -9,6 +9,8 @@ struct HomeViewModel : HomeViewModelT<HomeViewModel>, wil::notify_property_chang
 	bool ShowRecentIssue() const noexcept;
 	void ShowRecentIssue(bool value);
 	hstring RecentIssueSummary() const noexcept;
+	MUXC::InfoBarSeverity RecentIssueSeverity() const noexcept;
+	bool ShowIssueHistory() const noexcept;
 	fire_and_forget ShowRecentIssueDetails() noexcept;
 
 	hstring TimerDescription() const noexcept;
@@ -80,11 +82,15 @@ struct HomeViewModel : HomeViewModelT<HomeViewModel>, wil::notify_property_chang
 	void IsInlineParams(bool value);
 
 	bool IsFrontEdgeSyncEnabled() const noexcept;
+	bool IsStopEffectsOnTaskSwitchEnabled() const noexcept;
+	void IsStopEffectsOnTaskSwitchEnabled(bool value);
 	void IsFrontEdgeSyncEnabled(bool value);
 	bool IsVRREnabled() const noexcept;
 	void IsVRREnabled(bool value);
 	double FrontEdgeSyncFrameRate() const noexcept;
 	void FrontEdgeSyncFrameRate(double value);
+	int32_t FrameSyncModeIndex() const noexcept;
+	void FrameSyncModeIndex(int32_t value);
 
 	static IVector<IInspectable> MinFrameRateOptions();
 

@@ -31,7 +31,9 @@ namespace Magpie {
 		Boolean IsCaptureMethodDesktopDuplication { get; };
 
 		Int32 AutoScale;
+		Boolean IsParameterFocusSwitchingEnabled;
 		Boolean Is3DGameMode;
+		Boolean IsHdrCompatibilityEnabled;
 
 		Boolean HasMultipleMonitors { get; };
 		IVector<IInspectable> MonitorOptions { get; };

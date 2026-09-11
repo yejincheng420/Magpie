@@ -8,10 +8,12 @@
 #include "Win32Helper.h"
 #include "FrameGuidanceD3D12Interop.h"
 #include "FrameGuidancePerformance.h"
+#include "NativeBackendTiming.h"
+#include "OpticalFlowSettings.h"
 
 namespace Magpie {
 
-DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept {
+DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option, bool hdrEnabled) noexcept {
 	auto getParameter = [&](std::string_view name, float defaultValue) noexcept {
 		auto it = option.parameters.find(std::string(name));
 		return it != option.parameters.end() && std::isfinite(it->second)
@@ -21,13 +23,7 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept {
 		float minimum, float maximum) noexcept {
 		return std::clamp(getParameter(name, defaultValue), minimum, maximum);
 	};
-	const int motionQualityValue = static_cast<int>(std::lround(
-		getParameter("motionVectorQuality", 2.0f)));
-	const NvidiaOpticalFlowQuality motionQuality =
-		motionQualityValue >= 0 && motionQualityValue <= NVIDIA_OPTICAL_FLOW_MAX_QUALITY ?
-			static_cast<NvidiaOpticalFlowQuality>(motionQualityValue) :
-			NvidiaOpticalFlowQuality::Balanced;
-
+	// The caller supplies the resolved automatic boundary, never a saved UI choice.
 	return DLSSNRSettings{
 		.enableInputResolutionScaling =
 			getParameter("enableInputResolutionScaling", 0.0f) >= 0.5f,
@@ -46,19 +42,20 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept {
 			"reflectionGlowMultiplier", 1.0f, 0.0f, 2.0f),
 		.style = std::clamp(static_cast<int>(std::lround(
 			getParameter("style", 0.0f))), 0, 2),
-		.intensity = getClamped("intensity", 1.0f, 0.0f, 1.0f),
-		.localToneStrength = getClamped("localToneStrength", 1.0f, 0.0f, 1.0f),
+		.intensity = getClamped("intensity", 1.0f, 0.0f, 2.0f),
+		.localToneStrength = getClamped("localToneStrength", 1.0f, 0.0f, 2.0f),
 		.localStructureStrength = getClamped(
-			"localStructureStrength", 1.0f, 0.0f, 1.0f),
+			"localStructureStrength", 1.0f, 0.0f, 2.0f),
 		.skinStructureStrength = getClamped(
-			"skinStructureStrength", -1.0f, -1.0f, 2.0f),
+			"skinStructureStrength", 0.0f, 0.0f, 2.0f),
 		.useAutoMask = getParameter("useAutoMask", 0.0f) >= 0.5f,
 		.uiCorrection = getParameter("uiCorrection", 0.0f) >= 0.5f,
 		.enableFrameReuse = getParameter("enableFrameReuse", 0.0f) >= 0.5f,
 		.residualTransferMode = static_cast<uint32_t>(std::clamp(
 			static_cast<int>(std::lround(
 				getParameter("residualTransferMode", 0.0f))), 0, 2)),
-		.motionVectorQuality = motionQuality
+		.motionRequest = ParseDlssOpticalFlowRequest(option),
+		.experimentalHdr = DlssnrExperimentProtocol{ .enabled = hdrEnabled, .scale = 1.0f }
 	};
 }
 
@@ -1187,6 +1184,8 @@ struct DLSSNRFilter::Impl {
 	uint32_t width = 0;
 	uint32_t height = 0;
 	bool convertInputToRgba = false;
+	bool experimentalHdrPath = false;
+	float experimentalHdrScale = 1.0f;
 	bool useResolutionScaling = false;
 	// Sampling Quality 档（0=Performance Lanczos2/Catmull-Rom,
 	// 1=Quality Lanczos3/MN, 2=UltraPerformance 单趟 bilinear）。
@@ -1616,7 +1615,7 @@ DLSSNRFilter::Impl::~Impl() {
 		if (callerCompatibilityRestored && !NgxRuntimeGuard::IsFaulted()) {
 			if (!FreeLibrary(snippetModule)) {
 				Logger::Get().Win32Error(
-					"Release DLSSNR signed snippet DLL failed");
+				"Release DLSSNR signed snippet DLL failed");
 			}
 		} else {
 			Logger::Get().Warn(
@@ -1695,9 +1694,45 @@ static bool CreateComputeShader(
 	return true;
 }
 
+static bool CreateCompositeOutput(
+	DLSSNRFilter::Impl& impl,
+	ID3D11Texture2D* input,
+	ID3D11Texture2D* output,
+	const D3D11_TEXTURE2D_DESC& outputDesc
+) noexcept {
+	// The final pass reads the original input. Only use the output directly
+	// when it is a separate UAV-capable resource; otherwise retain the copy path.
+	if (input != output && (outputDesc.BindFlags & D3D11_BIND_UNORDERED_ACCESS)) {
+		winrt::com_ptr<ID3D11UnorderedAccessView> outputUav;
+		if (SUCCEEDED(impl.device11->CreateUnorderedAccessView(
+			output, nullptr, outputUav.put()))) {
+			impl.compositeOutput11.copy_from(output);
+			impl.compositeOutputUav11 = std::move(outputUav);
+			return true;
+		}
+	}
+	D3D11_TEXTURE2D_DESC compositeDesc = outputDesc;
+	compositeDesc.Usage = D3D11_USAGE_DEFAULT;
+	compositeDesc.CPUAccessFlags = 0;
+	compositeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	compositeDesc.MiscFlags = 0;
+	HRESULT hr = impl.device11->CreateTexture2D(
+		&compositeDesc, nullptr, impl.compositeOutput11.put());
+	if (SUCCEEDED(hr)) {
+		hr = impl.device11->CreateUnorderedAccessView(
+			impl.compositeOutput11.get(), nullptr, impl.compositeOutputUav11.put());
+	}
+	if (FAILED(hr)) {
+		Logger::Get().ComError("Create DLSSNR residual composite output failed", hr);
+		return false;
+	}
+	return true;
+}
+
 static bool CreateResolutionScalingResources(
 	DLSSNRFilter::Impl& impl,
 	ID3D11Texture2D* input,
+	ID3D11Texture2D* output,
 	const D3D11_TEXTURE2D_DESC& outputDesc
 ) noexcept {
 	HRESULT hr = impl.device11->CreateShaderResourceView(
@@ -1719,24 +1754,7 @@ static bool CreateResolutionScalingResources(
 			"Create DLSSNR resolution scaling color views failed", hr);
 		return false;
 	}
-	D3D11_TEXTURE2D_DESC compositeDesc = outputDesc;
-	compositeDesc.Usage = D3D11_USAGE_DEFAULT;
-	compositeDesc.CPUAccessFlags = 0;
-	compositeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE |
-		D3D11_BIND_UNORDERED_ACCESS;
-	compositeDesc.MiscFlags = 0;
-	hr = impl.device11->CreateTexture2D(
-		&compositeDesc, nullptr, impl.compositeOutput11.put());
-	if (SUCCEEDED(hr)) {
-		hr = impl.device11->CreateUnorderedAccessView(
-			impl.compositeOutput11.get(), nullptr,
-			impl.compositeOutputUav11.put());
-	}
-	if (FAILED(hr)) {
-		Logger::Get().ComError(
-			"Create DLSSNR residual composite output failed", hr);
-		return false;
-	}
+	if (!CreateCompositeOutput(impl, input, output, outputDesc)) return false;
 	impl.resampleIntermediate11 = DirectXHelper::CreateTexture2D(
 		impl.device11, DXGI_FORMAT_R16G16B16A16_FLOAT,
 		impl.sourceWidth, impl.height,
@@ -2690,7 +2708,9 @@ static bool CompositeResidual(
 	impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 	impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
 	impl.context11->CSSetShader(nullptr, nullptr, 0);
-	impl.context11->CopyResource(output, impl.compositeOutput11.get());
+	if (output != impl.compositeOutput11.get()) {
+		impl.context11->CopyResource(output, impl.compositeOutput11.get());
+	}
 	return true;
 }
 
@@ -2701,13 +2721,18 @@ FrameGuidanceRequirements
 DLSSNRFilter::GetFrameGuidanceRequirements() const noexcept {
 	if (!_impl || _impl->disabled) return {};
 	FrameGuidanceRequirements result{ .zero = true };
-	result.Add(MotionVectorRequest::Nvidia(_settings.motionVectorQuality));
+	result.Add(_settings.motionRequest);
 	return result;
 }
 
 EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode(
 	std::string_view parameterName
 ) const noexcept {
+	if (_settings.experimentalHdr.enabled &&
+		(parameterName == "enableInputResolutionScaling" || parameterName == "inputResolutionPercent" ||
+		 parameterName == "residualMultiplier" || parameterName == "residualSaturation" ||
+		 parameterName == "residualLightness" || parameterName == "shadowStructureMultiplier" ||
+		 parameterName == "reflectionGlowMultiplier")) return EffectParameterApplyMode::Unavailable;
 	if (parameterName == "style" || parameterName == "intensity" ||
 		parameterName == "localToneStrength" ||
 		parameterName == "localStructureStrength" ||
@@ -2733,7 +2758,7 @@ EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode(
 EffectParameterRestartReason DLSSNRFilter::GetParameterRestartReason(
 	std::string_view parameterName
 ) const noexcept {
-	if (parameterName == "motionVectorQuality") {
+	if (IsOpticalFlowParameter(parameterName)) {
 		return EffectParameterRestartReason::FrameGuidance;
 	}
 	return EffectParameterRestartReason::ResourceRecreation;
@@ -2747,11 +2772,13 @@ bool DLSSNRFilter::ApplyLiveParameters(
 		return false;
 	}
 
-	const DLSSNRSettings candidate = ParseDLSSNRSettings(option);
+	// Preserve the active HDR protocol while validating live SDR parameters.
+	const DLSSNRSettings candidate = ParseDLSSNRSettings(
+		option, _settings.experimentalHdr.enabled);
 	if (candidate.enableInputResolutionScaling !=
 			_settings.enableInputResolutionScaling ||
 		candidate.inputResolutionPercent != _settings.inputResolutionPercent ||
-		candidate.motionVectorQuality != _settings.motionVectorQuality) {
+		candidate.motionRequest != _settings.motionRequest) {
 		return false;
 	}
 
@@ -2842,11 +2869,11 @@ bool DLSSNRFilter::Initialize(
 	_settings.reflectionGlowMultiplier = ClampFinite(
 		_settings.reflectionGlowMultiplier, 0.0f, 2.0f, 1.0f);
 	_settings.intensity = ClampFinite(
-		_settings.intensity, 0.0f, 1.0f, 1.0f);
+		_settings.intensity, 0.0f, 2.0f, 1.0f);
 	_settings.localToneStrength = ClampFinite(
-		_settings.localToneStrength, 0.0f, 1.0f, 1.0f);
+		_settings.localToneStrength, 0.0f, 2.0f, 1.0f);
 	_settings.localStructureStrength = ClampFinite(
-		_settings.localStructureStrength, 0.0f, 1.0f, 1.0f);
+		_settings.localStructureStrength, 0.0f, 2.0f, 1.0f);
 	_ngxCore = &ngxCore;
 	_impl.reset();
 	FrameGuidancePerformance::ResetDlssnrGpuTiming();
@@ -2859,6 +2886,10 @@ bool DLSSNRFilter::Initialize(
 	D3D11_TEXTURE2D_DESC outputDesc{};
 	input->GetDesc(&inputDesc);
 	output->GetDesc(&outputDesc);
+	const bool experimentalHdrPath = settings.experimentalHdr.enabled &&
+		settings.experimentalHdr.IsVerifiedScale() &&
+		inputDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
+		outputDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
 	if (inputDesc.Width != outputDesc.Width || inputDesc.Height != outputDesc.Height) {
 		Logger::Get().Error(fmt::format(
 			"DLSSNR requires same-resolution input/output: {}x{} -> {}x{}",
@@ -2867,7 +2898,8 @@ bool DLSSNRFilter::Initialize(
 	}
 	const bool supportedInput = inputDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
 		inputDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
-	if (!supportedInput || outputDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) {
+	if ((!supportedInput || outputDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM) &&
+		!experimentalHdrPath) {
 		Logger::Get().Error(fmt::format(
 			"DLSSNR SDR path unsupported formats: input={}, output={}",
 			(uint32_t)inputDesc.Format, (uint32_t)outputDesc.Format));
@@ -2875,7 +2907,12 @@ bool DLSSNRFilter::Initialize(
 	}
 	impl->sourceWidth = inputDesc.Width;
 	impl->sourceHeight = inputDesc.Height;
-	impl->useResolutionScaling = settings.enableInputResolutionScaling;
+	impl->experimentalHdrPath = experimentalHdrPath;
+	impl->experimentalHdrScale = settings.experimentalHdr.scale;
+	// Resolution scaling and residual reconstruction are SDR RGBA8 features.
+	// The experimental FP16 route keeps the tested same-resolution call chain.
+	// 帧复用（残差转移）同样只走 SDR RGBA8 路径。
+	impl->useResolutionScaling = !experimentalHdrPath && settings.enableInputResolutionScaling;
 	impl->samplingTier = settings.samplingQuality;
 	const uint32_t resolutionPercent = std::clamp(
 		settings.inputResolutionPercent, 25u, 100u);
@@ -2913,7 +2950,8 @@ bool DLSSNRFilter::Initialize(
 	}
 
 	D3D11_TEXTURE2D_DESC sharedDesc = outputDesc;
-	sharedDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	sharedDesc.Format = experimentalHdrPath ?
+		DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
 	sharedDesc.Width = impl->width;
 	sharedDesc.Height = impl->height;
 	if (!CreateSharedTexture(*impl, sharedDesc, true,
@@ -2924,7 +2962,7 @@ bool DLSSNRFilter::Initialize(
 	}
 	if (impl->useResolutionScaling) {
 		if (!CreateResolutionScalingResources(
-			*impl, input, outputDesc)) {
+			*impl, input, output, outputDesc)) {
 			return false;
 		}
 	} else if (impl->convertInputToRgba) {
@@ -2976,39 +3014,41 @@ bool DLSSNRFilter::Initialize(
 		return false;
 	}
 
-	D3D12_QUERY_HEAP_DESC queryDesc{};
-	queryDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-	queryDesc.Count = Impl::COMMAND_SLOT_COUNT * 2;
-	hr = impl->device12->CreateQueryHeap(
-		&queryDesc, IID_PPV_ARGS(impl->timestampQueryHeap.put()));
-	D3D12_HEAP_PROPERTIES readbackHeap{};
-	readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
-	readbackHeap.CreationNodeMask = 1;
-	readbackHeap.VisibleNodeMask = 1;
-	D3D12_RESOURCE_DESC readbackDesc{};
-	readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-	readbackDesc.Width = uint64_t(queryDesc.Count) * sizeof(uint64_t);
-	readbackDesc.Height = 1;
-	readbackDesc.DepthOrArraySize = 1;
-	readbackDesc.MipLevels = 1;
-	readbackDesc.SampleDesc.Count = 1;
-	readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-	if (SUCCEEDED(hr)) {
-		hr = impl->device12->CreateCommittedResource(
-			&readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
-			D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-			IID_PPV_ARGS(impl->timestampReadback.put()));
-	}
-	if (SUCCEEDED(hr)) {
-		hr = impl->queue12->GetTimestampFrequency(&impl->timestampFrequency);
-	}
-	if (FAILED(hr) || !impl->timestampFrequency) {
-		Logger::Get().Warn(fmt::format(
-			"DLSSNR GPU timestamp telemetry unavailable ({:#x})",
-			static_cast<uint32_t>(hr)));
-		impl->timestampQueryHeap = nullptr;
-		impl->timestampReadback = nullptr;
-		impl->timestampFrequency = 0;
+	if constexpr (NativeBackendTiming::Enabled) {
+		D3D12_QUERY_HEAP_DESC queryDesc{};
+		queryDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+		queryDesc.Count = Impl::COMMAND_SLOT_COUNT * 2;
+		hr = impl->device12->CreateQueryHeap(
+			&queryDesc, IID_PPV_ARGS(impl->timestampQueryHeap.put()));
+		D3D12_HEAP_PROPERTIES readbackHeap{};
+		readbackHeap.Type = D3D12_HEAP_TYPE_READBACK;
+		readbackHeap.CreationNodeMask = 1;
+		readbackHeap.VisibleNodeMask = 1;
+		D3D12_RESOURCE_DESC readbackDesc{};
+		readbackDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+		readbackDesc.Width = uint64_t(queryDesc.Count) * sizeof(uint64_t);
+		readbackDesc.Height = 1;
+		readbackDesc.DepthOrArraySize = 1;
+		readbackDesc.MipLevels = 1;
+		readbackDesc.SampleDesc.Count = 1;
+		readbackDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		if (SUCCEEDED(hr)) {
+			hr = impl->device12->CreateCommittedResource(
+				&readbackHeap, D3D12_HEAP_FLAG_NONE, &readbackDesc,
+				D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+				IID_PPV_ARGS(impl->timestampReadback.put()));
+		}
+		if (SUCCEEDED(hr)) {
+			hr = impl->queue12->GetTimestampFrequency(&impl->timestampFrequency);
+		}
+		if (FAILED(hr) || !impl->timestampFrequency) {
+			Logger::Get().Warn(fmt::format(
+				"DLSSNR GPU timestamp telemetry unavailable ({:#x})",
+				static_cast<uint32_t>(hr)));
+			impl->timestampQueryHeap = nullptr;
+			impl->timestampReadback = nullptr;
+			impl->timestampFrequency = 0;
+		}
 	}
 
 	const std::filesystem::path applicationDirectory =
@@ -3091,8 +3131,9 @@ bool DLSSNRFilter::Initialize(
 		"residualSaturation={} residualLightness={} shadowStructureMultiplier={} "
 		"reflectionGlowMultiplier={} preset=fixed-0 "
 		"style={} intensity={} localTone={} localStructure={} skinStructure={} "
-		"motionVectorQuality={} autoMask={} uiCorrection={} depth=zero-contract "
-		"residualTransfer={} transferMode={} disabled=false",
+		"opticalFlowMethod={} opticalFlowQuality={} autoMask={} uiCorrection={} depth=zero-contract "
+		"residualTransfer={} transferMode={} disabled=false "
+		"experimentalHdrPath={} experimentalHdrScale={}",
 		ENABLE_CORE_FEATURE18_DIAGNOSTIC ? "core-diagnostic" : "signed-snippet",
 		impl->sourceWidth, impl->sourceHeight, static_cast<uint32_t>(inputDesc.Format),
 		impl->samplingTier,
@@ -3108,11 +3149,13 @@ bool DLSSNRFilter::Initialize(
 		_settings.style,
 		_settings.intensity, _settings.localToneStrength,
 		_settings.localStructureStrength, _settings.skinStructureStrength,
-		static_cast<uint32_t>(_settings.motionVectorQuality),
+		static_cast<uint32_t>(_settings.motionRequest.method),
+		static_cast<uint32_t>(_settings.motionRequest.quality),
 		_settings.useAutoMask, _settings.uiCorrection,
 		_settings.enableFrameReuse,
 		_settings.residualTransferMode == 0 ? "copy" :
-			_settings.residualTransferMode == 1 ? "optical-flow" : "global-mv"));
+			_settings.residualTransferMode == 1 ? "optical-flow" : "global-mv",
+		impl->experimentalHdrPath, impl->experimentalHdrScale));
 
 	// 残差转移资源。任何一步失败仅禁用该功能（退回纯 NGX），不炸初始化。
 	{
@@ -3311,7 +3354,7 @@ static FrameGuidanceView SelectGuidance(
 	return SelectFrameGuidanceChannels(
 		context.frameGuidance, context.zeroFrameGuidance,
 		context.frameId, extent,
-		settings.motionVectorQuality != NvidiaOpticalFlowQuality::None);
+		settings.motionRequest.method != OpticalFlowMethod::None);
 }
 
 bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
@@ -3459,18 +3502,16 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	};
 	Impl::CommandSlot& commandSlot =
 		impl.commandSlots[impl.nextCommandSlot++ % Impl::COMMAND_SLOT_COUNT];
-	const auto slotWaitStart = std::chrono::steady_clock::now();
+	const auto slotWaitStart = NativeBackendTiming::Now();
 	if (commandSlot.completionValue &&
 		!WaitForFence(impl, commandSlot.completionValue)) {
 		return fail("command-slot-wait");
 	}
-	const double slotWaitMs = std::chrono::duration<double, std::milli>(
-		std::chrono::steady_clock::now() - slotWaitStart).count();
-	CollectGpuTiming(impl, commandSlot);
-	const auto inputPrepareStart = std::chrono::steady_clock::now();
+	const double slotWaitMs = NativeBackendTiming::ElapsedMilliseconds(slotWaitStart);
+	if constexpr (NativeBackendTiming::Enabled) CollectGpuTiming(impl, commandSlot);
+	const auto inputPrepareStart = NativeBackendTiming::Now();
 	if (!PrepareInput(impl, input)) return fail("prepare-input");
-	const double inputPrepareMs = std::chrono::duration<double, std::milli>(
-		std::chrono::steady_clock::now() - inputPrepareStart).count();
+	const double inputPrepareMs = NativeBackendTiming::ElapsedMilliseconds(inputPrepareStart);
 	if (impl.disabled) {
 		bool succeeded = true;
 		if (impl.useResolutionScaling) {
@@ -3489,8 +3530,8 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 		}
 		return succeeded;
 	}
-	const auto guidancePrepareStart = std::chrono::steady_clock::now();
-	FrameGuidanceView guidance = SelectGuidance(
+	const auto guidancePrepareStart = NativeBackendTiming::Now();
+	const FrameGuidanceView guidance = SelectGuidance(
 		context, _settings, { impl.sourceWidth, impl.sourceHeight });
 	if (!impl.guidanceInterop->WaitForProducer(impl.context11, guidance)) {
 		return fail("guidance-interop");
@@ -3519,8 +3560,7 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 		impl, *evaluateGuidance, context.frameId)) {
 		return fail("guidance-interop");
 	}
-	const double guidancePrepareMs = std::chrono::duration<double, std::milli>(
-		std::chrono::steady_clock::now() - guidancePrepareStart).count();
+	const double guidancePrepareMs = NativeBackendTiming::ElapsedMilliseconds(guidancePrepareStart);
 	const uint64_t inputReady = ++impl.fenceValue;
 	HRESULT hr = impl.context11->Signal(impl.fence11.get(), inputReady);
 	if (FAILED(hr)) {
@@ -3572,15 +3612,14 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 			impl.timestampQueryHeap.get(), D3D12_QUERY_TYPE_TIMESTAMP,
 			commandSlot.timestampQuery);
 	}
-	const auto evaluateStart = std::chrono::steady_clock::now();
+	const auto evaluateStart = NativeBackendTiming::Now();
 	const Impl::EvaluateFeatureFn evaluateFeature = impl.useSignedSnippet ?
 		impl.snippetEvaluateFeature :
 		static_cast<Impl::EvaluateFeatureFn>(&NVSDK_NGX_D3D12_EvaluateFeature);
 	const NVSDK_NGX_Result result = CallEvaluateFeatureSafely(
 		evaluateFeature, commandList, impl.feature,
 		impl.parameters, &sehCode);
-	const double evaluateCpuMs = std::chrono::duration<double, std::milli>(
-		std::chrono::steady_clock::now() - evaluateStart).count();
+	const double evaluateCpuMs = NativeBackendTiming::ElapsedMilliseconds(evaluateStart);
 	if (impl.timestampQueryHeap) {
 		commandList->EndQuery(
 			impl.timestampQueryHeap.get(), D3D12_QUERY_TYPE_TIMESTAMP,
@@ -3602,18 +3641,20 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 				"DLSSNR EvaluateFeature raised SEH {:#x}", sehCode));
 		}
 	}
-	if (!evaluateSucceeded || impl.evaluateCount <= 8 ||
-		impl.evaluateCount % 120 == 0) {
+	if (!evaluateSucceeded || impl.evaluateCount == 1 ||
+		(NativeBackendTiming::Enabled &&
+			(impl.evaluateCount <= 8 || impl.evaluateCount % 120 == 0))) {
 		LogDlssnrStatus(fmt::format(
 			"DLSSNR STATUS: Feature=18 frameId={} evaluateCount={} result={:#x} "
-			"success={} failures={} motionVectorQuality={} path={} disabled={}",
+			"success={} failures={} opticalFlowMethod={} opticalFlowQuality={} path={} disabled={}",
 			context.frameId, impl.evaluateCount, static_cast<uint32_t>(result),
 			impl.evaluateSuccessCount, impl.evaluateFailureCount,
-			static_cast<uint32_t>(_settings.motionVectorQuality),
+			static_cast<uint32_t>(_settings.motionRequest.method),
+			static_cast<uint32_t>(_settings.motionRequest.quality),
 			impl.useSignedSnippet ? "signed-snippet" : "core-diagnostic",
 			impl.disabled), !evaluateSucceeded);
 	}
-	const auto submitStart = std::chrono::steady_clock::now();
+	const auto submitStart = NativeBackendTiming::Now();
 	for (D3D12_RESOURCE_BARRIER& barrier : barriers) {
 		std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
 	}
@@ -3652,36 +3693,39 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 			output, impl.disabled ? impl.sharedInput11.get() :
 				impl.sharedOutput11.get());
 	}
-	const double submitMs = std::chrono::duration<double, std::milli>(
-		std::chrono::steady_clock::now() - submitStart).count();
-	impl.slotWaitTimings.Add(slotWaitMs);
-	impl.inputPrepareTimings.Add(inputPrepareMs);
-	impl.guidancePrepareTimings.Add(guidancePrepareMs);
-	impl.evaluateCpuTimings.Add(evaluateCpuMs);
-	impl.submitTimings.Add(submitMs);
+	const double submitMs = NativeBackendTiming::ElapsedMilliseconds(submitStart);
+	if constexpr (NativeBackendTiming::Enabled) {
+		impl.slotWaitTimings.Add(slotWaitMs);
+		impl.inputPrepareTimings.Add(inputPrepareMs);
+		impl.guidancePrepareTimings.Add(guidancePrepareMs);
+		impl.evaluateCpuTimings.Add(evaluateCpuMs);
+		impl.submitTimings.Add(submitMs);
+	}
 	if (guidanceReset) {
 		impl.lastGuidanceResetFrameId = context.frameId;
 	}
 	impl.resetHistory = false;
 	impl.residualParametersDirty = false;
-	if (impl.evaluateCount <= 8 || impl.evaluateCount % 120 == 0) {
-		if (impl.evaluateCount <= 8) {
-			Logger::Get().Info(fmt::format(
-				"DLSSNR timing: frameId={} evaluateCount={} slotWait={:.3f} ms "
-				"inputPrepare={:.3f} ms guidancePrepare={:.3f} ms "
-				"evaluateCPU={:.3f} ms submit={:.3f} ms",
-				context.frameId, impl.evaluateCount, slotWaitMs, inputPrepareMs,
-				guidancePrepareMs, evaluateCpuMs, submitMs));
-		} else {
-			Logger::Get().Info(fmt::format(
-				"DLSSNR timing 120-frame window: frameId={} evaluateCount={} {} {} {} {} {} {}",
-				context.frameId, impl.evaluateCount,
-				FormatTimingSummary("slotWait", impl.slotWaitTimings.Summarize()),
-				FormatTimingSummary("inputPrepare", impl.inputPrepareTimings.Summarize()),
-				FormatTimingSummary("guidancePrepare", impl.guidancePrepareTimings.Summarize()),
-				FormatTimingSummary("evaluateCPU", impl.evaluateCpuTimings.Summarize()),
-				FormatTimingSummary("submit", impl.submitTimings.Summarize()),
-				FormatTimingSummary("evaluateGPU", impl.evaluateGpuTimings.Summarize())));
+	if constexpr (NativeBackendTiming::Enabled) {
+		if (impl.evaluateCount <= 8 || impl.evaluateCount % 120 == 0) {
+			if (impl.evaluateCount <= 8) {
+				Logger::Get().Info(fmt::format(
+					"DLSSNR timing: frameId={} evaluateCount={} slotWait={:.3f} ms "
+					"inputPrepare={:.3f} ms guidancePrepare={:.3f} ms "
+					"evaluateCPU={:.3f} ms submit={:.3f} ms",
+					context.frameId, impl.evaluateCount, slotWaitMs, inputPrepareMs,
+					guidancePrepareMs, evaluateCpuMs, submitMs));
+			} else {
+				Logger::Get().Info(fmt::format(
+					"DLSSNR timing 120-frame window: frameId={} evaluateCount={} {} {} {} {} {} {}",
+					context.frameId, impl.evaluateCount,
+					FormatTimingSummary("slotWait", impl.slotWaitTimings.Summarize()),
+					FormatTimingSummary("inputPrepare", impl.inputPrepareTimings.Summarize()),
+					FormatTimingSummary("guidancePrepare", impl.guidancePrepareTimings.Summarize()),
+					FormatTimingSummary("evaluateCPU", impl.evaluateCpuTimings.Summarize()),
+					FormatTimingSummary("submit", impl.submitTimings.Summarize()),
+					FormatTimingSummary("evaluateGPU", impl.evaluateGpuTimings.Summarize())));
+			}
 		}
 	}
 	impl.lastEvaluatedFrameId = context.frameId;

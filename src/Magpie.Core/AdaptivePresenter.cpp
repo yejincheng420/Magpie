@@ -2,6 +2,7 @@
 #include "FrameTrace.h"
 #include "AdaptivePresenter.h"
 #include "DeviceResources.h"
+#include "ReflexController.h"
 #include "Logger.h"
 #include "ScalingWindow.h"
 #include "Win32Helper.h"
@@ -33,7 +34,9 @@ bool AdaptivePresenter::_Initialize(HWND hwndAttach) noexcept {
 	DXGI_SWAP_CHAIN_DESC1 sd{
 		.Width = (UINT)rendererSize.cx,
 		.Height = (UINT)rendererSize.cy,
-		.Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+		.Format = ScalingWindow::Get().Options().IsHdrCompatibilityEnabled()
+			? DXGI_FORMAT_R16G16B16A16_FLOAT
+			: DXGI_FORMAT_R8G8B8A8_UNORM,
 		.SampleDesc = {
 			.Count = 1
 		},
@@ -68,11 +71,17 @@ bool AdaptivePresenter::_Initialize(HWND hwndAttach) noexcept {
 		Logger::Get().ComError("创建交换链失败", hr);
 		return false;
 	}
-
 	_dxgiSwapChain = dxgiSwapChain.try_as<IDXGISwapChain4>();
 	if (!_dxgiSwapChain) {
 		Logger::Get().Error("获取 IDXGISwapChain2 失败");
 		return false;
+	}
+	if (ScalingWindow::Get().Options().IsHdrCompatibilityEnabled()) {
+		hr = _dxgiSwapChain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+		if (FAILED(hr)) {
+			Logger::Get().ComError("设置 HDR 交换链色彩空间失败", hr);
+			return false;
+		}
 	}
 
 	const auto& options = ScalingWindow::Get().Options();
@@ -119,11 +128,24 @@ bool AdaptivePresenter::_Initialize(HWND hwndAttach) noexcept {
 	return true;
 }
 
+void AdaptivePresenter::SetReflexController(ReflexController* controller) noexcept {
+	_reflex = controller;
+	if (_reflex) _reflex->SetPresentationAvailable(!_isDCompPresenting && !!_dxgiSwapChain);
+}
+
+void AdaptivePresenter::SetReflexFrame(uint64_t frameId, uint64_t presentId, bool generated) noexcept {
+	_reflexFrameId = frameId;
+	_reflexPresentId = presentId;
+	_reflexGenerated = generated;
+}
+
 bool AdaptivePresenter::BeginFrame(
 	winrt::com_ptr<ID3D11Texture2D>& frameTex,
 	winrt::com_ptr<ID3D11RenderTargetView>& frameRtv,
 	POINT& drawOffset
 ) noexcept {
+	_frameCapacityBusy = false;
+	if (_reflex) _reflex->SetPresentationAvailable(!_isDCompPresenting && !!_dxgiSwapChain);
 	if (_isDCompPresenting) {
 		HRESULT hr = _dcompSurface->BeginDraw(nullptr, IID_PPV_ARGS(&frameTex), &drawOffset);
 		if (FAILED(hr)) {
@@ -143,6 +165,7 @@ bool AdaptivePresenter::BeginFrame(
 		{
 			const DWORD waitResult = _frameLatencyGate.TryAcquire(_frameLatencyWaitableObject.get());
 			if (waitResult == WAIT_TIMEOUT) {
+				_frameCapacityBusy = true;
 				FrameTrace::Mark(FrameTrace::Event::CapacityBusy);
 				return false;
 			} else if (waitResult == WAIT_FAILED) {
@@ -158,6 +181,10 @@ bool AdaptivePresenter::BeginFrame(
 
 		frameTex = _backBuffer;
 		frameRtv = _backBufferRtv;
+		if (_reflex && _reflexFrameId && _reflexPresentId) {
+			_reflex->FrontendRender(_reflexFrameId, _reflexPresentId, true);
+			_reflexRendering = true;
+		}
 	}
 	
 	return true;
@@ -225,7 +252,15 @@ bool AdaptivePresenter::EndFrame(bool waitForGpu) noexcept {
 		const UINT flags = ScalingWindow::Get().Options().isVRREnabled &&
 			_deviceResources->IsTearingSupported() ? DXGI_PRESENT_ALLOW_TEARING : 0;
 		_lastSubmissionTime = std::chrono::steady_clock::now();
+		if (_reflexRendering) {
+			_reflex->FrontendRender(_reflexFrameId, _reflexPresentId, false);
+			_reflex->Present(_reflexFrameId, _reflexPresentId, _reflexGenerated, true);
+		}
 		const HRESULT presentResult = _dxgiSwapChain->Present(0, flags);
+		if (_reflexRendering) {
+			_reflex->Present(_reflexFrameId, _reflexPresentId, _reflexGenerated, false);
+			_reflexRendering = false;
+		}
 		FrameTrace::Presentation(tracePresent, FrameTrace::Tick(), presentResult,
 			reinterpret_cast<uintptr_t>(_dxgiSwapChain.get()));
 		_lastPresentedFrameCount = presentResult == S_OK ? 1u : 0u;
@@ -272,6 +307,11 @@ bool AdaptivePresenter::EndFrame(bool waitForGpu) noexcept {
 }
 
 bool AdaptivePresenter::OnResize() noexcept {
+	if (_reflex) {
+		if (_reflexRendering) _reflex->FrontendRender(_reflexFrameId, _reflexPresentId, false);
+		_reflexRendering = false;
+		_reflex->SetPresentationAvailable(false);
+	}
 	_isResized = true;
 
 	if (ScalingWindow::Get().IsResizingOrMoving() || !_dxgiSwapChain) {
@@ -408,7 +448,9 @@ bool AdaptivePresenter::_ResizeDCompVisual(HWND hwndAttach) noexcept {
 		hr = _dcompDevice->CreateVirtualSurface(
 			(UINT)rendererSize.cx,
 			(UINT)rendererSize.cy,
-			DXGI_FORMAT_R8G8B8A8_UNORM,
+			ScalingWindow::Get().Options().IsHdrCompatibilityEnabled()
+				? DXGI_FORMAT_R16G16B16A16_FLOAT
+				: DXGI_FORMAT_R8G8B8A8_UNORM,
 			DXGI_ALPHA_MODE_IGNORE,
 			_dcompSurface.put()
 		);

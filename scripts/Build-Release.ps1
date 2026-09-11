@@ -21,7 +21,6 @@ Set-StrictMode -Version Latest
 $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $workspaceRoot = Split-Path $sourceRoot -Parent
 $releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot "release"))
-$buildOutput = Join-Path $sourceRoot "bin\$Platform\$Configuration"
 
 function Find-MSBuild {
     $command = Get-Command msbuild.exe -ErrorAction SilentlyContinue
@@ -151,6 +150,11 @@ if (!$ReleaseDirectory) {
 }
 $releaseContainer = [System.IO.Path]::GetFullPath((Join-Path $releaseRoot $ReleaseDirectory))
 $stagingDir = [System.IO.Path]::GetFullPath((Join-Path $releaseContainer $PackageName))
+$buildOutput = $stagingDir
+$intermediateRoot = Join-Path $releaseContainer "obj/$Platform/$Configuration"
+if ($releaseContainer.TrimEnd('\', '/') -eq (Join-Path $releaseRoot 'v0.6.7-local')) {
+    throw "Use scripts/Deploy-Local067.ps1 to preserve the local runtime and user settings."
+}
 $symbolsDir = [System.IO.Path]::GetFullPath((Join-Path $releaseContainer "$PackageName-symbols"))
 $zipPath = [System.IO.Path]::GetFullPath((Join-Path $releaseContainer "$PackageName.zip"))
 
@@ -204,11 +208,11 @@ if (!$SkipBuild) {
 	# MSBuild Rebuild removes known project outputs but leaves arbitrary runtime
 	# files copied by older feature sets. Start from an empty configuration
 	# directory so removed optional components cannot leak into a new package.
-	$buildRoot = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot "bin"))
+	$buildRoot = $releaseContainer
 	if (!$buildOutput.StartsWith(
 		$buildRoot + [System.IO.Path]::DirectorySeparatorChar,
 		[System.StringComparison]::OrdinalIgnoreCase)) {
-		throw "Build output escaped the source bin directory: $buildOutput"
+		throw "Build output escaped the release version directory: $buildOutput"
 	}
 	if (Test-Path -LiteralPath $buildOutput) {
 		Get-ChildItem -LiteralPath $buildOutput -Force |
@@ -231,7 +235,9 @@ if (!$SkipBuild) {
         "/p:PreferredToolArchitecture=x64",
         "/p:UseMultiToolTask=$multiToolTask", "/p:CL_MPCount=$MaxCompilerProcesses",
         "/p:MultiProcMaxCount=$MaxCompilerProcesses", "/p:EnforceProcessCountAcrossBuilds=true",
-        "/p:DisablePDB=$disablePdb", "/p:ReproducibleBuild=true"
+        "/p:DisablePDB=$disablePdb", "/p:ReproducibleBuild=true",
+        ('/p:OutDir=' + $buildOutput.Replace('\', '/') + '/'),
+        ('/p:MagpieIntermediateRoot=' + $intermediateRoot.Replace('\', '/') + '/')
     )
     $traceEnabled = if ($EnableFrameTrace) { "true" } else { "false" }
     $msbuildArgs += "/p:EnableFrameTrace=$traceEnabled"
@@ -296,23 +302,13 @@ if ($IncludeSymbols) {
     }
 }
 
-New-Item -ItemType Directory -Path $releaseContainer -Force | Out-Null
-if (Test-Path -LiteralPath $stagingDir) {
-    # Keep the staging root itself. Explorer, antivirus and recently exited
-    # GUI processes can briefly retain a handle to the directory even after
-    # every packaged file is released.
-    Get-ChildItem -LiteralPath $stagingDir -Force |
-        Remove-Item -Recurse -Force
-} else {
-    New-Item -ItemType Directory -Path $stagingDir | Out-Null
-}
+# The complete build is already in the package directory. Symbols were copied
+# above; remove only linker/debug artifacts from the distributable package.
+Get-ChildItem -LiteralPath $stagingDir -File | Where-Object {
+    $_.Extension -in ".pdb", ".map", ".lib", ".exp" -or $_.Name -eq "Magpie.next.exe"
+} | Remove-Item -Force
 
-Get-ChildItem -LiteralPath $buildOutput | Where-Object {
-    $_.Extension -notin ".pdb", ".map", ".lib", ".exp" -and
-    $_.Name -ne "Magpie.next.exe"
-} | Copy-Item -Destination $stagingDir -Recurse
-
-# Never package per-user runtime state left in bin/ by local test launches.
+# Never package per-user runtime state left by local test launches.
 foreach ($runtimeStateName in @("cache", "logs", "config", "PortableAppData", "config.json")) {
     $runtimeStatePath = Join-Path $stagingDir $runtimeStateName
     if (Test-Path -LiteralPath $runtimeStatePath) {
@@ -342,6 +338,10 @@ $frameSyncGuide = Join-Path $sourceRoot "docs\FRAME_SYNC_GUIDE.md"
 if (Test-Path -LiteralPath $frameSyncGuide) {
     Copy-Item -LiteralPath $frameSyncGuide -Destination (Join-Path $stagingDir "FRAME_SYNC_GUIDE.md")
 }
+$parameterInputGuide = Join-Path $sourceRoot "docs\experimental\testing\PARAMETER-INPUT.md"
+if (Test-Path -LiteralPath $parameterInputGuide) {
+    Copy-Item -LiteralPath $parameterInputGuide -Destination (Join-Path $stagingDir "PARAMETER-INPUT.md")
+}
 
 $featureOptions = [ordered]@{}
 $buildOptionsPath = Join-Path $sourceRoot "src\BuildOptions.props"
@@ -351,6 +351,9 @@ $buildOptions.Project.PropertyGroup.ChildNodes | Where-Object {
     $_.Name -like "Enable*"
 } | ForEach-Object {
     $supportedFeatureOptions[$_.Name] = $true
+    if ($_.InnerText -in @("true", "false")) {
+        $featureOptions[$_.Name] = [string]$_.InnerText
+    }
 }
 $userOptionsPath = Join-Path $sourceRoot "src\BuildOptions.props.user"
 if (Test-Path -LiteralPath $userOptionsPath) {
@@ -362,9 +365,11 @@ if (Test-Path -LiteralPath $userOptionsPath) {
         $featureOptions[$property.Name] = [string]$property.InnerText
     }
 }
-# Match BuildOptions.props' compatibility default so the manifest records the
-# effective AMDOF feature state even when an older user override only enables
-# FSR3.
+# Match the compatibility defaults as well as explicit user overrides.
+if (!$featureOptions.Contains("EnableDLSSSR") -and
+    $featureOptions.Contains("EnableDLSSZeroMV")) {
+    $featureOptions["EnableDLSSSR"] = $featureOptions["EnableDLSSZeroMV"]
+}
 if (!$featureOptions.Contains("EnableAmdOpticalFlow") -and
     $featureOptions.Contains("EnableFSR3ZeroMV")) {
     $featureOptions["EnableAmdOpticalFlow"] =

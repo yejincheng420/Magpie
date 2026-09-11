@@ -70,6 +70,9 @@ bool ScalingRuntime::Start(HWND hwndSrc, ScalingOptions&& options, bool force) {
 			return;
 		}
 
+		// A forced start replaces the source/session; treat it as an external
+		// ownership change, not a deferred request to return to the old game.
+		if (force && scalingWindow.TryGetRenderer()) scalingWindow.Renderer().SuspendParameterInput();
 		scalingWindow.Stop();
 		if (_commandGeneration.load(std::memory_order_acquire) != generation) {
 			return;
@@ -133,7 +136,7 @@ void ScalingRuntime::Stop() {
 		if (_commandGeneration.load(std::memory_order_acquire) != generation) return;
 		ScalingWindow::Get().Stop();
 		if (_commandGeneration.load(std::memory_order_acquire) == generation) {
-			_State(ScalingState::Idle);
+			_State(ScalingWindow::Get() ? ScalingState::Stopping : ScalingState::Idle);
 		}
 	})) {
 		if (_commandGeneration.load(std::memory_order_acquire) == generation) {
@@ -152,6 +155,14 @@ bool ScalingRuntime::StopForTaskSwitch() {
 
 uint32_t ScalingRuntime::RunId() const noexcept {
 	return ScalingWindow::RunId();
+}
+
+void ScalingRuntime::UpdateToolbarShortcutLabels(ToolbarShortcutLabels labels) {
+	const uint64_t generation = _commandGeneration.load(std::memory_order_acquire);
+	_Dispatcher().TryEnqueue([this, generation, labels = std::move(labels)]() mutable {
+		if (_commandGeneration.load(std::memory_order_acquire) == generation)
+			ScalingWindow::Get().UpdateToolbarShortcutLabels(std::move(labels));
+	});
 }
 
 void ScalingRuntime::UpdateFrameSyncSettings(FrameSyncSettings settings) {
@@ -304,7 +315,10 @@ void ScalingRuntime::_ScalingThreadProc() noexcept {
 	// records work; all rendering happens below, outside the window-procedure
 	// call stack, so a FIFO/presenter wait cannot trap later button-up messages.
 	constexpr uint32_t MAX_MESSAGES_PER_PASS = 32;
-	auto peekPriorityMessage = [&msg]() noexcept {
+	auto peekPriorityMessage = [&]() noexcept {
+		// Preserve modifier/button/character order while the parameter host owns input.
+		if (scalingWindow.TryGetRenderer() && scalingWindow.Renderer().IsEditingParameters())
+			return PeekMessage(&msg, NULL, 0, 0, PM_REMOVE) != FALSE;
 		if (PeekMessage(&msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE) ||
 			PeekMessage(&msg, NULL, WM_CANCELMODE, WM_CANCELMODE, PM_REMOVE) ||
 			PeekMessage(&msg, NULL, WM_CAPTURECHANGED, WM_CAPTURECHANGED, PM_REMOVE) ||
@@ -324,6 +338,7 @@ void ScalingRuntime::_ScalingThreadProc() noexcept {
 				return;
 			}
 			FrameTrace::Scope traceMessage(FrameTrace::Event::FrontendMessage, msg.message);
+			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 			if (scalingWindow.HasUrgentOverlayInput()) {
 				break;
@@ -351,6 +366,20 @@ void ScalingRuntime::_ScalingThreadProc() noexcept {
 
 		// Parameter callbacks only queue changes. Tear down here after rendering
 		// and window callbacks have returned, and service messages during the pause.
+		if (scalingWindow.ProcessPendingStop()) {
+			_State(ScalingState::Idle);
+			continue;
+		}
+		if (scalingWindow.ProcessPendingSourceTransition()) {
+			_State(scalingWindow.IsSrcRepositioning() ? ScalingState::Starting : ScalingState::Idle);
+			continue;
+		}
+		if (scalingWindow.HasPendingSourceTransition()) {
+			// Service releases/cancellation while waiting for the input owner.
+			// Do not retry rendering or rely on an already-signalled DXGI gate.
+			MsgWaitForMultipleObjectsEx(0, nullptr, 8, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+			continue;
+		}
 		const uint64_t generation = _commandGeneration.load(std::memory_order_acquire);
 		if (parameterRestartGeneration && *parameterRestartGeneration != generation) {
 			if (scalingWindow.IsWaitingForParameterRestart()) scalingWindow.Stop();
@@ -416,6 +445,10 @@ void ScalingRuntime::_ScalingThreadProc() noexcept {
 			// Rendering may have stopped the window. Do not dereference its
 			// Renderer or sleep on a deadline belonging to the old session.
 			if (!scalingWindow) continue;
+			if (scalingWindow.HasPendingSourceTransition() || scalingWindow.IsSourceStateCheckDeferred()) {
+				MsgWaitForMultipleObjectsEx(0, nullptr, 8, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+				continue;
+			}
 			rest = timeout - (steady_clock::now() - lastRenderTime);
 
 			// 值为 1000000

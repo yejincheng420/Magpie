@@ -11,6 +11,7 @@
 #pragma pop_macro("ShellExecute")
 #include <ShlObj.h>
 #include <wil/token_helpers.h>
+#include <span>
 
 namespace Magpie {
 
@@ -88,12 +89,56 @@ std::vector<DisplayTargetInfo> GetActiveDisplayTargets() noexcept {
 	return result;
 }
 
+float QuerySdrWhiteNits(std::wstring_view gdiDeviceName) noexcept {
+	UINT32 pathCount = 0;
+	UINT32 modeCount = 0;
+	if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) {
+		return 0.0f;
+	}
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount,
+		modes.data(), nullptr) != ERROR_SUCCESS) {
+		return 0.0f;
+	}
+	for (const auto& path : std::span(paths.data(), pathCount)) {
+		DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName{};
+		sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+		sourceName.header.size = sizeof(sourceName);
+		sourceName.header.adapterId = path.sourceInfo.adapterId;
+		sourceName.header.id = path.sourceInfo.id;
+		if (DisplayConfigGetDeviceInfo(&sourceName.header) != ERROR_SUCCESS ||
+			CompareStringOrdinal(sourceName.viewGdiDeviceName, -1,
+				gdiDeviceName.data(), static_cast<int>(gdiDeviceName.size()), TRUE) != CSTR_EQUAL) {
+			continue;
+		}
+		DISPLAYCONFIG_SDR_WHITE_LEVEL white{};
+		white.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+		white.header.size = sizeof(white);
+		white.header.adapterId = path.targetInfo.adapterId;
+		white.header.id = path.targetInfo.id;
+		if (DisplayConfigGetDeviceInfo(&white.header) == ERROR_SUCCESS && white.SDRWhiteLevel > 0) {
+			const float nits = 80.0f * static_cast<float>(white.SDRWhiteLevel) / 1000.0f;
+			return std::clamp(nits, 40.0f, 1000.0f);
+		}
+	}
+	return 0.0f;
+}
+
 bool EqualDeviceName(std::wstring_view left, std::wstring_view right) noexcept {
 	return CompareStringOrdinal(
 		left.data(), (int)left.size(),
 		right.data(), (int)right.size(), TRUE) == CSTR_EQUAL;
 }
 
+}
+
+float Win32Helper::GetMonitorSdrWhiteNits(HMONITOR monitor) noexcept {
+	if (!monitor) return 0.0f;
+	MONITORINFOEXW info{};
+	info.cbSize = sizeof(info);
+	if (!GetMonitorInfoW(monitor, &info)) return 0.0f;
+	return QuerySdrWhiteNits(info.szDevice);
 }
 
 std::vector<Win32Helper::DisplayMonitorInfo> Win32Helper::GetDisplayMonitors() noexcept {
@@ -528,45 +573,67 @@ bool Win32Helper::WriteFile(const wchar_t* fileName, std::span<uint8_t> buffer) 
 	return true;
 }
 
-bool Win32Helper::ReadTextFile(const wchar_t* fileName, std::string& result) noexcept {
+static void CaptureCrtFileError(uint32_t* systemError, DWORD fallback) noexcept {
+	if (!systemError) return;
+	unsigned long error = 0;
+	_get_doserrno(&error);
+	*systemError = error ? static_cast<uint32_t>(error) : fallback;
+}
+
+bool Win32Helper::ReadTextFile(const wchar_t* fileName, std::string& result, uint32_t* systemError) noexcept {
+	if (systemError) *systemError = 0;
 	Logger::Get().Info(StrHelper::Concat("读取文本文件: ", StrHelper::UTF16ToUTF8(fileName)));
 
 	wil::unique_file hFile;
+	_set_doserrno(0);
 	if (_wfopen_s(hFile.put(), fileName, L"rt") || !hFile) {
+		CaptureCrtFileError(systemError, ERROR_READ_FAULT);
 		Logger::Get().Error(StrHelper::Concat("打开文件 ", StrHelper::UTF16ToUTF8(fileName), " 失败"));
 		return false;
 	}
 
 	// 获取文件长度
 	int fd = _fileno(hFile.get());
+	_set_doserrno(0);
 	long size = _filelength(fd);
-	if (size < 0) return false;
+	if (size < 0) { CaptureCrtFileError(systemError, ERROR_READ_FAULT); return false; }
 
 	result.clear();
 	result.resize(static_cast<size_t>(size) + 1, 0);
 
+	_set_doserrno(0);
 	size_t readed = fread(result.data(), 1, size, hFile.get());
 	result.resize(readed);
 
-	return ferror(hFile.get()) == 0;
+	const bool succeeded = ferror(hFile.get()) == 0;
+	if (!succeeded) CaptureCrtFileError(systemError, ERROR_READ_FAULT);
+	return succeeded;
 }
 
-bool Win32Helper::WriteTextFile(const wchar_t* fileName, std::string_view text) noexcept {
+bool Win32Helper::WriteTextFile(const wchar_t* fileName, std::string_view text, uint32_t* systemError) noexcept {
+	if (systemError) *systemError = 0;
 	Logger::Get().Info(StrHelper::Concat("写入文本文件: ", StrHelper::UTF16ToUTF8(fileName)));
 
 	wil::unique_file hFile;
+	_set_doserrno(0);
 	if (_wfopen_s(hFile.put(), fileName, L"wt") || !hFile) {
+		CaptureCrtFileError(systemError, ERROR_WRITE_FAULT);
 		Logger::Get().Error(StrHelper::Concat("打开文件 ", StrHelper::UTF16ToUTF8(fileName), " 失败"));
 		return false;
 	}
 
+	_set_doserrno(0);
 	if (fwrite(text.data(), 1, text.size(), hFile.get()) != text.size() ||
 		fflush(hFile.get()) != 0) {
+		CaptureCrtFileError(systemError, ERROR_WRITE_FAULT);
 		Logger::Get().Error("Writing text file or flushing buffered data failed");
 		return false;
 	}
 	// Buffered writes may fail only when closing the file.
-	return fclose(hFile.release()) == 0;
+	_set_doserrno(0);
+	const bool succeeded = fclose(hFile.release()) == 0;
+	if (!succeeded) CaptureCrtFileError(systemError, ERROR_WRITE_FAULT);
+	return succeeded;
 }
 
 bool Win32Helper::FileExists(const wchar_t* fileName) noexcept {

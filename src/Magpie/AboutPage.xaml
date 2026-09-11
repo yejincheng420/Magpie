@@ -155,16 +155,16 @@
 				                 HorizontalSpacing="2"
 				                 Orientation="Horizontal"
 				                 VerticalSpacing="4">
-					<HyperlinkButton NavigateUri="https://github.com/Blinue/Magpie">
+					<HyperlinkButton NavigateUri="https://github.com/SAOG0721/Magpie">
 						<TextBlock x:Uid="About_OtherLinks_Repository" />
 					</HyperlinkButton>
-					<HyperlinkButton NavigateUri="https://github.com/Blinue/Magpie/wiki/FAQ">
+					<HyperlinkButton Click="FAQ_Click">
 						<TextBlock x:Uid="About_OtherLinks_FAQ" />
 					</HyperlinkButton>
-					<HyperlinkButton NavigateUri="https://github.com/Blinue/Magpie/blob/main/CONTRIBUTING.md">
+					<HyperlinkButton Click="ContributionGuidelines_Click">
 						<TextBlock x:Uid="About_OtherLinks_ContributionGuidelines" />
 					</HyperlinkButton>
-					<HyperlinkButton NavigateUri="https://github.com/Blinue/Magpie/blob/main/LICENSE">
+					<HyperlinkButton NavigateUri="https://github.com/SAOG0721/Magpie/blob/experimental/LICENSE">
 						<TextBlock x:Uid="About_OtherLinks_License" />
 					</HyperlinkButton>
 				</local:WrapPanel>

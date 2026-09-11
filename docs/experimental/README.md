@@ -1,6 +1,12 @@
 # Magpie 实验分支文档索引
 
-当前待发布版本：[0.6.6 Release Note](../RELEASE_NOTES_v0.6.6-experimental.md)。本版改进参数实时编辑、Front Edge Sync 滑条和重新启用后的浮窗恢复。此前 [0.6.5](../RELEASE_NOTES_v0.6.5-experimental.md) 的 r1–r10 记录保留历史，其中 DLSSNR 自动重启分类由 0.6.6 的实时更新替代。
+帧同步当前状态：保留 Front Edge 默认，普通效果与 DLSS FG 支持 Async／Reflex 驱动基础限帧，XeSS FG 由 XeLL 接管；自动回退仅记简短日志，实时参数面板不显示运行状态。见 [使用指南](../FRAME_SYNC_GUIDE.md) 与 [实施记录](reviews/20260909-v0.6.7-frame-sync-modes.md)。
+
+HDR 当前状态：旧配置页入口保持隐藏，新旧配置中的旧开关保持关闭；效果器选择器新增「HDR 组件」分类，仅显式转换链按节点启用 HDR 捕获／输出。见 [HDR 组件实施记录](reviews/20260908-v0.6.7-hdr-conversion-effects-plan.md)。
+
+当前 `0.6.7` 分支已合并到 `experimental` 开发主线，正在准备 [0.6.7 正式分发说明](../RELEASE_NOTES_v0.6.7-experimental.md)。主包、DLSSNR DLL 可选包和 NGX OTA 工具沿用 0.6.6 的附件结构；本地准备不包含上传或发布。见 [分发准备记录](reviews/20260910-v0.6.7-release-preparation.md)。
+
+当前功能已包含 Beta 1–6 的全部迭代，见 [Beta 6 TODO](todos/20260910-v0.6.7-beta6-TODO.md)、[Reflex 驱动限帧](reviews/20260910-beta6-reflex-pacing.md)、[HDR 组件](reviews/20260908-v0.6.7-hdr-conversion-effects-plan.md) 与 [参数输入验证](testing/PARAMETER-INPUT.md)。历史 [Beta 6 说明](../RELEASE_NOTES_v0.6.7-beta6.md)、[Beta 1 说明](../RELEASE_NOTES_v0.6.7-beta1.md)、[0.6.6 说明](../RELEASE_NOTES_v0.6.6-experimental.md) 保留。
 
 - [0.6.6 参数交互与本地验证](reviews/20260906-v0.6.6-parameter-interaction.md)
 - [0.6.6 停止缩放后的过期回调保护](reviews/20260906-v0.6.6-capture-shutdown.md)

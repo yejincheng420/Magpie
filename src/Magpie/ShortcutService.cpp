@@ -17,6 +17,7 @@
 // 为了使热键最大程度的可用，这两种方法都被使用。采用下述措施防止它们被同时触发: 
 // 1. 键盘钩子会先被触发，然后吞下热键，防止触发 RegisterHotKey
 // 2. 限制热键的触发频率
+// 实时参数快捷键需要激活输入窗口，单独保留 RegisterHotKey 的系统输入路径。
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -141,7 +142,6 @@ LRESULT CALLBACK ShortcutService::_LowLevelKeyboardProc(int nCode, WPARAM wParam
 	ShortcutService& that = Get();
 	if (nCode < 0) return CallNextHookEx(NULL, nCode, wParam, lParam);
 	const KBDLLHOOKSTRUCT* info = ((KBDLLHOOKSTRUCT*)lParam);
-
 	if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) && info->vkCode == VK_TAB &&
 		((info->flags & LLKHF_ALTDOWN) || (GetAsyncKeyState(VK_MENU) & 0x8000) ||
 			(GetAsyncKeyState(VK_LWIN) & 0x8000) || (GetAsyncKeyState(VK_RWIN) & 0x8000))) {
@@ -213,6 +213,11 @@ LRESULT CALLBACK ShortcutService::_LowLevelKeyboardProc(int nCode, WPARAM wParam
 		}
 
 		if (AppSettings::Get().GetShortcut(action) == curKeys) {
+			// Parameter editing activates a window. Let Windows deliver the
+			// registered hotkey so this process receives the user-input activation
+			// permission; a swallowed low-level event only queues our callback.
+			if (action == ShortcutAction::EffectParameters)
+				return CallNextHookEx(NULL, nCode, wParam, lParam);
 			// 防止长按时重复触发热键
 			if (!that._keyboardHookShortcutActivated) {
 				that._keyboardHookShortcutActivated = true;

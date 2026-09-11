@@ -32,6 +32,10 @@ ScalingModesViewModel::ScalingModesViewModel() {
 		auto_revoke, std::bind_front(&ScalingModesViewModel::_ScalingModesService_Moved, this));
 	_scalingModeRemovedRevoker = ScalingModesService::Get().ScalingModeRemoved(
 		auto_revoke, std::bind_front(&ScalingModesViewModel::_ScalingModesService_Removed, this));
+	_scalingModeRemovingRevoker = ScalingModesService::Get().ScalingModeRemoving(
+		auto_revoke, std::bind_front(&ScalingModesViewModel::_ScalingModesService_Removing, this));
+	_scalingModeNamesChangedRevoker = ScalingModesService::Get().ScalingModeNamesChanged(
+		auto_revoke, [this] { RaisePropertyChanged(L"HasDuplicateNames"); });
 	_scalingModesResetRevoker = ScalingModesService::Get().ScalingModesReset(
 		auto_revoke, std::bind_front(&ScalingModesViewModel::_ScalingModesService_Reset, this));
 }
@@ -87,9 +91,10 @@ fire_and_forget ScalingModesViewModel::Export() noexcept {
 	ScalingModesService::Get().Export(writer);
 	writer.EndObject();
 
-	if (!Win32Helper::WriteTextFile(fileName->c_str(), { json.GetString(), json.GetLength() })) {
+	uint32_t systemError = 0;
+	if (!Win32Helper::WriteTextFile(fileName->c_str(), { json.GetString(), json.GetLength() }, &systemError)) {
 		ErrorService::Get().Report(ScalingError::ExportWriteFailed,
-			StrHelper::UTF16ToUTF8(fileName->native()));
+			StrHelper::UTF16ToUTF8(fileName->native()), nullptr, systemError);
 	}
 }
 
@@ -121,9 +126,10 @@ fire_and_forget ScalingModesViewModel::Import() {
 	}
 
 	std::string json;
-	if (!Win32Helper::ReadTextFile(fileName->c_str(), json)) {
+	uint32_t systemError = 0;
+	if (!Win32Helper::ReadTextFile(fileName->c_str(), json, &systemError)) {
 		ErrorService::Get().Report(ScalingError::ImportReadFailed,
-			StrHelper::UTF16ToUTF8(fileName->native()));
+			StrHelper::UTF16ToUTF8(fileName->native()), nullptr, systemError);
 		co_return;
 	}
 
@@ -148,16 +154,24 @@ fire_and_forget ScalingModesViewModel::Import() {
 		co_return;
 	}
 	if (!doc.IsObject() || !doc.HasMember("scalingModes") || !doc["scalingModes"].IsArray()) {
-		ErrorService::Get().Report(ScalingError::ImportWrongFileType, path);
+		ErrorService::Get().Report(ScalingError::ImportWrongFileType,
+			path + " / Expected a JSON object containing a scalingModes array");
 		co_return;
 	}
 	if (doc["scalingModes"].Empty()) {
 		ErrorService::Get().Report(ScalingError::ImportEmpty, path);
 		co_return;
 	}
-	if (!ScalingModesService::Get().Import(((const rapidjson::Document&)doc).GetObj(), false)) {
+	uint32_t renamedCount = 0;
+	if (!ScalingModesService::Get().Import(((const rapidjson::Document&)doc).GetObj(), false, &renamedCount)) {
 		ErrorService::Get().Report(ScalingError::ImportIncompatible, path);
+	} else if (renamedCount) {
+		ToastService::Get().ShowMessageInApp({}, resourceLoader.GetString(L"ScalingModes_ImportRenamed"));
 	}
+}
+
+bool ScalingModesViewModel::HasDuplicateNames() const noexcept {
+	return ScalingModesService::Get().HasDuplicateNames();
 }
 
 bool ScalingModesViewModel::CanReorderScalingModes() const noexcept {
@@ -167,21 +181,8 @@ bool ScalingModesViewModel::CanReorderScalingModes() const noexcept {
 void ScalingModesViewModel::AddScalingMode() {
 	ResourceLoader resourceLoader =
 		ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
-	std::wstring baseName(resourceLoader.GetString(L"ScalingModes_NewScalingMode/Text"));
-	std::wstring name = baseName;
-
-	const auto& scalingModes = AppSettings::Get().ScalingModes();
-	for (uint32_t suffix = 2;; ++suffix) {
-		const bool exists = std::any_of(scalingModes.begin(), scalingModes.end(), [&name](const ScalingMode& mode) {
-			return mode.name == name;
-		});
-		if (!exists) {
-			break;
-		}
-		name = baseName + L" (" + std::to_wstring(suffix) + L")";
-	}
-
-	ScalingModesService::Get().AddScalingMode(name, -1);
+	ScalingModesService::Get().AddScalingMode(
+		resourceLoader.GetString(L"ScalingModes_NewScalingMode/Text"), -1);
 }
 
 fire_and_forget ScalingModesViewModel::_AddScalingModes(
@@ -266,10 +267,11 @@ fire_and_forget ScalingModesViewModel::_AddScalingModes(
 
 void ScalingModesViewModel::_ScalingModesService_Added(EffectAddedWay way) {
 	// 不支持在事件回调中修改事件本身，因此延迟执行
-	App::Get().Dispatcher().TryEnqueue([this, way]() {
-		_AddScalingModes(
-			way != EffectAddedWay::Import,
-			way == EffectAddedWay::Add);
+	App::Get().Dispatcher().TryEnqueue([weakThis = get_weak(), way]() {
+		if (auto self = weakThis.get()) {
+			self->_AddScalingModes(way != EffectAddedWay::Import, way == EffectAddedWay::Add);
+			self->RaisePropertyChanged(L"HasDuplicateNames");
+		}
 	});
 }
 
@@ -285,11 +287,24 @@ void ScalingModesViewModel::_ScalingModesService_Moved(uint32_t fromIndex, uint3
 	_updatingScalingModes = false;
 }
 
+void ScalingModesViewModel::_ScalingModesService_Removing(uint32_t index) {
+	++_collectionGeneration;
+	_movingFromIdx = std::numeric_limits<uint32_t>::max();
+	// Update every loaded model before erasing data or triggering XAML collection callbacks.
+	for (const IInspectable& item : _scalingModes) {
+		get_self<ScalingModeItem>(item.as<winrt::Magpie::ScalingModeItem>())->PrepareForRemoval(index);
+	}
+}
+
 void ScalingModesViewModel::_ScalingModesService_Removed(uint32_t index) {
 	_updatingScalingModes = true;
-	_scalingModes.RemoveAt(index);
+	if (index < _scalingModes.Size()) _scalingModes.RemoveAt(index);
 	_updatingScalingModes = false;
+	for (const IInspectable& item : _scalingModes) {
+		get_self<ScalingModeItem>(item.as<winrt::Magpie::ScalingModeItem>())->RefreshAfterRemoval();
+	}
 	RaisePropertyChanged(L"CanReorderScalingModes");
+	RaisePropertyChanged(L"HasDuplicateNames");
 }
 
 void ScalingModesViewModel::_ScalingModesService_Reset() {
@@ -299,10 +314,14 @@ void ScalingModesViewModel::_ScalingModesService_Reset() {
 	_movingFromIdx = std::numeric_limits<uint32_t>::max();
 
 	_updatingScalingModes = true;
+	for (const IInspectable& item : _scalingModes) {
+		get_self<ScalingModeItem>(item.as<winrt::Magpie::ScalingModeItem>())->Detach();
+	}
 	_scalingModes.Clear();
 	_updatingScalingModes = false;
 	_AddScalingModes();
 	RaisePropertyChanged(L"CanReorderScalingModes");
+	RaisePropertyChanged(L"HasDuplicateNames");
 }
 
 void ScalingModesViewModel::_ScalingModes_VectorChanged(

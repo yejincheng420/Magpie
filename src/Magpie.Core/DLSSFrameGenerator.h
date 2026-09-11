@@ -5,11 +5,11 @@ namespace Magpie {
 
 class DeviceResources;
 class NgxD3D12Core;
+class ReflexController;
 
 struct DLSSFrameGenerationSettings {
 	uint32_t multiplier = 2;
-	NvidiaOpticalFlowQuality motionVectorQuality =
-		NvidiaOpticalFlowQuality::Balanced;
+	MotionVectorRequest motionRequest{};
 };
 
 // Experimental DLSS Frame Generation adapter. It consumes final effect-chain
@@ -17,7 +17,7 @@ struct DLSSFrameGenerationSettings {
 class DLSSFrameGenerator {
 public:
 	struct Impl;
-	using PublishCallback = std::function<bool(ID3D11Texture2D*)>;
+	using PublishCallback = std::function<bool(ID3D11Texture2D*, uint64_t)>;
 
 	DLSSFrameGenerator();
 	DLSSFrameGenerator(const DLSSFrameGenerator&) = delete;
@@ -44,6 +44,7 @@ public:
 		const FrameGuidanceView& zeroGuidance,
 		const PublishCallback& publishGeneratedFrame) noexcept;
 	void RequestHistoryReset() noexcept;
+	void SetReflexController(ReflexController* controller) noexcept;
 	bool Drain() noexcept;
 
 	FrameGuidanceRequirements GetFrameGuidanceRequirements() const noexcept;

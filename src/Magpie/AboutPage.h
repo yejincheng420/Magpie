@@ -14,6 +14,8 @@ struct AboutPage : AboutPageT<AboutPage> {
 	void BugReport_Click(IInspectable const&, RoutedEventArgs const&);
 	void FeatureRequest_Click(IInspectable const&, RoutedEventArgs const&);
 	void Discussions_Click(IInspectable const&, RoutedEventArgs const&);
+	void FAQ_Click(IInspectable const&, RoutedEventArgs const&);
+	void ContributionGuidelines_Click(IInspectable const&, RoutedEventArgs const&);
 
 	void InfoBar_SizeChanged(IInspectable const& sender, SizeChangedEventArgs const&) const;
 

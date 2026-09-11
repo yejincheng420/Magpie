@@ -203,7 +203,11 @@ File.Delete(configFileName);
       <_ReferenceRelatedPaths Remove="@(_ReferenceRelatedPaths)" Condition="'%(Filename)' == 'Microsoft.UI.Xaml' And '%(Extension)' != '.winmd'" />
     </ItemGroup>
 
-    <ExtractWinUIRuntime Condition="'@(_WinUIWinmdReference)' != ''" WinUIWinmdPath="@(_WinUIWinmdReference)" ObjDir="$(SolutionDir)\obj" Platform="$(Platform)">
+    <PropertyGroup>
+      <_WinUIObjRoot>$(SolutionDir)\obj</_WinUIObjRoot>
+      <_WinUIObjRoot Condition="'$(MagpieIntermediateRoot)' != ''">$(MagpieIntermediateRoot)</_WinUIObjRoot>
+    </PropertyGroup>
+    <ExtractWinUIRuntime Condition="'@(_WinUIWinmdReference)' != ''" WinUIWinmdPath="@(_WinUIWinmdReference)" ObjDir="$(_WinUIObjRoot)" Platform="$(Platform)">
       <Output TaskParameter="WinUIDllPath" PropertyName="WinUIDllPath" />
       <Output TaskParameter="WinUIPriPath" PropertyName="WinUIPriPath" />
       <Output TaskParameter="IsWinUIPrerelease" PropertyName="IsWinUIPrerelease" />

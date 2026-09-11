@@ -51,6 +51,7 @@ public:
 	void OnTaskSwitch();
 	void EffectParameterEdited(uint32_t modeIdx, uint32_t effectIdx,
 		const std::string& parameter, float value);
+	void RetryConfigurationSave(std::function<void(bool)> completed);
 
 	Event<bool, bool> IsTimerOnChanged;
 	Event<double> TimerTick;
@@ -83,6 +84,7 @@ private:
 	winrt::DispatcherQueueTimer _checkForegroundTimer{ nullptr };
 
 	Event<winrt::Magpie::ShortcutAction>::EventRevoker _shortcutActivatedRevoker;
+	Event<winrt::Magpie::ShortcutAction>::EventRevoker _toolbarShortcutsChangedRevoker;
 	Event<>::EventRevoker _frameSyncChangedRevoker;
 
 	std::chrono::steady_clock::time_point _timerStartTimePoint;
@@ -104,6 +106,7 @@ private:
 	void _FlushEffectParametersSaves(bool synchronous = false);
 	winrt::DispatcherQueueTimer _effectParametersSaveTimer{ nullptr };
 	std::vector<PendingEffectParametersSave> _pendingEffectParametersSaves;
+	std::vector<std::weak_ptr<EffectParametersSaveState>> _parameterSaveStates;
 	std::chrono::steady_clock::time_point _firstEffectParametersEdit{};
 };
 

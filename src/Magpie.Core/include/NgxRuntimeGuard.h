@@ -5,8 +5,6 @@
 
 namespace Magpie {
 
-// An SEH can bypass NGX's internal unlocks. This state belongs to the process,
-// not a Renderer, and deliberately has no reset/retry operation.
 class NgxRuntimeGuard {
 public:
 	static bool IsFaulted() noexcept { return _faultCode.load(std::memory_order_acquire) != 0; }
@@ -16,8 +14,6 @@ public:
 
 	template<typename Function, typename Result>
 	static Result Invoke(Function&& function, Result failure, DWORD* sehCode) noexcept {
-		// Serialize the availability check with SDK entry and fault publication.
-		// This lock is outside the SEH frame, so ordinary C++ cleanup releases it.
 		std::lock_guard lock(_callMutex);
 		*sehCode = 0;
 		if (IsFaulted()) return failure;

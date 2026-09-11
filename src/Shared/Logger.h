@@ -48,6 +48,22 @@ private:
 
 class Logger {
 public:
+	// Explicit, thread-local scope for a failed operation's technical details.
+	// Keeps nested SDK errors available to the UI without scraping log files.
+	class DiagnosticCapture {
+	public:
+		DiagnosticCapture() noexcept;
+		~DiagnosticCapture();
+		DiagnosticCapture(const DiagnosticCapture&) = delete;
+		DiagnosticCapture& operator=(const DiagnosticCapture&) = delete;
+		const std::string& Details() const noexcept { return _details; }
+		uint32_t SystemError() const noexcept { return _systemError; }
+	private:
+		friend class Logger;
+		DiagnosticCapture* _previous;
+		std::string _details;
+		uint32_t _systemError = 0;
+	};
 	static Logger& Get() noexcept {
 		static Logger instance;
 		return instance;
@@ -100,6 +116,7 @@ public:
 	}
 
 	void Win32Error(std::string_view msg, const SourceLocation& location = SourceLocation::Current()) noexcept {
+		_CaptureSystemError(GetLastError());
 		_Log(spdlog::level::err, _MakeWin32ErrorMsg(msg), location);
 	}
 
@@ -108,6 +125,7 @@ public:
 	}
 
 	void ComError(std::string_view msg, HRESULT hr, const SourceLocation& location = SourceLocation::Current()) noexcept {
+		_CaptureSystemError(static_cast<uint32_t>(hr));
 		_Log(spdlog::level::err, _MakeComErrorMsg(msg, hr), location);
 	}
 
@@ -128,6 +146,8 @@ public:
 	}
 
 private:
+	static thread_local DiagnosticCapture* _diagnosticCapture;
+	static void _CaptureSystemError(uint32_t error) noexcept;
 	static std::string _MakeWin32ErrorMsg(std::string_view msg) noexcept {
 		return fmt::format("{}\n\tLastErrorCode: {}", msg, GetLastError());
 	}

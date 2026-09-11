@@ -1,9 +1,12 @@
 #pragma once
+#include "EffectPickerModel.h"
 
 namespace Magpie {
 
 struct EffectHelper {
 	static std::wstring_view GetDisplayName(std::wstring_view fullName) noexcept {
+		const int rtxFamily = RTXVideoFamily(fullName);
+		if (rtxFamily >= 0) return rtxFamily == 0 ? L"RTXVideo_Denoise" : L"RTXVideo_VSR";
 		// Display aliases only: saved effect IDs and all other effect names stay intact.
 		if (fullName == L"XeSSFG\\XeSS_FrameGeneration_x2_ZeroMV") {
 			return L"XeSS_FrameGeneration_x2";

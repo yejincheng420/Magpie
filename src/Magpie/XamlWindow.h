@@ -7,6 +7,7 @@
 #include "XamlHelper.h"
 #include <CoreWindow.h>
 #include <dwmapi.h>
+#include <cmath>
 #include <shellapi.h>
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 #include <winrt/Windows.UI.Xaml.Hosting.h>
@@ -43,6 +44,13 @@ public:
 
 	uint32_t CurrentDpi() const noexcept {
 		return _currentDpi;
+	}
+
+	POINT XamlRootPointToScreen(winrt::Windows::Foundation::Point point) const noexcept {
+		const double scale = _currentDpi / 96.0;
+		POINT screen{LONG(std::lround(point.X * scale)), LONG(std::lround(point.Y * scale))};
+		ClientToScreen(_hwndXamlIsland, &screen);
+		return screen;
 	}
 
 	Event<uint32_t> DpiChanged;

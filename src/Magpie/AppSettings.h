@@ -36,6 +36,7 @@ struct _AppSettingsData {
 	uint32_t _experimentalDlssnrSettingsVersion = 2;
 	uint32_t _experimentalDlssSrSettingsVersion = 1;
 	uint32_t _experimentalDepthRemovalVersion = 1;
+	uint32_t _experimentalOpticalFlowDefaultsVersion = 1;
 
 	// LocalizationService::SupportedLanguages 索引
 	// -1 表示使用系统设置
@@ -58,8 +59,10 @@ struct _AppSettingsData {
 
 	float _minFrameRate = 10.0f;
 	bool _isFrontEdgeSyncEnabled = true;
+	bool _isStopEffectsOnTaskSwitchEnabled = false;
 	bool _isVRREnabled = false;
 	float _frontEdgeSyncFrameRate = 60.0f;
+	FrameSyncMode _frameSyncMode = FrameSyncMode::FrontEdge;
 
 	ToolbarState _fullscreenInitialToolbarState = ToolbarState::AutoHide;
 	ToolbarState _windowedInitialToolbarState = ToolbarState::AutoHide;
@@ -92,6 +95,7 @@ struct _AppSettingsData {
 
 class AppSettings : private _AppSettingsData {
 public:
+	void MarkConfigMigrationNeeded() noexcept { _isConfigMigrationNeeded = true; }
 	static AppSettings& Get() noexcept {
 		static AppSettings instance;
 		return instance;
@@ -100,6 +104,7 @@ public:
 	virtual ~AppSettings();
 
 	bool Initialize() noexcept;
+	void PublishStartupNotice() noexcept;
 
 	bool Save() noexcept;
 
@@ -336,6 +341,12 @@ public:
 	}
 
 
+	bool IsStopEffectsOnTaskSwitchEnabled() const noexcept { return _isStopEffectsOnTaskSwitchEnabled; }
+	void IsStopEffectsOnTaskSwitchEnabled(bool value) noexcept {
+		if (_isStopEffectsOnTaskSwitchEnabled == value) return;
+		_isStopEffectsOnTaskSwitchEnabled = value;
+		SaveAsync();
+	}
 	bool IsFrontEdgeSyncEnabled() const noexcept { return _isFrontEdgeSyncEnabled; }
 	void IsFrontEdgeSyncEnabled(bool value) noexcept {
 		if (_isFrontEdgeSyncEnabled == value) return;
@@ -349,6 +360,13 @@ public:
 		SaveAsync();
 	}
 	float FrontEdgeSyncFrameRate() const noexcept { return _frontEdgeSyncFrameRate; }
+	FrameSyncMode GetFrameSyncMode() const noexcept { return _frameSyncMode; }
+	void SetFrameSyncMode(FrameSyncMode value) noexcept {
+		if (!IsValidFrameSyncMode(value) || _frameSyncMode == value) return;
+		_frameSyncMode = value;
+		FrontEdgeSyncChanged.Invoke();
+		SaveAsync();
+	}
 	void FrontEdgeSyncFrameRate(float value) noexcept {
 		value = SanitizePresentationFrameRate(value);
 		if (_frontEdgeSyncFrameRate == value) return;
@@ -400,6 +418,9 @@ public:
 	Event<bool> IsAutoCheckForUpdatesChanged;
 
 private:
+	std::filesystem::path _recoveredConfigPath;
+	ScalingError _recoveryNotice = ScalingError::ConfigurationRecoveredPartial;
+	std::string _recoveryDetails;
 	AppSettings() = default;
 
 	AppSettings(const AppSettings&) = delete;
@@ -412,7 +433,8 @@ private:
 	bool _LoadProfile(
 		const rapidjson::GenericObject<true, rapidjson::Value>& profileObj,
 		Profile& profile,
-		bool isDefault = false
+		bool isDefault = false,
+		bool legacyParameterFocusSwitching = false
 	) const noexcept;
 	bool _SetDefaultShortcuts() noexcept;
 	void _SetDefaultScalingModes() noexcept;

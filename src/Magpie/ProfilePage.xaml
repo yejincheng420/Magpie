@@ -49,6 +49,11 @@
 						<ComboBoxItem x:Uid="Profile_General_AutoScale_Windowed" />
 					</ComboBox>
 				</local:SettingsCard>
+				<local:SettingsCard x:Uid="Profile_General_ParameterFocusSwitching" IsWrapEnabled="True">
+					<local:SettingsCard.HeaderIcon><FontIcon Glyph="&#xE9E9;" /></local:SettingsCard.HeaderIcon>
+					<ToggleSwitch x:Uid="ToggleSwitch"
+					              IsOn="{x:Bind ViewModel.IsParameterFocusSwitchingEnabled, Mode=TwoWay}" />
+				</local:SettingsCard>
 				<local:SettingsCard x:Uid="Profile_General_3DGameMode">
 					<local:SettingsCard.HeaderIcon>
 						<FontIcon Glyph="&#xE7FC;" />
@@ -56,6 +61,7 @@
 					<ToggleSwitch x:Uid="ToggleSwitch"
 					              IsOn="{x:Bind ViewModel.Is3DGameMode, Mode=TwoWay}" />
 				</local:SettingsCard>
+				<!-- HDR compatibility is temporarily unavailable while explicit conversion effects are designed. -->
 				<local:SettingsCard x:Name="MultimonitorSettingsCard"
 				                    x:Uid="Profile_General_Multimonitor"
 				                    x:Load="{x:Bind ViewModel.HasMultipleMonitors, Mode=OneTime}"

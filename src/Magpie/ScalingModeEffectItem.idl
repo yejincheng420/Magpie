@@ -8,6 +8,7 @@ namespace Magpie {
 		UInt32 ScalingModeIdx;
 		UInt32 EffectIdx;
 		String Name { get; };
+		String IssueDescription { get; };
 
 		Boolean CanScale { get; };
 		Boolean HasParameters { get; };

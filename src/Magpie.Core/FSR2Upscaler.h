@@ -1,5 +1,6 @@
 #pragma once
 #include "NativeEffectBackend.h"
+#include "GroupBEffectProtocol.h"
 
 namespace Magpie {
 
@@ -16,6 +17,9 @@ public:
 		MotionVectorRequest motionRequest = {}) noexcept;
 	bool Resize(DeviceResources& resources, ID3D11Texture2D* input, ID3D11Texture2D* output) noexcept override;
 	bool Draw(const NativeEffectDrawContext& context) noexcept override;
+	void SetFsrHdrProtocol(const FsrHdrProtocol& protocol) noexcept {
+		_hdrProtocol = protocol;
+	}
 	FrameGuidanceRequirements GetFrameGuidanceRequirements() const noexcept override {
 		FrameGuidanceRequirements result{ .zero = true };
 		result.Add(_motionRequest);
@@ -30,8 +34,7 @@ private:
 	MotionVectorRequest _motionRequest{};
 	void _Reset() noexcept;
 
-	// 以下字段仅在 MP_ENABLE_FSR2_ZEROMV 构建中使用；无 SDK 的 CI 构建里
-	// ClangCL -Werror、-Wunused-private-field 会报错
+	// These fields are active only in the MP_ENABLE_FSR2_ZEROMV build.
 	[[maybe_unused]] ID3D11Device* _device = nullptr;
 	[[maybe_unused]] ID3D11DeviceContext4* _d3dDC = nullptr;
 	[[maybe_unused]] HMODULE _coreModule = nullptr;
@@ -52,9 +55,12 @@ private:
 	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _zeroDepthUav;
 	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _reactive;
 	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _reactiveUav;
+	[[maybe_unused]] winrt::com_ptr<ID3D11Texture2D> _exposure;
+	[[maybe_unused]] winrt::com_ptr<ID3D11UnorderedAccessView> _exposureUav;
 	[[maybe_unused]] bool _resetHistory = true;
 	[[maybe_unused]] FrameGuidanceFrameId _lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
 	[[maybe_unused]] bool _enableOpticalFlow = false;
+	FsrHdrProtocol _hdrProtocol{};
 };
 
 }

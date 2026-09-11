@@ -15,7 +15,10 @@ public:
 	StepTimer(const StepTimer&) = delete;
 	StepTimer(StepTimer&&) = delete;
 
-	void Initialize(float minFrameRate, std::optional<float> maxFrameRate) noexcept;
+	void Initialize(float minFrameRate, std::optional<float> maxFrameRate, bool strictStart = false) noexcept;
+	void CaptureStarting() noexcept {
+		if (_strictStart) _nextFrameStartTime = std::chrono::steady_clock::now();
+	}
 
 	StepTimerStatus WaitForNextFrame(bool waitForNewFrame, bool& fpsUpdated,
 		HANDLE frameArrivedEvent = nullptr) noexcept;
@@ -32,6 +35,8 @@ public:
 	}
 
 private:
+	bool _strictStart = false;
+	wil::unique_handle _strictTimer;
 	bool _HasMinInterval() const noexcept;
 	bool _HasMaxInterval() const noexcept;
 

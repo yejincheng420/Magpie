@@ -5,6 +5,34 @@
 
 namespace Magpie {
 
+// Owned by one FIFO notification, including across retries. These are wall
+// intervals between attempts (which may service input), not GPU durations.
+struct PresentationJobTiming {
+	using Clock = std::chrono::steady_clock;
+	enum class Wait { None, Deadline, Capacity, Resource };
+	Clock::time_point enqueued = Clock::now();
+	Clock::time_point retryStarted{};
+	Wait waiting = Wait::None;
+	std::chrono::nanoseconds deadline{}, capacity{}, resource{}, cpu{};
+	std::chrono::nanoseconds beginFrame{}, draw{}, endFrame{};
+	uint32_t attempts = 0;
+	void Resume(Clock::time_point now) noexcept {
+		const auto elapsed = std::max(now - retryStarted, Clock::duration::zero());
+		switch (waiting) {
+		case Wait::Deadline: deadline += elapsed; break;
+		case Wait::Capacity: capacity += elapsed; break;
+		case Wait::Resource: resource += elapsed; break;
+		default: break;
+		}
+		waiting = Wait::None;
+	}
+	void Retry(Wait reason, Clock::time_point now) noexcept {
+		Resume(now);
+		waiting = reason;
+		retryStarted = now;
+	}
+};
+
 // One deadline per submitted image/input. Small lateness can correct phase,
 // but never admits a new frame less than 75% of a period after the previous
 // one. Long stalls re-anchor instead of accumulating catch-up submissions.

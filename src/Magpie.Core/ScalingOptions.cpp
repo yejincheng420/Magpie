@@ -56,6 +56,7 @@ void ScalingOptions::Log() const noexcept {
 	IsCaptureTitleBar: {}
 	IsAdjustCursorSpeed: {}
 	IsDirectFlipDisabled: {}
+	IsHdrCompatibilityEnabled: {}
 	cropping: {},{},{},{}
 	graphicsCardId:
 		idx: {}
@@ -65,6 +66,7 @@ void ScalingOptions::Log() const noexcept {
 	maxFrameRate: {}
 	frontEdgeSync: {}
 	frontEdgeSyncFrameRate: {}
+	frameSyncMode: {}
 	vrr: {}
 	cursorScaling: {}
 	captureMethod: {}
@@ -94,6 +96,7 @@ void ScalingOptions::Log() const noexcept {
 		IsCaptureTitleBar(),
 		IsAdjustCursorSpeed(),
 		IsDirectFlipDisabled(),
+		IsHdrCompatibilityEnabled(),
 		cropping.Left, cropping.Top, cropping.Right, cropping.Bottom,
 		graphicsCardId.idx,
 		graphicsCardId.vendorId,
@@ -102,6 +105,7 @@ void ScalingOptions::Log() const noexcept {
 		maxFrameRate.has_value() ? *maxFrameRate : 0.0f,
 		isFrontEdgeSyncEnabled,
 		frontEdgeSyncFrameRate,
+		static_cast<uint32_t>(frameSyncMode),
 		isVRREnabled,
 		cursorScaling,
 		(int)captureMethod,

@@ -6,6 +6,11 @@
 #include "StrHelper.h"
 #include "ToastService.h"
 #include "Win32Helper.h"
+#include "AdaptersService.h"
+#include "AppSettings.h"
+#include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
 namespace Magpie {
 
@@ -22,6 +27,15 @@ static const wchar_t* MessageKey(ScalingError error) noexcept {
 	case ScalingError::BannedInWindowedMode: return L"Message_BannedInWindowedMode";
 	case ScalingError::ScalingFailedGeneral: return L"Message_ScalingFailedGeneral";
 	case ScalingError::CaptureFailed: return L"Message_CaptureFailed";
+	case ScalingError::HdrComponentExpectedHdr: return L"Message_HdrComponentExpectedHdr";
+	case ScalingError::HdrComponentExpectedSdr: return L"Message_HdrComponentExpectedSdr";
+	case ScalingError::HdrComponentMissingPair: return L"Message_HdrComponentMissingPair";
+	case ScalingError::HdrComponentInvalidParameters: return L"Message_HdrComponentInvalidParameters";
+	case ScalingError::HdrCaptureRequired: return L"Message_HdrCaptureRequired";
+	case ScalingError::HdrDisplayRequired: return L"Message_HdrDisplayRequired";
+	case ScalingError::HdrCaptureMethodRequired: return L"Message_HdrCaptureMethodRequired";
+	case ScalingError::RtxHdrUnavailable: return L"Message_RtxHdrUnavailable";
+	case ScalingError::CaptureMethodUnavailable: return L"Message_CaptureMethodUnavailable";
 	case ScalingError::CreateFenceFailed: return L"Message_CreateFenceFailed";
 	case ScalingError::NvidiaVsrPathUnsupported: return L"Message_NvidiaVsrPathUnsupported";
 	case ScalingError::OpticalFlowProviderUnavailable: return L"Message_OpticalFlowProviderUnavailable";
@@ -71,8 +85,90 @@ static const wchar_t* MessageKey(ScalingError error) noexcept {
 	case ScalingError::FileDialogFailed: return L"Message_FileDialogFailed";
 	case ScalingError::PassThroughUnavailable: return L"Message_PassThroughUnavailable";
 	case ScalingError::NgxRestartRequired: return L"Message_NgxRestartRequired";
+	case ScalingError::ScreenshotIntermediateEncodeFailed: return L"Message_ScreenshotIntermediateEncodeFailed";
+	case ScalingError::ConfigurationRecoveredBackup: return L"Message_ConfigurationRecoveredBackup";
+	case ScalingError::ConfigurationRecoveredPartial: return L"Message_ConfigurationRecoveredPartial";
+	case ScalingError::ConfigurationRepaired: return L"Message_ConfigurationRepaired";
+	case ScalingError::ConfigurationResetDefaults: return L"Message_ConfigurationResetDefaults";
+	case ScalingError::DuplicateScalingModeNames: return L"Message_DuplicateScalingModeNames";
 	default: return L"Message_ScalingFailedGeneral";
 	}
+}
+
+static std::filesystem::path IssueRecordPath() {
+	return AppSettings::Get().ConfigDir() / L"last-issue.json";
+}
+
+void ErrorService::Initialize() noexcept {
+	try {
+		const auto path = IssueRecordPath();
+		std::error_code ec;
+		const auto size = std::filesystem::file_size(path, ec);
+		if (ec || size > 128 * 1024) return;
+		std::string json;
+		if (!Win32Helper::ReadTextFile(path.c_str(), json)) return;
+		rapidjson::Document doc;
+		doc.Parse(json.data(), json.size());
+		if (!doc.IsObject() || !doc.HasMember("summary") || !doc["summary"].IsString() ||
+			!doc.HasMember("details") || !doc["details"].IsString()) return;
+		const auto loader = winrt::ResourceLoader::GetForViewIndependentUse(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+		_summary = winrt::hstring(fmt::format(fmt::runtime(std::wstring_view(loader.GetString(L"ErrorDetails_PreviousRun"))),
+			StrHelper::UTF8ToUTF16(doc["summary"].GetString())));
+		_details = winrt::hstring(std::wstring(loader.GetString(L"ErrorDetails_PreviousRunHint")) + L"\n\n" +
+			StrHelper::UTF8ToUTF16(doc["details"].GetString()));
+		// Never replay actions for a previous run: unsaved drafts and profiles may have changed.
+		_action = IssueAction::None;
+		_isInformational = true;
+		_isIssueVisible = true;
+		++_revision;
+	} catch (...) {
+		Logger::Get().Warn("Unable to restore last diagnostic record");
+	}
+}
+
+void ErrorService::_Persist() noexcept {
+	try {
+		rapidjson::StringBuffer json;
+		rapidjson::Writer<rapidjson::StringBuffer> writer(json);
+		writer.StartObject();
+		const std::string summary = StrHelper::UTF16ToUTF8(_summary);
+		const std::string details = StrHelper::UTF16ToUTF8(_details);
+		writer.Key("summary"); writer.String(summary.c_str(), static_cast<rapidjson::SizeType>(summary.size()));
+		writer.Key("details"); writer.String(details.c_str(), static_cast<rapidjson::SizeType>(details.size()));
+		writer.EndObject();
+		const auto path = IssueRecordPath();
+		const auto temporary = std::filesystem::path(path.native() + L".tmp");
+		if (Win32Helper::WriteTextFile(temporary.c_str(), { json.GetString(), json.GetLength() })) {
+			MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+		}
+	} catch (...) {
+		// A diagnostic write failure must not replace the user's original problem.
+	}
+}
+
+void ErrorService::ConfigurationSaved(uint64_t saveRevision, uint64_t submittedIssueRevision) noexcept {
+	winrt::Magpie::implementation::App::Get().Dispatcher().TryEnqueue([this, saveRevision, submittedIssueRevision] {
+		if (!_saveOutcomes.Record(saveRevision, true)) return;
+		// A failure may have reached the UI after this successful save was submitted.
+		// Compare save versions as well as the issue snapshot, and preserve unrelated issues.
+		if (_saveOutcomes.ResolvesCurrentIssue(saveRevision, submittedIssueRevision, _revision, _action)) {
+			SavedSuccessfully(_revision);
+		}
+	});
+}
+
+void ErrorService::SavedSuccessfully(uint64_t issueRevision) noexcept {
+	if (_revision != issueRevision || _action != IssueAction::RetrySave) return;
+	try {
+		const auto loader = winrt::ResourceLoader::GetForViewIndependentUse(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+		_summary = loader.GetString(L"ErrorDetails_SaveSucceeded");
+		_isInformational = true;
+		_details = winrt::hstring(std::wstring(_summary) + L"\n\n" + std::wstring(_details));
+		_action = IssueAction::None;
+		++_revision;
+		_Persist();
+		Changed.Invoke();
+	} catch (...) {}
 }
 
 void ErrorService::DismissIssue() {
@@ -82,32 +178,79 @@ void ErrorService::DismissIssue() {
 }
 
 void ErrorService::Report(ScalingError error, std::string context, HWND target,
-	uint32_t systemError) noexcept {
+	uint32_t systemError, IssueContext issueContext, uint64_t saveRevision) noexcept {
 	if (error == ScalingError::NoError) return;
 	try {
-		Logger::Get().Error(fmt::format("Diagnostic MP-{:03}: system={} context={}",
-			static_cast<int>(error), systemError, context));
+		const auto diagnostic = fmt::format("Diagnostic MP-{:03}: system={} context={}",
+			static_cast<int>(error), systemError, context);
+		if (IsRecoveryNotice(error) || error == ScalingError::DuplicateScalingModeNames) Logger::Get().Info(diagnostic);
+		else Logger::Get().Error(diagnostic);
 		Logger::Get().Flush();
-		winrt::Magpie::implementation::App::Get().Dispatcher().TryEnqueue([this, error, context = std::move(context), target, systemError] {
+		winrt::Magpie::implementation::App::Get().Dispatcher().TryEnqueue([this, error, context = std::move(context), target, systemError,
+			issueContext = std::move(issueContext), saveRevision] {
 			try {
+				if (error == ScalingError::ConfigurationWriteFailed && saveRevision) {
+					if (!_saveOutcomes.Record(saveRevision, false)) return;
+				}
 				const auto loader = winrt::ResourceLoader::GetForViewIndependentUse(
 					CommonSharedConstants::APP_RESOURCE_MAP_ID);
+				if (IsRecoveryNotice(error)) {
+					_startupRecoveryDetails = std::wstring(loader.GetString(MessageKey(error))) + L"\n" + StrHelper::UTF8ToUTF16(context);
+					if (_action == IssueAction::RetrySave) {
+						_details = winrt::hstring(std::wstring(_details) + L"\n\n" + _startupRecoveryDetails);
+						_Persist();
+						Changed.Invoke();
+						return;
+					}
+				}
 				const auto now = std::chrono::steady_clock::now();
 				const bool repeated = _lastError == error && _lastContext == context &&
-					_lastSystemError == systemError;
+					_lastSystemError == systemError && _issueContext.profileName == issueContext.profileName &&
+					_issueContext.scalingModeName == issueContext.scalingModeName;
 				_repeatCount = repeated ? _repeatCount + 1 : 1;
 				_lastError = error;
 				_lastContext = context;
 				_lastSystemError = systemError;
-				_summary = loader.GetString(MessageKey(error));
+				_issueContext = issueContext;
+				_isInformational = IsRecoveryNotice(error) || error == ScalingError::DuplicateScalingModeNames;
+				_action = GetIssueAction(error);
+				if (_action == IssueAction::Profile && !issueContext.hasProfile) _action = IssueAction::None;
+				++_revision;
+				const wchar_t* key = MessageKey(error);
+				if (error == ScalingError::CaptureFailed && issueContext.hasProfile) {
+					if (issueContext.captureMethod == CaptureMethod::GraphicsCapture)
+						key = L"Message_CaptureFailed_AlreadyGraphicsCapture";
+					else if (CanSuggestGraphicsCapture(issueContext.captureMethod))
+						key = L"Message_CaptureFailed_TryGraphicsCapture";
+				}
+				if (error == ScalingError::CreateFenceFailed &&
+					!CanSuggestAnotherAdapter(AdaptersService::Get().AdapterInfos().size()))
+					key = L"Message_CreateFenceFailed_SingleAdapter";
+				_summary = loader.GetString(key);
+				// Keep one complete, problem-specific sentence in the transient toast.
+				std::wstring toastSummary(_summary);
+				const auto chineseEnd = toastSummary.find(L'。');
+				const auto englishEnd = toastSummary.find(L". ");
+				const auto sentenceEnd = (std::min)(chineseEnd, englishEnd);
+				if (sentenceEnd != std::wstring::npos) toastSummary.resize(sentenceEnd + 1);
+				if (issueContext.hasProfile) {
+					const std::wstring profile = issueContext.profileName.empty() ?
+						std::wstring(loader.GetString(L"Root_Defaults/Content")) : issueContext.profileName;
+					_summary = winrt::hstring(std::wstring(_summary) + L"\n" +
+						std::wstring(loader.GetString(L"ErrorDetails_Profile")) + L": " + profile +
+						(issueContext.scalingModeName.empty() ? L"" : L"; " +
+							std::wstring(loader.GetString(L"ErrorDetails_Group")) + L": " + issueContext.scalingModeName));
+				}
 				std::wstring advice;
 				const uint32_t win32Error = HRESULT_FACILITY(systemError) == FACILITY_WIN32
 					? HRESULT_CODE(systemError) : systemError;
+				const auto operation = GetFileOperation(error);
 				if (win32Error == ERROR_ACCESS_DENIED || win32Error == ERROR_WRITE_PROTECT) {
-					advice = loader.GetString(L"ErrorAdvice_AccessDenied");
+					advice = loader.GetString(operation == FileOperation::Write ? L"ErrorAdvice_AccessDenied" :
+						operation == FileOperation::Read ? L"ErrorAdvice_ReadAccessDenied" : L"ErrorAdvice_OperationAccessDenied");
 				} else if (win32Error == ERROR_SHARING_VIOLATION || win32Error == ERROR_LOCK_VIOLATION) {
 					advice = loader.GetString(L"ErrorAdvice_FileBusy");
-				} else if (win32Error == ERROR_DISK_FULL || win32Error == ERROR_HANDLE_DISK_FULL) {
+				} else if (operation == FileOperation::Write && (win32Error == ERROR_DISK_FULL || win32Error == ERROR_HANDLE_DISK_FULL)) {
 					advice = loader.GetString(L"ErrorAdvice_DiskFull");
 				} else if (win32Error == ERROR_PATH_NOT_FOUND || win32Error == ERROR_FILE_NOT_FOUND) {
 					advice = loader.GetString(L"ErrorAdvice_PathMissing");
@@ -115,6 +258,8 @@ void ErrorService::Report(ScalingError error, std::string context, HWND target,
 				SYSTEMTIME time{};
 				GetLocalTime(&time);
 				std::wstring details(_summary);
+				if (error == ScalingError::ConfigurationWriteFailed && !_startupRecoveryDetails.empty())
+					details += L"\n\n" + _startupRecoveryDetails;
 				if (!advice.empty()) details += L"\n\n" + advice;
 				auto field = [&](std::wstring_view key, std::wstring_view value) {
 					details += L"\n" + std::wstring(loader.GetString(key)) + L": " + std::wstring(value);
@@ -127,16 +272,25 @@ void ErrorService::Report(ScalingError error, std::string context, HWND target,
 				field(L"ErrorDetails_Version", StrHelper::UTF8ToUTF16(STRINGIFY(MP_VERSION_STRING)));
 #endif
 				if (!context.empty()) field(L"ErrorDetails_Context", StrHelper::UTF8ToUTF16(context));
+				if (!issueContext.windowTitle.empty()) field(L"ErrorDetails_Window", issueContext.windowTitle);
+				if (issueContext.hasProfile) {
+					constexpr const wchar_t* methods[] = { L"Graphics Capture", L"Desktop Duplication", L"GDI", L"DwmSharedSurface" };
+					const int method = static_cast<int>(issueContext.captureMethod);
+					if (method >= 0 && method < 4) field(L"ErrorDetails_Capture", methods[method]);
+				}
 				if (systemError) field(L"ErrorDetails_SystemCode", fmt::format(L"{} (0x{:08X})", systemError, systemError));
 				field(L"ErrorDetails_Count", std::to_wstring(_repeatCount));
 				field(L"ErrorDetails_Logs", (Win32Helper::GetExePath().parent_path() / L"logs").native());
 				_details = winrt::hstring(details);
+				_Persist();
 				_isIssueVisible = true;
 				Changed.Invoke();
 				// Do not flood a continuous save/live-update failure with popups.
 				if (!repeated || now - _lastToast >= std::chrono::seconds(15)) {
 					_lastToast = now;
-					const std::wstring message = std::wstring(_summary) + L"\n" +
+					const std::wstring message = (IsRecoveryNotice(error) ?
+						std::wstring(loader.GetString(L"ErrorDetails_RecoveryToast")) : error == ScalingError::ConfigurationWriteFailed ?
+						std::wstring(loader.GetString(L"ErrorDetails_SaveFailedToast")) : toastSummary) + L"\n" +
 						std::wstring(loader.GetString(L"ErrorDetails_HomeHint"));
 					if (target && IsWindow(target)) {
 						ToastService::Get().ShowMessageOnWindow({}, message, target, std::chrono::seconds(7));

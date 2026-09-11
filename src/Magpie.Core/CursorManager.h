@@ -1,14 +1,17 @@
 #pragma once
+#include "ScalingSessionLifetime.h"
+#include <memory>
 
 namespace Magpie {
 
 class CursorManager {
 public:
-	CursorManager() = default;
+	CursorManager();
 	CursorManager(const CursorManager&) = delete;
 	CursorManager(CursorManager&&) = delete;
 
 	~CursorManager() noexcept;
+	void BeginShutdown() noexcept { _lifetime->RequestStop(); }
 
 	void Update() noexcept;
 
@@ -57,6 +60,7 @@ public:
 	}
 
 private:
+	const std::shared_ptr<ScalingSessionLifetime> _lifetime;
 	void _ShowSystemCursor(bool show, bool onDestory = false);
 
 	void _AdjustCursorSpeed() noexcept;
@@ -70,6 +74,7 @@ private:
 	void _ClearHitTestResult() noexcept;
 
 	void _UpdateCursorState() noexcept;
+	bool _UpdateParameterCursor() noexcept;
 
 	void _ClipCursorForMonitors(POINT cursorPos) noexcept;
 

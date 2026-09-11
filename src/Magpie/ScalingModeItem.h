@@ -17,6 +17,7 @@ struct ScalingModeItem : ScalingModeItemT<ScalingModeItem>,
 
 	void AddEffect(const hstring& fullName);
 	bool CanAddEffect(const hstring& fullName) const noexcept;
+	hstring EffectAddProblem(const hstring& fullName) const;
 
 	bool IsInitialExpanded() const noexcept {
 		return _isInitialExpanded;
@@ -29,6 +30,9 @@ struct ScalingModeItem : ScalingModeItemT<ScalingModeItem>,
 	hstring Description() const noexcept;
 
 	bool HasUnkownEffects() const noexcept;
+	bool HasNameConflict() const noexcept;
+	hstring RenameProblem() const noexcept { return _renameProblem; }
+	bool HasRenameProblem() const noexcept { return !_renameProblem.empty(); }
 
 	IObservableVector<IInspectable> Effects() const noexcept {
 		return _effects;
@@ -63,6 +67,9 @@ struct ScalingModeItem : ScalingModeItemT<ScalingModeItem>,
 	bool CanReorderEffects() const noexcept;
 
 	void Remove();
+	void Detach() noexcept;
+	void PrepareForRemoval(uint32_t index) noexcept;
+	void RefreshAfterRemoval();
 
 	IVector<IInspectable> LinkedProfiles() const noexcept {
 		return _linkedProfiles;
@@ -81,7 +88,7 @@ private:
 
 	void _ScalingModesService_Moved(uint32_t fromIndex, uint32_t toIndex);
 
-	void _ScalingModesService_Removed(uint32_t index);
+	void _ScalingModesService_NamesChanged();
 
 	void _Effects_VectorChanged(IObservableVector<IInspectable> const&, IVectorChangedEventArgs const& args);
 
@@ -101,10 +108,11 @@ private:
 
 	::Magpie::Event<::Magpie::EffectAddedWay>::EventRevoker _scalingModeAddedRevoker;
 	::Magpie::Event<uint32_t, uint32_t>::EventRevoker _scalingModeMovedRevoker;
-	::Magpie::Event<uint32_t>::EventRevoker _scalingModeRemovedRevoker;
+	::Magpie::Event<>::EventRevoker _scalingModeNamesChangedRevoker;
 	IObservableVector<IInspectable>::VectorChanged_revoker _effectsChangedRevoker;
 
 	hstring _renameText;
+	hstring _renameProblem;
 	std::wstring_view _trimedRenameText;
 	
 	IVector<IInspectable> _linkedProfiles{ nullptr };

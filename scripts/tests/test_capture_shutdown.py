@@ -43,13 +43,14 @@ harness = r'''
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 using namespace Magpie;
 enum class ScalingError { CaptureFailed };
 using HWND = int;
 struct OptionsState {
-    void (*showError)(HWND, ScalingError) noexcept = nullptr;
-    void (*reportErrorDetails)(HWND, ScalingError, const std::string&, int) noexcept = nullptr;
+    std::function<void(HWND, ScalingError)> showError;
+    std::function<void(HWND, ScalingError, std::string_view, uint32_t)> reportErrorDetails;
 };
 struct SourceTracker { HWND Handle() const { return 7; } };
 struct ScalingWindow {
@@ -78,7 +79,7 @@ struct Renderer {
 };
 int shown = 0, reported = 0;
 void show(HWND h, ScalingError) noexcept { assert(h == 7); ++shown; }
-void report(HWND h, ScalingError, const std::string& context, int code) noexcept {
+void report(HWND h, ScalingError, std::string_view context, uint32_t code) noexcept {
     assert(h == 7 && context == "test capture error" && code == 123); ++reported;
 }
 void reset() { ScalingWindow::Get() = {}; shown = reported = 0; }
@@ -90,6 +91,20 @@ int main() {
     window._options.showError = show;
     window.ShowError(ScalingError::CaptureFailed);
     assert(shown == 1);
+    // A stateful report keeps its snapshot alive if options are cleared in flight.
+    {
+        reset();
+        auto snapshot = std::make_shared<std::string>("original source profile");
+        std::weak_ptr<std::string> weakSnapshot = snapshot;
+        window._options.showError = [snapshot](HWND h, ScalingError) {
+            ScalingWindow::Get()._options = {};
+            assert(h == 7 && *snapshot == "original source profile");
+            ++shown;
+        };
+        snapshot.reset();
+        window.ShowError(ScalingError::CaptureFailed);
+        assert(shown == 1 && weakSnapshot.expired());
+    }
     // Current errors still report and stop normally, including fallback.
     reset(); Renderer active; window._options.reportErrorDetails = report;
     active.ErrorCallback()(); assert(reported == 1 && window.stops == 1);
@@ -135,7 +150,7 @@ int main() {
     });
     while (!started.load()) std::this_thread::yield();
     shared.RequestStop(); backend.join();
-    std::cout << "Capture shutdown: 11 scenarios + 1000 restart cycles passed; 8 integration ordering checks passed.\n";
+    std::cout << "Capture shutdown: 12 scenarios + 1000 restart cycles passed; 8 integration ordering checks passed.\n";
 }
 '''.replace('SHOW_ERROR', show_error).replace('CALLBACK', callback)
 

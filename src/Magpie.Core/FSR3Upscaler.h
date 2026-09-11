@@ -1,5 +1,6 @@
 #pragma once
 #include "NativeEffectBackend.h"
+#include "GroupBEffectProtocol.h"
 
 namespace Magpie {
 
@@ -21,6 +22,9 @@ public:
 	bool Resize(DeviceResources& resources, ID3D11Texture2D* input,
 		ID3D11Texture2D* output) noexcept override;
 	bool Draw(const NativeEffectDrawContext& context) noexcept override;
+	void SetFsrHdrProtocol(const FsrHdrProtocol& protocol) noexcept {
+		_hdrProtocol = protocol;
+	}
 	FrameGuidanceRequirements GetFrameGuidanceRequirements() const noexcept override {
 		FrameGuidanceRequirements result{ .zero = true };
 		result.Add(_motionRequest);
@@ -33,9 +37,9 @@ public:
 
 private:
 	MotionVectorRequest _motionRequest{};
-	// 仅在 MP_ENABLE_FSR3_ZEROMV 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
 	[[maybe_unused]] std::unique_ptr<Impl> _impl;
 	[[maybe_unused]] bool _useFsr4 = false;
+	FsrHdrProtocol _hdrProtocol{};
 };
 
 }

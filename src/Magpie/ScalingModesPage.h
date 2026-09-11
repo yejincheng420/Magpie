@@ -3,7 +3,10 @@
 #include "ScalingModeItem.h"
 #include "ScalingModesViewModel.h"
 #include "EffectParameterResetGesture.h"
+#include "EffectPickerModel.h"
+#include "EffectPickerLayout.h"
 #include <unordered_set>
+#include <array>
 
 namespace winrt::Magpie::implementation {
 
@@ -95,10 +98,57 @@ private:
 		CompositeTransform previewTransform{ nullptr };
 	};
 
-	void _BuildEffectMenu() noexcept;
-	void _RefreshEffectMenuAvailability() noexcept;
-
-	void _AddEffectMenuFlyoutItem_Click(IInspectable const& sender, RoutedEventArgs const&);
+	void _BuildEffectPicker();
+	void _RefreshEffectPicker(std::wstring anchor = {});
+	void _ShowEffectPickerDetails(std::wstring_view key);
+	void _SetEffectPickerDetails(std::wstring_view title, std::wstring_view text);
+	void _QueueEffectPickerDetailsHint();
+	void _UpdateEffectPickerDetailsHint();
+	void _EffectPickerPointerWheelChanged(IInspectable const& sender, Input::PointerRoutedEventArgs const& args);
+	void _AddPickedEffect(std::wstring_view id);
+	void _ToggleEffectFamily(std::wstring_view key);
+	void _EffectPickerRowKeyDown(std::wstring_view key, Input::KeyRoutedEventArgs const& args);
+	void _JumpEffectPickerLetter(int letter);
+	void _UpdateEffectPickerIndex();
+	void _SizeEffectPicker(Button const& anchor);
+	Button _EffectPickerButton(UIElement const& content);
+	void _ChooseEffectCategory(std::wstring category, std::wstring subcategory, std::wstring description);
+	void _SetEffectCategoryExpanded(size_t index, bool expanded);
+	void _UpdateEffectPickerColors();
+	struct PickerRow {
+		::Magpie::EffectPickerVisibleRow entry;
+		Button button{ nullptr };
+	};
+	struct PickerCategoryRow {
+		std::wstring category, subcategory, name, description;
+		Border container{ nullptr };
+		Button button{ nullptr };
+		::Magpie::EffectPickerToggleIcon icon;
+		FrameworkElement selectionMark{ nullptr };
+		int parent = -1;
+		bool hasChildren = false, expanded = false;
+	};
+	std::vector<PickerCategoryRow> _pickerCategories;
+	Border _pickerCategoryPane{ nullptr }, _pickerListPane{ nullptr }, _pickerDetailPane{ nullptr };
+	std::vector<PickerRow> _pickerRows;
+	std::vector<::Magpie::EffectPickerEntry> _pickerEntries;
+	std::unordered_set<std::wstring> _pickerExpandedFamilies, _pickerSearchCollapsedFamilies;
+	std::wstring _pickerLastQuery;
+	StackPanel _pickerResults{ nullptr };
+	StackPanel _pickerDetailContent{ nullptr };
+	Grid _pickerDetailArea{ nullptr };
+	TextBlock _pickerDetailHint{ nullptr };
+	bool _pickerDetailsHintQueued = false;
+	std::vector<Button> _pickerLetters;
+	std::array<std::wstring, 27> _pickerLetterTargets;
+	Flyout _effectPicker{ nullptr };
+	Grid _pickerRoot{ nullptr };
+	TextBox _pickerSearch{ nullptr };
+	TextBlock _pickerCount{ nullptr }, _pickerDetails{ nullptr }, _pickerDetailTitle{ nullptr };
+	ScrollViewer _pickerListScroll{ nullptr }, _pickerDetailScroll{ nullptr }, _pickerCategoryScroll{ nullptr };
+	winrt::Magpie::ScalingModeItem _pickerMode{ nullptr };
+	std::wstring _pickerCategory, _pickerSubcategory;
+	bool _pickerChangingCategory = false;
 
 	ListView _FindParentListView(DependencyObject const& element) const noexcept;
 
@@ -118,9 +168,7 @@ private:
 		Button const& button,
 		IInspectable const& candidateItem) noexcept;
 
-	MenuFlyout _addEffectMenuFlyout;
 	com_ptr<ScalingModesViewModel> _viewModel = make_self<ScalingModesViewModel>();
-	ScalingModeItem* _curScalingMode = nullptr;
 
 	FrameworkElement _reorderHandle{ nullptr };
 	FrameworkElement _reorderContainer{ nullptr };

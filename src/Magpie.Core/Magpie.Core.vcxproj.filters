@@ -44,6 +44,19 @@
     <ClInclude Include="FrameSourceBase.h">
       <Filter>Capture</Filter>
     </ClInclude>
+    <ClInclude Include="HdrCaptureProcessor.h">
+      <Filter>Capture</Filter>
+    </ClInclude>
+    <ClInclude Include="HdrFrame.h"><Filter>Include</Filter></ClInclude>
+    <ClInclude Include="HdrColorTransform.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="HdrSurfaceAdapter.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="HdrProtocol.h"><Filter>Include</Filter></ClInclude>
+    <ClInclude Include="HdrAdapterDispatcher.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="EffectProtocolCatalogC.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="HdrEffectBoundary.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="GroupAHdrRoutes.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="GroupBHdrRoutes.h"><Filter>Helpers</Filter></ClInclude>
+    <ClInclude Include="HdrDiagnostics.h"><Filter>Helpers</Filter></ClInclude>
     <ClInclude Include="DwmSharedSurfaceFrameSource.h">
       <Filter>Capture</Filter>
     </ClInclude>
@@ -112,10 +125,15 @@
     <ClInclude Include="FramePresentationTiming.h" />
     <ClInclude Include="FramePacingWait.h" />
     <ClInclude Include="include\FramePacingOptions.h" />
+    <ClInclude Include="include\SourceWindowGeometry.h" />
     <ClInclude Include="FrameGuidanceTypes.h">
       <Filter>Render</Filter>
     </ClInclude>
     <ClInclude Include="FrameGuidancePerformance.h">
+      <Filter>Render</Filter>
+    </ClInclude>
+    <ClInclude Include="ReflexController.h" />
+    <ClInclude Include="NativeBackendTiming.h">
       <Filter>Render</Filter>
     </ClInclude>
     <ClInclude Include="ZeroFrameGuidanceProvider.h">
@@ -140,6 +158,9 @@
       <Filter>Render</Filter>
     </ClInclude>
     <ClInclude Include="DLSSNRFilter.h">
+      <Filter>Render</Filter>
+    </ClInclude>
+    <ClInclude Include="GroupBEffectProtocol.h">
       <Filter>Render</Filter>
     </ClInclude>
     <ClInclude Include="StepTimer.h">
@@ -209,6 +230,16 @@
     <ClCompile Include="FrameSourceBase.cpp">
       <Filter>Capture</Filter>
     </ClCompile>
+    <ClCompile Include="HdrCaptureProcessor.cpp"><Filter>Capture</Filter></ClCompile>
+    <ClCompile Include="HdrFrame.cpp"><Filter>Include</Filter></ClCompile>
+    <ClCompile Include="HdrColorTransform.cpp"><Filter>Helpers</Filter></ClCompile>
+    <ClCompile Include="HdrSurfaceAdapter.cpp"><Filter>Helpers</Filter></ClCompile>
+    <ClCompile Include="HdrProtocol.cpp"><Filter>Include</Filter></ClCompile>
+    <ClCompile Include="HdrAdapterDispatcher.cpp"><Filter>Helpers</Filter></ClCompile>
+    <ClCompile Include="HdrEffectBoundary.cpp"><Filter>Helpers</Filter></ClCompile>
+    <ClCompile Include="GroupAHdrRoutes.cpp"><Filter>Helpers</Filter></ClCompile>
+    <ClCompile Include="GroupBHdrRoutes.cpp"><Filter>Helpers</Filter></ClCompile>
+    <ClCompile Include="HdrDiagnostics.cpp"><Filter>Helpers</Filter></ClCompile>
     <ClCompile Include="DwmSharedSurfaceFrameSource.cpp">
       <Filter>Capture</Filter>
     </ClCompile>
@@ -231,6 +262,7 @@
     <ClCompile Include="EffectDrawer.cpp">
       <Filter>Render</Filter>
     </ClCompile>
+    <ClCompile Include="ReflexController.cpp" />
     <ClCompile Include="Renderer.cpp">
       <Filter>Render</Filter>
     </ClCompile>

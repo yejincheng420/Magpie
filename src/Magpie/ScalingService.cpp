@@ -9,6 +9,7 @@
 #include "ScalingMode.h"
 #include "ScalingModesService.h"
 #include "ScalingService.h"
+#include "StrHelper.h"
 #include "ShortcutService.h"
 #include "ToastService.h"
 #include "TouchHelper.h"
@@ -21,6 +22,22 @@ using namespace winrt;
 using winrt::Magpie::ShortcutAction;
 
 namespace Magpie {
+
+static ToolbarShortcutLabels GetToolbarShortcutLabels() {
+	const auto& settings = AppSettings::Get();
+	auto label = [&](ShortcutAction action) {
+		return StrHelper::UTF16ToUTF8(settings.GetShortcut(action).ToString());
+	};
+	return {
+		.profiler = label(ShortcutAction::Profiler),
+		.parameters = label(ShortcutAction::EffectParameters),
+		.screenshot = label(ShortcutAction::Screenshot),
+		.pin = label(ShortcutAction::ToolbarPin),
+		.comparison = label(ShortcutAction::Comparison),
+		.fullscreen = label(ShortcutAction::Scale),
+		.windowed = label(ShortcutAction::WindowedModeScale)
+	};
+}
 
 ScalingService& ScalingService::Get() noexcept {
 	static ScalingService instance;
@@ -47,10 +64,13 @@ void ScalingService::Initialize() {
 
 	_shortcutActivatedRevoker = ShortcutService::Get().ShortcutActivated(
 		auto_revoke, std::bind_front(&ScalingService::_ShortcutService_ShortcutPressed, this));
+	_toolbarShortcutsChangedRevoker = AppSettings::Get().ShortcutChanged(auto_revoke, [this](ShortcutAction) {
+		if (_scalingRuntime) _scalingRuntime->UpdateToolbarShortcutLabels(GetToolbarShortcutLabels());
+	});
 	_frameSyncChangedRevoker = AppSettings::Get().FrontEdgeSyncChanged(auto_revoke, [this] {
 		const auto& settings = AppSettings::Get();
 		if (_scalingRuntime) _scalingRuntime->UpdateFrameSyncSettings(
-			{ settings.IsFrontEdgeSyncEnabled(), settings.FrontEdgeSyncFrameRate() });
+			{ settings.IsFrontEdgeSyncEnabled(), settings.FrontEdgeSyncFrameRate(), settings.GetFrameSyncMode() });
 	});
 
 	// 立即检查前台窗口
@@ -65,6 +85,7 @@ void ScalingService::Uninitialize() {
 	_checkForegroundTimer.Stop();
 	_countDownTimer.Stop();
 	_frameSyncChangedRevoker.Revoke();
+	_toolbarShortcutsChangedRevoker.Revoke();
 	_scalingRuntime.reset();
 	// The runtime destructor drains UI requests before this final flush.
 	_FlushEffectParametersSaves(true);
@@ -118,6 +139,7 @@ void ScalingService::CheckForeground() {
 }
 
 void ScalingService::OnTaskSwitch() {
+	if (!AppSettings::Get().IsStopEffectsOnTaskSwitchEnabled()) return;
 	if (!_scalingRuntime || !_scalingRuntime->StopForTaskSwitch()) return;
 	_isAutoScaleSuspended = true;
 	StopTimer();
@@ -184,8 +206,20 @@ void ScalingService::_CountDownTimer_Tick(winrt::DispatcherQueueTimer const&, wi
 	TimerTick.Invoke(timeLeft);
 }
 
-static void ShowError(HWND hWnd, ScalingError error) noexcept {
-	ErrorService::Get().Report(error, {}, hWnd);
+static IssueContext MakeIssueContext(HWND window, const Profile& profile) {
+	IssueContext result;
+	result.hasProfile = true;
+	result.profileName = profile.name;
+	result.profilePath = profile.pathRule;
+	result.profileClass = profile.classNameRule;
+	result.captureMethod = profile.captureMethod;
+	const auto& modes = AppSettings::Get().ScalingModes();
+	if (profile.scalingMode >= 0 && static_cast<size_t>(profile.scalingMode) < modes.size())
+		result.scalingModeName = modes[profile.scalingMode].name;
+	wchar_t title[512]{};
+	GetWindowTextW(window, title, static_cast<int>(std::size(title)));
+	result.windowTitle = title;
+	return result;
 }
 
 static bool IsPopupWindow(HWND hwndPopup, HWND hwndOwner) noexcept {
@@ -306,7 +340,21 @@ void ScalingService::_StartScale(HWND hWnd, const Profile& profile, bool windowe
 
 	const ScalingError error = _StartScaleImpl(hWnd, profile, windowedMode, force);
 	if (error != ScalingError::NoError) {
-		ShowError(hWnd, error);
+		std::string context;
+		const auto& modes = AppSettings::Get().ScalingModes();
+		if (profile.scalingMode >= 0 && static_cast<size_t>(profile.scalingMode) < modes.size()) {
+			const auto& effects = modes[profile.scalingMode].effects;
+			for (size_t i = 0; i < effects.size(); ++i) {
+				if ((error == ScalingError::ScalingModeUnknownEffect &&
+					(effects[i].isRecoveryInvalid || !EffectsService::Get().GetEffect(effects[i].name))) ||
+					(error == ScalingError::ConflictingFrameGenerationEffects &&
+						ClassifyFrameGenerationEffect(effects[i].name) != FrameGenerationEffectKind::None)) {
+					if (!context.empty()) context += '\n';
+					context += fmt::format("#{} {}", i + 1, StrHelper::UTF16ToUTF8(effects[i].name));
+				}
+			}
+		}
+		ErrorService::Get().Report(error, std::move(context), hWnd, 0, MakeIssueContext(hWnd, profile));
 	}
 }
 
@@ -332,7 +380,7 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 		return ScalingError::ScalingModeEmpty;
 	} else {
 		for (const EffectItem& effect : effects) {
-			if (!EffectsService::Get().GetEffect(effect.name)) {
+			if (effect.isRecoveryInvalid || !EffectsService::Get().GetEffect(effect.name)) {
 				// 存在无法解析的效果
 				return ScalingError::ScalingModeUnknownEffect;
 			}
@@ -350,6 +398,9 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 
 	if (profile.Is3DGameMode() && windowedMode) {
 		return ScalingError::Windowed3DGameMode;
+	}
+	if (windowedMode && profile.captureMethod == CaptureMethod::DesktopDuplication) {
+		return ScalingError::WindowedDesktopDuplication;
 	}
 
 	ScalingOptions options;
@@ -451,8 +502,11 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 		options.autoHideCursorDelay = profile.autoHideCursorDelay;
 	}
 
+	options.isParameterFocusSwitchingEnabled = profile.isParameterFocusSwitchingEnabled;
+
 	// 应用全局配置
 	AppSettings& settings = AppSettings::Get();
+	options.toolbarShortcutLabels = GetToolbarShortcutLabels();
 	options.IsDeveloperMode(settings.IsDeveloperMode());
 	options.IsDebugMode(settings.IsDebugMode());
 	options.IsBenchmarkMode(settings.IsBenchmarkMode());
@@ -472,6 +526,7 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 	// saved true value so no session silently enables tearing.
 	options.isVRREnabled = false;
 	options.frontEdgeSyncFrameRate = settings.FrontEdgeSyncFrameRate();
+	options.frameSyncMode = settings.GetFrameSyncMode();
 
 	if (options.maxFrameRate) {
 		// 最小帧数不能大于最大帧数
@@ -494,9 +549,12 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 		ToastService::Get().ShowMessageOnWindow({}, msg, hwndTarget);
 	};
 
-	options.showError = &ShowError;
-	options.reportErrorDetails = [](HWND target, ScalingError error, std::string_view context, uint32_t systemError) noexcept {
-		ErrorService::Get().Report(error, std::string(context), target, systemError);
+	const IssueContext issueContext = MakeIssueContext(hWnd, profile);
+	options.showError = [issueContext](HWND target, ScalingError error) noexcept {
+		ErrorService::Get().Report(error, {}, target, 0, issueContext);
+	};
+	options.reportErrorDetails = [issueContext](HWND target, ScalingError error, std::string_view context, uint32_t systemError) noexcept {
+		ErrorService::Get().Report(error, std::string(context), target, systemError, issueContext);
 	};
 
 	options.save = [](const ScalingOptions& options, HWND /*hwndScaling*/) noexcept {
@@ -506,6 +564,20 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 				AppSettings::Get().SaveAsync();
 			}
 		);
+	};
+	options.revertEffectParameter = [modeIdx = options.scalingModeIdx, modeName = options.scalingModeName](
+		uint32_t effectIdx, const EffectOption& previousEffect, const std::string& parameter, float rejected, float previous) {
+		App::Get().Dispatcher().TryEnqueue([modeIdx, modeName, effectIdx, previousEffect, parameter, rejected, previous] {
+			auto& modes = AppSettings::Get().ScalingModes();
+			if (modeIdx >= modes.size() || modes[modeIdx].name != modeName || effectIdx >= modes[modeIdx].effects.size()) return;
+			auto& effect = modes[modeIdx].effects[effectIdx];
+			if (StrHelper::UTF16ToUTF8(effect.name) != previousEffect.name ||
+				effect.scale != previousEffect.scale || effect.scalingType != previousEffect.scalingType) return;
+			// A later settings/toolbar edit wins over this older failed request.
+			if (!RestoreRejectedEffectParameter(effect.parameters, StrHelper::UTF8ToUTF16(parameter), rejected, previous)) return;
+			ScalingModesService::Get().EffectParametersChanged.Invoke(modeIdx, effectIdx);
+			AppSettings::Get().SaveAsync();
+		});
 	};
 
 	options.requestEffectParameters = [](
@@ -579,6 +651,27 @@ void ScalingService::EffectParameterEdited(uint32_t modeIdx, uint32_t effectIdx,
 		effectIdx, static_cast<EffectOption>(modes[modeIdx].effects[effectIdx]), parameter, value);
 }
 
+void ScalingService::RetryConfigurationSave(std::function<void(bool)> completed) {
+	// Capture only failed revisions. A newer edit/conflict must keep its own result.
+	std::vector<std::pair<std::shared_ptr<EffectParametersSaveState>, uint64_t>> failed;
+	for (const auto& weak : _parameterSaveStates) {
+		if (auto state = weak.lock()) {
+			const auto result = state->result.load(std::memory_order_acquire);
+			if ((result & 7) == static_cast<uint64_t>(EffectParametersSaveError::WriteFailed))
+				failed.emplace_back(std::move(state), result);
+		}
+	}
+	AppSettings::Get().SaveAsync([failed = std::move(failed), completed = std::move(completed)](bool succeeded) {
+		if (succeeded) {
+			for (const auto& [state, result] : failed) {
+				auto expected = result;
+				state->result.compare_exchange_strong(expected, result & ~uint64_t(7), std::memory_order_acq_rel);
+			}
+		}
+		if (completed) completed(succeeded);
+	});
+}
+
 void ScalingService::_FlushEffectParametersSaves(bool synchronous) {
 	if (_effectParametersSaveTimer) _effectParametersSaveTimer.Stop();
 	if (_pendingEffectParametersSaves.empty()) return;
@@ -600,6 +693,9 @@ void ScalingService::_HandleEffectParametersRequest(
 	ScalingOptions&& sessionOptions,
 	EffectParametersRequest&& request
 ) {
+	std::erase_if(_parameterSaveStates, [](const auto& state) { return state.expired(); });
+	if (std::ranges::none_of(_parameterSaveStates, [&](const auto& state) { return state.lock() == request.saveState; }))
+		_parameterSaveStates.push_back(request.saveState);
 	auto fail = [&](EffectParametersSaveError error) noexcept {
 		request.saveState->Complete(request.revision, error);
 		if (error == EffectParametersSaveError::Conflict) {
@@ -629,7 +725,7 @@ void ScalingService::_HandleEffectParametersRequest(
 	}
 
 	auto& settings = AppSettings::Get();
-	FrameSyncSettings mergedFrameSync{ settings.IsFrontEdgeSyncEnabled(), settings.FrontEdgeSyncFrameRate() };
+	FrameSyncSettings mergedFrameSync{ settings.IsFrontEdgeSyncEnabled(), settings.FrontEdgeSyncFrameRate(), settings.GetFrameSyncMode() };
 	if (!MergeFrameSyncSettings(mergedFrameSync, request.previousFrameSync, request.frameSync)) {
 		fail(EffectParametersSaveError::Conflict);
 		return;
@@ -674,6 +770,7 @@ void ScalingService::_HandleEffectParametersRequest(
 	mode.effects = std::move(merged);
 	settings.IsFrontEdgeSyncEnabled(mergedFrameSync.enabled);
 	settings.FrontEdgeSyncFrameRate(mergedFrameSync.frameRate);
+	settings.SetFrameSyncMode(mergedFrameSync.mode);
 	if (sessionOptions.parameterSession) sessionOptions.parameterSession->DesiredFrameSync(mergedFrameSync);
 	for (uint32_t i = 0; i < mode.effects.size(); ++i) {
 		ScalingModesService::Get().EffectParametersChanged.Invoke(sessionOptions.scalingModeIdx, i);

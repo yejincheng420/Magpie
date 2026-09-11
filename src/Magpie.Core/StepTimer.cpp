@@ -1,13 +1,15 @@
 #include "pch.h"
 #include "StepTimer.h"
 #include "FrameTrace.h"
+#include "FramePacingWait.h"
 
 using namespace std::chrono;
 
 namespace Magpie {
 
-void StepTimer::Initialize(float minFrameRate, std::optional<float> maxFrameRate) noexcept {
+void StepTimer::Initialize(float minFrameRate, std::optional<float> maxFrameRate, bool strictStart) noexcept {
 	assert(minFrameRate >= 0);
+	_strictStart = strictStart;
 	_minInterval = {};
 	_maxInterval = nanoseconds::max();
 	if (minFrameRate > 0) {
@@ -87,7 +89,7 @@ StepTimerStatus StepTimer::WaitForNextFrame(bool waitForNewFrame, bool& fpsUpdat
 
 void StepTimer::PrepareForRender() noexcept {
 	// 进入新一帧，计算此帧的开始时间
-	if (_HasMinInterval()) {
+	if (_HasMinInterval() && !_strictStart) {
 		// 限制最大帧率时帧间隔必须是最小帧间隔的整数倍，_nextFrameStartTime 需要稍微向前修正。
 		// 出于同样的原因，最大帧间隔应是最小帧间隔的整数倍。
 		_thisFrameStartTime = _nextFrameStartTime -
@@ -104,6 +106,10 @@ void StepTimer::PrepareForRender() noexcept {
 
 void StepTimer::_WaitForMsgAndTimer(std::chrono::nanoseconds time,
 	HANDLE frameArrivedEvent) noexcept {
+	if (_strictStart) {
+		WaitForFramePacing(time, _strictTimer, frameArrivedEvent);
+		return;
+	}
 	if (time > 1ms) {
 		if (!_hTimer) {
 			_hTimer.reset(CreateWaitableTimerEx(nullptr, nullptr,

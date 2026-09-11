@@ -5,6 +5,7 @@
     <ProjectGuid>{62503530-b84b-4cc2-80b6-3f89618172b7}</ProjectGuid>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
     <IntDir>$(SolutionDir)\obj\$(Platform)\$(Configuration)\$(MSBuildProjectName)\</IntDir>
+    <IntDir Condition="'$(MagpieIntermediateRoot)' != ''">$(MagpieIntermediateRoot)$(MSBuildProjectName)\</IntDir>
     <OutDir>$(SolutionDir)\bin\$(Platform)\$(Configuration)\</OutDir>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -23,6 +24,9 @@
     </CopyFileToFolders>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <CopyFileToFolders Include="Color\HDR_to_SDR.hlsl"><FileType>Document</FileType></CopyFileToFolders>
+    <CopyFileToFolders Include="Color\SDR_to_HDR.hlsl"><FileType>Document</FileType></CopyFileToFolders>
+    <CopyFileToFolders Include="RTXVideo\RTXVideo_HDR.hlsl"><FileType>Document</FileType></CopyFileToFolders>
     <CopyFileToFolders Include="Diagnostics\FrameGuidance_Motion.hlsl">
       <FileType>Document</FileType>
     </CopyFileToFolders>
@@ -103,35 +107,11 @@
     <CopyFileToFolders Include="FSR\FSR_RCAS.hlsl">
       <FileType>Document</FileType>
     </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_Denoise_Low.hlsl">
+    <CopyFileToFolders Include="RTXVideo\RTXVideo_Denoise.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent>true</DeploymentContent>
     </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_Denoise_Medium.hlsl">
-      <FileType>Document</FileType>
-      <DeploymentContent>true</DeploymentContent>
-    </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_Denoise_High.hlsl">
-      <FileType>Document</FileType>
-      <DeploymentContent>true</DeploymentContent>
-    </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_Denoise_Ultra.hlsl">
-      <FileType>Document</FileType>
-      <DeploymentContent>true</DeploymentContent>
-    </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_VSR_Low.hlsl">
-      <FileType>Document</FileType>
-      <DeploymentContent>true</DeploymentContent>
-    </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_VSR_Medium.hlsl">
-      <FileType>Document</FileType>
-      <DeploymentContent>true</DeploymentContent>
-    </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_VSR_High.hlsl">
-      <FileType>Document</FileType>
-      <DeploymentContent>true</DeploymentContent>
-    </CopyFileToFolders>
-    <CopyFileToFolders Include="RTXVideo\RTXVideo_VSR_Ultra.hlsl">
+    <CopyFileToFolders Include="RTXVideo\RTXVideo_VSR.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent>true</DeploymentContent>
     </CopyFileToFolders>
@@ -595,7 +575,7 @@
     <CopyFileToFolders Remove="DLSSFG\*.hlsl" Condition="'$(PackDLSSFrameGenerationEffect)' != 'true'" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Target Name="RemoveRetiredSrEffects" BeforeTargets="Build">
+  <Target Name="RemoveRetiredSrEffects" BeforeTargets="Build" Condition="'$(PreserveLocalRuntime)' != 'true'">
     <Delete Files="$(OutDir)effects\DLSS\DLSS_ZeroMV.hlsl;$(OutDir)effects\DLSS\DLSS_ZeroMV_Jitter.hlsl;$(OutDir)effects\DLSS\DLSS_OpticalFlow.hlsl;$(OutDir)effects\FSR2\FSR2_ZeroMV.hlsl;$(OutDir)effects\FSR2\FSR2_ZeroMV_Jitter.hlsl;$(OutDir)effects\FSR2\FSR2_OpticalFlow.hlsl;$(OutDir)effects\FSR3\FSR3_ZeroMV.hlsl;$(OutDir)effects\FSR3\FSR3_ZeroMV_Jitter.hlsl;$(OutDir)effects\FSR3\FSR3_OpticalFlow.hlsl;$(OutDir)effects\FSR4\FSR4_ZeroMV.hlsl;$(OutDir)effects\FSR4\FSR4_ZeroMV_Jitter.hlsl;$(OutDir)effects\FSR4\FSR4_OpticalFlow.hlsl;$(OutDir)effects\XeSS\XeSS_ZeroMV.hlsl;$(OutDir)effects\XeSS\XeSS_ZeroMV_Jitter.hlsl;$(OutDir)effects\XeSS\XeSS_OpticalFlow.hlsl" />
   </Target>
 </Project>

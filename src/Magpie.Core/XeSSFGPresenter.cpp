@@ -17,7 +17,22 @@
 namespace Magpie {
 
 static constexpr uint32_t BUFFER_COUNT = 3;
-static constexpr DXGI_FORMAT COLOR_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
+// XeSS-FG HDR terminal contract: HDR10/BT.2100 packed 10:10:10:2 UNORM.
+// The proxy swap-chain, shared color surface, and back buffers all use this
+// exact format so the SDK observes one consistent terminal resource format.
+static constexpr DXGI_FORMAT HDR_COLOR_FORMAT = DXGI_FORMAT_R10G10B10A2_UNORM;
+static constexpr DXGI_FORMAT LDR_COLOR_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
+// DirectComposition virtual surfaces do not accept the XeSS terminal's
+// packed R10 format. Keep the independent UI surface in FP16/scRGB; the
+// XeSS proxy swap chain and terminal color resources remain HDR10 R10.
+static constexpr DXGI_FORMAT OVERLAY_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+static DXGI_FORMAT ColorFormat(bool hdr) noexcept {
+	return hdr ? HDR_COLOR_FORMAT : LDR_COLOR_FORMAT;
+}
+static DXGI_FORMAT OverlayFormat(bool hdr) noexcept {
+	return hdr ? OVERLAY_FORMAT : LDR_COLOR_FORMAT;
+}
 
 static bool XeFGSucceeded(xefg_swapchain_result_t result) noexcept {
 	return result >= XEFG_SWAPCHAIN_RESULT_SUCCESS;
@@ -112,6 +127,7 @@ struct XeSSFGPresenter::Impl {
 	bool externalMotionValid = false;
 	bool externalMotionReset = true;
 	bool resetHistory = true;
+	bool hdrEnabled = false;
 	std::chrono::steady_clock::time_point lastPresent{};
 	// 残差转移组合的节奏控制（parity 真值驱动,不再用时间阈值猜测）。后端
 	// 发布每帧后经 SetReuseParity 写入 0(偶)/1(奇)/-1(未启用)。P 的估计只
@@ -204,7 +220,7 @@ static bool CreateSharedColor(XeSSFGPresenter::Impl& impl) noexcept {
 	desc.Height = impl.height;
 	desc.MipLevels = 1;
 	desc.ArraySize = 1;
-	desc.Format = COLOR_FORMAT;
+	desc.Format = ColorFormat(impl.hdrEnabled);
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -435,7 +451,7 @@ bool XeSSFGPresenter::_ResizeOverlaySurface() noexcept {
 		hr = impl.overlayDCompSurface->Resize(impl.width, impl.height);
 	} else {
 		hr = impl.overlayDCompDevice->CreateVirtualSurface(
-			impl.width, impl.height, COLOR_FORMAT,
+			impl.width, impl.height, OverlayFormat(impl.hdrEnabled),
 			DXGI_ALPHA_MODE_PREMULTIPLIED, impl.overlayDCompSurface.put());
 		if (SUCCEEDED(hr)) {
 			hr = impl.overlayDCompVisual->SetContent(impl.overlayDCompSurface.get());
@@ -486,6 +502,7 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 	impl->width = static_cast<uint32_t>(size.cx);
 	impl->height = static_cast<uint32_t>(size.cy);
 	impl->externalMotionEnabled = _useExternalMotion;
+	impl->hdrEnabled = ScalingWindow::Get().Options().IsHdrCompatibilityEnabled();
 
 	HRESULT hr = D3D12CreateDevice(
 		_deviceResources->GetGraphicsAdapter(), D3D_FEATURE_LEVEL_11_0,
@@ -594,7 +611,7 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 	DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
 	swapChainDesc.Width = impl->width;
 	swapChainDesc.Height = impl->height;
-	swapChainDesc.Format = COLOR_FORMAT;
+	swapChainDesc.Format = ColorFormat(impl->hdrEnabled);
 	swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	swapChainDesc.BufferCount = BUFFER_COUNT;
 	swapChainDesc.SampleDesc.Count = 1;
@@ -618,6 +635,15 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 	if (!XeFGSucceeded(result) || !impl->swapChain) {
 		LogXeFGResult("get proxy swap chain failed", result);
 		return false;
+	}
+	if (impl->hdrEnabled) {
+		HRESULT colorSpaceHr = impl->swapChain->SetColorSpace1(
+			DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+		if (FAILED(colorSpaceHr)) {
+			Logger::Get().ComError("Set XeSSFG HDR10/BT.2100 color space failed", colorSpaceHr);
+			return false;
+		}
+		Logger::Get().Info("XeSSFG endpoint: format=R10G10B10A2_UNORM colorSpace=HDR10/BT.2100");
 	}
 	impl->swapChain->SetMaximumFrameLatency(1);
 	impl->frameLatencyWaitableObject.reset(
@@ -1108,10 +1134,19 @@ bool XeSSFGPresenter::OnResize() noexcept {
 	const UINT flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT |
 		(_deviceResources->IsTearingSupported() && ScalingWindow::Get().Options().isVRREnabled ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
 	HRESULT hr = impl.swapChain->ResizeBuffers(
-		BUFFER_COUNT, width, height, COLOR_FORMAT, flags);
+		BUFFER_COUNT, width, height, ColorFormat(impl.hdrEnabled), flags);
 	if (FAILED(hr)) {
 		Logger::Get().ComError("Resize XeSSFG proxy swap chain failed", hr);
 		return false;
+	}
+	if (impl.hdrEnabled) {
+		hr = impl.swapChain->SetColorSpace1(
+			DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+		if (FAILED(hr)) {
+			Logger::Get().ComError(
+				"Restore XeSSFG HDR10/BT.2100 color space after resize failed", hr);
+			return false;
+		}
 	}
 	impl.width = width;
 	impl.height = height;

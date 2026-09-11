@@ -395,6 +395,26 @@ void RootPage::NavigateToAboutPage() {
 	nv.SelectedItem(nv.FooterMenuItems().GetAt(0));
 }
 
+bool RootPage::NavigateToIssueProfile(std::wstring_view name, std::wstring_view pathRule, std::wstring_view classRule) {
+	const auto& profiles = AppSettings::Get().Profiles();
+	int selected = -1;
+	if (!name.empty() || !pathRule.empty() || !classRule.empty()) {
+		const auto found = std::ranges::find_if(profiles, [&](const Profile& profile) {
+			return profile.name == name && profile.pathRule == pathRule && profile.classNameRule == classRule;
+		});
+		if (found == profiles.end()) return false;
+		selected = static_cast<int>(found - profiles.begin());
+	}
+	auto nv = RootNavigationView();
+	nv.SelectedItem(nv.MenuItems().GetAt(static_cast<uint32_t>(selected + int(FIRST_PROFILE_ITEM_IDX))));
+	return true;
+}
+
+void RootPage::NavigateToScalingModes() {
+	auto nv = RootNavigationView();
+	nv.SelectedItem(nv.MenuItems().GetAt(1));
+}
+
 TitleBarControl& RootPage::TitleBar() {
 	return *get_self<TitleBarControl>(RootPageT::TitleBar());
 }

@@ -37,11 +37,13 @@ The frame rate displayed by Magpie is that of its own rather than that of the ga
 
 ## Does Magpie support touch input?
 
-Supported from v0.11, see [About touch support](https://github.com/Blinue/Magpie/wiki/About-touch-support) for details.
+Supported from v0.11, see [About touch support](About%20touch%20support.md) for details.
 
 ### Does Magpie support frame generation?
 
-There are no plans to implement frame generation. Magpie's goal is to improve visual quality, not performance, while post-processing frame generation is difficult to achieve a good enough result and adds latency. Game engines can use motion vectors and depth buffers to make improvements, but Magpie has no access to these. Similarly, FSR 2/3 are not on the development roadmap, as they need to be integrated internally and post-processing is almost impossible.
+This enhanced version supports DLSS FG and XeSS FG/MFG through the Frame Generation & Frame Rate category; use one frame-generation implementation per group. Available multipliers depend on the GPU and driver. Optical flow defaults to off, with AMD or NVIDIA motion estimation selectable in effect parameters.
+
+This version also provides DLSS SR, FSR 2/3 and XeSS upscaling effects. External capture lacks native game depth and camera jitter, so image quality can differ from in-game integration. See the [frame synchronization guide](FRAME_SYNC_GUIDE.md) for frame-rate and low-latency settings.
 
 ## What is the relationship between Magpie and Lossless Scaling?
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "NativeEffectBackend.h"
+#include "GroupBEffectProtocol.h"
 
 namespace Magpie {
 
@@ -23,7 +24,7 @@ struct DLSSNRSettings {
 	float intensity = 1.0f;
 	float localToneStrength = 1.0f;
 	float localStructureStrength = 1.0f;
-	float skinStructureStrength = -1.0f;
+	float skinStructureStrength = 0.0f;
 	bool useAutoMask = false;
 	bool uiCorrection = false;
 	// 残差转移：奇数帧跳过 NGX，把偶数帧的（运动补偿后的）残差贴到奇数帧的
@@ -33,15 +34,18 @@ struct DLSSNRSettings {
 	//                       2 = Global MV(全帧单一向量挪)
 	bool enableFrameReuse = false;
 	uint32_t residualTransferMode = 0;
-	NvidiaOpticalFlowQuality motionVectorQuality =
-		NvidiaOpticalFlowQuality::Balanced;
+	// 上游 0.6.7 统一的光流请求（取代旧 motionVectorQuality NVIDIA 单选）：
+	// 支持 AMD OF / NVIDIA OF 双通道，含旧键迁移（useMotionVectors/motionVectorQuality）。
+	MotionVectorRequest motionRequest{};
+	// Experimental FP16 path. SDR RGBA8 remains the default.
+	DlssnrExperimentProtocol experimentalHdr{};
 };
 
-DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option) noexcept;
+DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option, bool hdrEnabled = false) noexcept;
 
 // Experimental same-resolution DLSS neural filter. Magpie only owns the
-// composited colour frame, so valid zero-filled motion/depth textures are used
-// as explicit temporal guides.
+// composited colour frame. Motion uses shared optical flow when selected;
+// depth and unavailable motion use explicit zero guides.
 class DLSSNRFilter final : public NativeEffectBackend {
 public:
 	struct Impl;

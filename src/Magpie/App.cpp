@@ -23,6 +23,7 @@
 #include "CommonSharedConstants.h"
 #include "ControlSizeTrigger.h"
 #include "EffectsService.h"
+#include "ErrorService.h"
 #include "IsEqualStateTrigger.h"
 #include "IsNullStateTrigger.h"
 #include "LocalizationService.h"
@@ -172,6 +173,8 @@ bool App::Initialize(const wchar_t* arguments) {
 
 	LocalizationService::Get().Initialize();
 	ToastService::Get().Initialize();
+	ErrorService::Get().Initialize();
+	settings.PublishStartupNotice();
 	if (!AdaptersService::Get().Initialize()) {
 		_Uninitialize();
 		return false;

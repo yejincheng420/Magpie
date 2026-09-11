@@ -18,6 +18,7 @@ struct ScalingModesViewModel : ScalingModesViewModelT<ScalingModesViewModel>,
 	}
 
 	bool CanReorderScalingModes() const noexcept;
+	bool HasDuplicateNames() const noexcept;
 
 	void AddScalingMode();
 
@@ -31,6 +32,7 @@ private:
 	void _ScalingModesService_Moved(uint32_t fromIndex, uint32_t toIndex);
 
 	void _ScalingModesService_Removed(uint32_t index);
+	void _ScalingModesService_Removing(uint32_t index);
 
 	void _ScalingModesService_Reset();
 
@@ -43,6 +45,8 @@ private:
 	::Magpie::Event<::Magpie::EffectAddedWay>::EventRevoker _scalingModeAddedRevoker;
 	::Magpie::Event<uint32_t, uint32_t>::EventRevoker _scalingModeMovedRevoker;
 	::Magpie::Event<uint32_t>::EventRevoker _scalingModeRemovedRevoker;
+	::Magpie::Event<uint32_t>::EventRevoker _scalingModeRemovingRevoker;
+	::Magpie::Event<>::EventRevoker _scalingModeNamesChangedRevoker;
 	::Magpie::Event<>::EventRevoker _scalingModesResetRevoker;
 	IObservableVector<IInspectable>::VectorChanged_revoker _scalingModesChangedRevoker;
 

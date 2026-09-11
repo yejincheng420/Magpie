@@ -45,6 +45,7 @@ struct ScalingModeEffectItem : ScalingModeEffectItemT<ScalingModeEffectItem>,
 	bool CanScale() const noexcept;
 
 	bool HasParameters() const noexcept;
+	hstring IssueDescription() const noexcept;
 
 	IVector<IInspectable> ScalingTypes() noexcept;
 

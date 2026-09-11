@@ -78,7 +78,9 @@ bool GraphicsCaptureFrameSource::_Initialize() noexcept {
 
 	_output = DirectXHelper::CreateTexture2D(
 		d3dDevice,
-		DXGI_FORMAT_B8G8R8A8_UNORM,
+		ScalingWindow::Get().Options().IsHdrCaptureEnabled()
+			? DXGI_FORMAT_R16G16B16A16_FLOAT
+			: DXGI_FORMAT_B8G8R8A8_UNORM,
 		_frameBox.right - _frameBox.left,
 		_frameBox.bottom - _frameBox.top,
 		D3D11_BIND_SHADER_RESOURCE
@@ -90,6 +92,24 @@ bool GraphicsCaptureFrameSource::_Initialize() noexcept {
 
 	Logger::Get().Info("GraphicsCaptureFrameSource 初始化完成");
 	return true;
+}
+
+ColorDescription GraphicsCaptureFrameSource::_GetSourceColorDescription() const noexcept {
+	ColorDescription result = FrameSourceBase::_GetSourceColorDescription();
+	if (!ScalingWindow::Get().Options().IsHdrCaptureEnabled()) {
+		return result;
+	}
+
+	// WGC's FP16 capture surface uses linear scRGB. The monitor metadata still
+	// supplies the display peak used by normalization.
+	result.dxgiColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+	result.primaries = HdrColorPrimaries::Rec709;
+	result.transfer = HdrTransferFunction::Linear;
+	result.range = HdrColorRange::SceneLinear;
+	result.isSceneReferred = true;
+	result.isInferred = true;
+	result.preExposure = 1.0f;
+	return result;
 }
 
 bool GraphicsCaptureFrameSource::Start() noexcept {
@@ -164,8 +184,12 @@ FrameSourceState GraphicsCaptureFrameSource::_Update() noexcept {
 				}
 				frame.Close();
 			} else {
-				if (_lastFrameTimestamp100ns && timestamp - _lastFrameTimestamp100ns >= 5'000'000) {
-					_InterruptCapture("capture timestamp discontinuity");
+				// Preserve the long-pause optimization, with a 5-second debounce.
+				// WGC can legitimately skip hundreds of milliseconds for static or
+				// throttled windows; those gaps must not reset FG history and flash.
+				if (_lastFrameTimestamp100ns &&
+					timestamp - _lastFrameTimestamp100ns >= 50'000'000) {
+					_InterruptCapture("capture long-pause discontinuity");
 				}
 				_deviceResources->GetD3DDC()->CopySubresourceRegion(
 					_output.get(), 0, 0, 0, 0, texture.get(), 0, &_frameBox);
@@ -439,7 +463,9 @@ bool GraphicsCaptureFrameSource::_StartCapture(const char* reason) noexcept {
 #endif
 		_captureFramePool = winrt::Direct3D11CaptureFramePool::CreateFreeThreaded(
 			_wrappedD3DDevice,
-			winrt::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+			ScalingWindow::Get().Options().IsHdrCaptureEnabled()
+				? winrt::DirectXPixelFormat::R16G16B16A16Float
+				: winrt::DirectXPixelFormat::B8G8R8A8UIntNormalized,
 			4,	// 帧的缓存数量，更大的值有利于在低帧率下降低延迟
 			{ (int)_frameBox.right, (int)_frameBox.bottom } // 帧的尺寸为包含源窗口的最小尺寸
 		);

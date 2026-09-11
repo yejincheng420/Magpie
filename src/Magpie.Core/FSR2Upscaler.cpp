@@ -31,6 +31,8 @@ void FSR2Upscaler::_Reset() noexcept {
 	_zeroMotion = nullptr;
 	_zeroDepthUav = nullptr;
 	_zeroDepth = nullptr;
+	_exposureUav = nullptr;
+	_exposure = nullptr;
 	_reactiveUav = nullptr;
 	_reactive = nullptr;
 	if (_backendModule) FreeLibrary(_backendModule);
@@ -108,13 +110,23 @@ bool FSR2Upscaler::Initialize(
 	desc.device = reinterpret_cast<decltype(&ffxGetDeviceDX11)>(_getDevice)(_device);
 	desc.maxRenderSize = { inDesc.Width, inDesc.Height };
 	desc.displaySize = { outDesc.Width, outDesc.Height };
-	desc.flags = FFX_FSR2_ENABLE_AUTO_EXPOSURE | FFX_FSR2_ENABLE_DEPTH_INVERTED |
-		FFX_FSR2_ENABLE_DEPTH_INFINITE;
+	desc.flags = FFX_FSR2_ENABLE_AUTO_EXPOSURE |
+		(_hdrProtocol.depthInverted ? FFX_FSR2_ENABLE_DEPTH_INVERTED : 0) |
+		(_hdrProtocol.depthInfinite ? FFX_FSR2_ENABLE_DEPTH_INFINITE : 0);
+	if (_hdrProtocol.hdrColorInput) desc.flags |= FFX_FSR2_ENABLE_HIGH_DYNAMIC_RANGE;
 	ec = reinterpret_cast<decltype(&ffxFsr2ContextCreate)>(_contextCreate)(
 		static_cast<FfxFsr2Context*>(_context), &desc);
 	if (ec != FFX_OK) { Logger::Get().Error(fmt::format("ffxFsr2ContextCreate failed ({})", (int)ec)); _Reset(); return false; }
-	Logger::Get().Info(fmt::format("FSR2 D3D11 initialized (opticalFlow={}): {}x{} -> {}x{}",
-		_enableOpticalFlow, inDesc.Width, inDesc.Height, outDesc.Width, outDesc.Height));
+	if (_hdrProtocol.hdrColorInput) {
+		_exposure = DirectXHelper::CreateTexture2D(_device, DXGI_FORMAT_R32_FLOAT, 1, 1,
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
+		if (_exposure) _device->CreateUnorderedAccessView(
+			_exposure.get(), nullptr, _exposureUav.put());
+	}
+	Logger::Get().Info(fmt::format("FSR2 D3D11 initialized (opticalFlow={}, hdr={}, transfer={}, exposure={:.3f}): {}x{} -> {}x{}",
+		_enableOpticalFlow, _hdrProtocol.hdrColorInput,
+		static_cast<int>(_hdrProtocol.transfer), _hdrProtocol.exposure,
+		inDesc.Width, inDesc.Height, outDesc.Width, outDesc.Height));
 	return true;
 }
 
@@ -133,6 +145,10 @@ bool FSR2Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
 	static constexpr float REACTIVE_OF[4]{ 0.5f,0.5f,0.5f,0.5f };
 	static constexpr float REACTIVE_ZEROMV[4]{ 0.9f,0.9f,0.9f,0.9f };
 	_d3dDC->ClearUnorderedAccessViewFloat(_zeroDepthUav.get(), ZERO);
+	if (_exposureUav) {
+		const float exposure[4]{ _hdrProtocol.exposure, 0, 0, 0 };
+		_d3dDC->ClearUnorderedAccessViewFloat(_exposureUav.get(), exposure);
+	}
 	ID3D11Texture2D* motionVectors = _zeroMotion.get();
 	if (_enableOpticalFlow) {
 		D3D11_TEXTURE2D_DESC desc{};
@@ -155,7 +171,8 @@ bool FSR2Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
 	d.depth = getResource(static_cast<FfxFsr2Context*>(_context), _zeroDepth.get(), L"FSR2_ZeroDepth", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.motionVectors = getResource(static_cast<FfxFsr2Context*>(_context), motionVectors,
 		_enableOpticalFlow ? L"FSR2_OpticalFlow" : L"FSR2_ZeroMotion", FFX_RESOURCE_STATE_COMPUTE_READ);
-	d.exposure = getResource(static_cast<FfxFsr2Context*>(_context), nullptr, L"FSR2_AutoExposure", FFX_RESOURCE_STATE_COMPUTE_READ);
+	d.exposure = getResource(static_cast<FfxFsr2Context*>(_context), _exposure.get(),
+		_exposure ? L"FSR2_Exposure" : L"FSR2_AutoExposure", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.reactive = getResource(static_cast<FfxFsr2Context*>(_context), _reactive.get(), L"FSR2_FullReactive", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.transparencyAndComposition = getResource(static_cast<FfxFsr2Context*>(_context), nullptr, nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.output = getResource(static_cast<FfxFsr2Context*>(_context), output, L"FSR2_Output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -167,7 +184,7 @@ bool FSR2Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
 	d.enableSharpening = true;
 	d.sharpness = 0.2f;
 	d.frameTimeDelta = 16.6667f;
-	d.preExposure = 1.0f;
+	d.preExposure = _hdrProtocol.preExposure;
 	d.reset = _resetHistory;
 	d.cameraNear = 1.0f;
 	d.cameraFar = FLT_MAX;

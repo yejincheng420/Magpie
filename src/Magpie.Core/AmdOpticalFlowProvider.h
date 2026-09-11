@@ -1,5 +1,6 @@
 #pragma once
 #include "FrameGuidanceProvider.h"
+#include "GroupBEffectProtocol.h"
 
 namespace Magpie {
 
@@ -27,11 +28,13 @@ public:
 	void Reset(FrameGuidanceResetReason reason) noexcept override;
 	bool Resize(FrameGuidanceExtent sourceExtent) noexcept override;
 	OpticalFlowInitializationError InitializationError() const noexcept override;
+	void SetHdrProtocol(const AmdOpticalFlowHdrProtocol& protocol) noexcept { _hdrProtocol = protocol; }
 
 private:
 	// 仅在 MP_ENABLE_AMD_OPTICAL_FLOW 构建中使用；无 SDK 的 CI 构建里 ClangCL -Werror 会报未使用
 	[[maybe_unused]] AmdOpticalFlowMode _mode;
 	std::unique_ptr<Impl> _impl;
+	AmdOpticalFlowHdrProtocol _hdrProtocol{};
 };
 
 }

@@ -8,6 +8,8 @@ struct EffectItem {
 	phmap::flat_hash_map<std::wstring, float> parameters;
 	ScalingType scalingType = ScalingType::Normal;
 	std::pair<float, float> scale = { 1.0f,1.0f };
+	bool isRecoveryInvalid = false;
+	std::string recoveryOriginal;
 
 	bool HasScale() const noexcept {
 		return scalingType != ScalingType::Normal ||

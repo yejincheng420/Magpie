@@ -27,8 +27,13 @@ using namespace Magpie;
 constexpr float EFFECT_PARAMETERS_MIN_WIDTH = 360, EFFECT_PARAMETERS_MIN_HEIGHT = 400;
 const char* EFFECT_PARAMETERS_WINDOW_ID = "effectParameters";
 struct Options { std::unordered_map<std::string, OverlayWindowOption> windows; };
-struct Input { bool FrameInputCanceled() { return false; } };
+struct Input { bool FrameInputCanceled() { return false; } void Tooltip(const char*,float) {} };
+struct ScalingWindow { static ScalingWindow& Get() { static ScalingWindow s; return s; } struct Data { struct { std::string parameters; } toolbarShortcutLabels; } data; const Data& Options() const { return data; } };
+struct StrHelper { template<class... T> static std::string Concat(T&&... t) { std::string s; (s.append(t),...); return s; } };
 struct Panel {
+    bool _parameterFocusSwitchingEnabled = false;
+    bool IsEditingParameters() const { return true; }
+    std::string _GetResourceString(const wchar_t*) { return "hint"; }
     Options options{{{"effectParameters", {0, 1, 60, 0.5f}}}};
     Options* _overlayOptions = &options;
     float _dpiScale = 1;

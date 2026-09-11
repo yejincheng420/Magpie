@@ -76,6 +76,9 @@ FrameGuidanceMetadata MakeMetadata(
 ) noexcept {
 	return {
 		.frameId = frame.frameId,
+		.captureSequence = frame.captureSequence,
+		.resourceGeneration = frame.resourceGeneration,
+		.timestamp100ns = frame.timestamp100ns,
 		.sourceExtent = frame.sourceExtent,
 		.validRegion = frame.validRegion,
 		.resetReason = reason,
@@ -496,6 +499,7 @@ struct AmdOpticalFlowProvider::Impl {
 	FrameGuidanceExtent opticalFlowExtent{};
 	FrameGuidanceExtent sparseExtent{};
 	AmdOpticalFlowMode mode = AmdOpticalFlowMode::Quality;
+	AmdOpticalFlowHdrProtocol hdrProtocol{};
 	FrameGuidanceResetReason resetReason = FrameGuidanceResetReason::Initialize;
 	uint64_t fenceValue = 0;
 	uint64_t lastSubmittedValue = 0;
@@ -515,6 +519,7 @@ bool AmdOpticalFlowProvider::Initialize(
 	DeviceResources& resources,
 	FrameGuidanceExtent sourceExtent
 ) noexcept {
+	_impl->hdrProtocol = _hdrProtocol;
 	return _impl->Create(resources, sourceExtent, _mode);
 }
 
@@ -556,8 +561,13 @@ bool AmdOpticalFlowProvider::BeginFrame(
 			L"Magpie AMD OF SCD", FFX_API_RESOURCE_STATE_COMMON),
 		.reset = !impl.historyValid ||
 			impl.resetReason != FrameGuidanceResetReason::None,
-		.backbufferTransferFunction = FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB,
-		.minMaxLuminance = { 0.0f, 1.0f }
+		.backbufferTransferFunction =
+#ifdef FFX_API_BACKBUFFER_TRANSFER_FUNCTION_LINEAR
+			impl.hdrProtocol.transfer == GroupBTransfer::Linear ?
+			FFX_API_BACKBUFFER_TRANSFER_FUNCTION_LINEAR :
+#endif
+			FFX_API_BACKBUFFER_TRANSFER_FUNCTION_SRGB,
+		.minMaxLuminance = { impl.hdrProtocol.minMaxLuminance[0], impl.hdrProtocol.minMaxLuminance[1] }
 	};
 	const auto opticalFlowStart = std::chrono::steady_clock::now();
 	if (ffxOpticalflowContextDispatch(

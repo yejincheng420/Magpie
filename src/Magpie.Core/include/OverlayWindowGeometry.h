@@ -6,19 +6,12 @@
 namespace Magpie {
 
 struct OverlayWindowOption {
-	// 0: distance from the leading edge in DIPs; 1: proportional center;
-	// 2: distance from the trailing edge in DIPs.
 	uint16_t hArea = 0;
 	uint16_t vArea = 0;
 	float hPos = 0.0f;
 	float vPos = 0.0f;
-	// Preferred expanded size in DIPs. Zero keeps the default for old settings.
 	float width = 0.0f;
 	float height = 0.0f;
-};
-
-struct OverlayWindowRect {
-	float x, y, width, height;
 };
 
 inline void SanitizeOverlayWindowOption(OverlayWindowOption& option) noexcept {
@@ -32,6 +25,10 @@ inline void SanitizeOverlayWindowOption(OverlayWindowOption& option) noexcept {
 	if (!std::isfinite(option.width) || option.width < 0.0f) option.width = 0.0f;
 	if (!std::isfinite(option.height) || option.height < 0.0f) option.height = 0.0f;
 }
+
+struct OverlayWindowRect {
+	float x, y, width, height;
+};
 
 inline OverlayWindowRect RestoreEffectParametersWindow(
 	OverlayWindowOption option, float viewportWidth, float viewportHeight, float dpiScale
