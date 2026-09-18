@@ -16,7 +16,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 // remains consistent on all systems.
 IDI_APP                 ICON                    "Magpie.ico"
 
-EFFECT_CATALOG          RCDATA                  "EffectCatalog/zh-Hans.json"
+EFFECT_CATALOG_ZH_HANS  RCDATA                  "EffectCatalog/zh-Hans.json"
+EFFECT_CATALOG_EN_US    RCDATA                  "EffectCatalog/en-US.json"
 
 /////////////////////////////////////////////////////////////////////////////
 //

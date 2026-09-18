@@ -694,6 +694,7 @@
     <ClInclude Include="EffectPickerLayout.h" />
     <ClInclude Include="EffectChoiceItems.h" />
     <None Include="EffectCatalog\zh-Hans.json" />
+    <None Include="EffectCatalog\en-US.json" />
   </ItemGroup>
   <ItemGroup>
     <SDKReference Include="WindowsDesktop, Version=10.0.26100.0" />

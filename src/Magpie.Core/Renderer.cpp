@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DlssnrAutoHdr.h"
+#include "DLSSNRParameters.h"
 #include "RTXVideoParameters.h"
 #include "FrameTrace.h"
 #include "FramePacingOptions.h"
@@ -379,7 +380,7 @@ ScalingError Renderer::Initialize(HWND hwndAttach, OverlayOptions& overlayOption
 		if (kind != FrameGenerationEffectKind::None) {
 			_configuredFrameGenerationMultiplier = kind == FrameGenerationEffectKind::XeSSX2 ? 2u :
 				static_cast<uint32_t>(ReadIntegralEffectParameter(effect, "multiplier", 2, 4,
-					kind == FrameGenerationEffectKind::XeSSMultiFrame ? 3 : 2));
+					2));
 		}
 		if (kind != FrameGenerationEffectKind::XeSSX2 &&
 			kind != FrameGenerationEffectKind::XeSSMultiFrame) {
@@ -391,17 +392,16 @@ ScalingError Renderer::Initialize(HWND hwndAttach, OverlayOptions& overlayOption
 		_xessFrameGenerationKind = kind;
 		xessFrameGenerationMultiplier = *xessVariant == XeSSFGVariant::X2 ? 2u :
 			static_cast<uint32_t>(ReadIntegralEffectParameter(
-				effect, "multiplier", 2, 4, 3));
+				effect, "multiplier", 2, 4, 2));
 		const int method = ReadIntegralEffectParameter(
 			effect, "opticalFlowMethod", 0,
-			*xessVariant == XeSSFGVariant::X2 ? 2 : 1, 0);
+			2, 1);
 		if (method == static_cast<int>(OpticalFlowMethod::Amd)) {
 			const int quality = ReadIntegralEffectParameter(
 				effect, "amdOpticalFlowMode", 0, 1, 1);
 			_xessMotionRequest = MotionVectorRequest::Amd(
 				static_cast<AmdOpticalFlowMode>(quality));
-		} else if (*xessVariant == XeSSFGVariant::X2 &&
-			method == static_cast<int>(OpticalFlowMethod::Nvidia)) {
+		} else if (method == static_cast<int>(OpticalFlowMethod::Nvidia)) {
 			const int quality = ReadIntegralEffectParameter(
 				effect, "nvidiaOpticalFlowQuality", 1, NVIDIA_OPTICAL_FLOW_MAX_QUALITY, 2);
 			_xessMotionRequest = MotionVectorRequest::Nvidia(
@@ -433,14 +433,12 @@ ScalingError Renderer::Initialize(HWND hwndAttach, OverlayOptions& overlayOption
 			xessFrameGenerationMultiplier, adapterDesc.VendorId,
 			adapterDesc.DeviceId, static_cast<uint32_t>(_xessMotionRequest.method),
 			static_cast<uint32_t>(_xessMotionRequest.quality)));
-		if (xessFrameGenerationMultiplier > 2 &&
-			adapterDesc.VendorId != 0x8086) {
-			// 非 Intel 适配器：不再硬性拒绝，由 XeSSFGPresenter 对
-			// libxess_fg 应用进程内 MFG 解锁补丁（见 ApplyXeSSMfgUnlock）；
-			// 解锁或哨兵初始化失败时按 XeSSMfgMultiplierUnsupported 干净降级。
-			Logger::Get().Info(
-				"XeSS Multi-Frame Generation on a non-Intel adapter: attempting libxess_fg unlock");
-		}
+		// 非 Intel 适配器不再硬性拒绝：XeSSFGPresenter 内部经 Lease 完成验证
+		// 后解锁（XeSSMfgCompatibilityUnavailable 干净降级）。Intel 门禁删除
+		// 与上游一致。
+		// Both providers supply the same current-to-previous pixel-space motion
+		// contract. Provider/quality capabilities are checked by Frame Guidance;
+		// the number of interpolated frames does not change the input contract.
 
 		auto xessPresenter = std::make_unique<XeSSFGPresenter>(
 			*xessVariant,
@@ -997,6 +995,10 @@ bool Renderer::_FrontendRender(
 		_destRect.right - rendererRect.left,
 		_destRect.bottom - rendererRect.top
 	};
+	const auto& sourceMetadata = stableBaseOnly ? _frontendPresentedFrameMetadata : _frontendFrameMetadata;
+	_presenter->SetSourceTiming(sourceMetadata.frameId,
+		sourceMetadata.captureSequence, sourceMetadata.resourceGeneration,
+		sourceMetadata.timestamp100ns);
 	_presenter->SetFrameGuidance(
 		_frontendMotionValid ? _frontendMotionTexture.get() : nullptr,
 		_frontendMotionFrameId,
@@ -1936,13 +1938,16 @@ bool Renderer::_InitFrameSource() noexcept {
 
 	Logger::Get().Info(StrHelper::Concat("当前捕获模式: ", _frameSource->Name()));
 
-	const bool forceDuplicateFrameDetection = std::ranges::any_of(
-		ScalingWindow::Get().Options().effects,
-		[](const EffectOption& effect) { return IsFrameGenerationEffect(effect.name); });
-	_frameSource->ForceDuplicateFrameDetection(forceDuplicateFrameDetection);
-	if (forceDuplicateFrameDetection) {
-		Logger::Get().Info(
-			"Frame Generation: exact duplicate-frame filtering forced for captured input");
+	for (const EffectOption& effect : ScalingWindow::Get().Options().effects) {
+		if (!IsFrameGenerationEffect(effect.name)) continue;
+		// Preserve the previous FG behavior for configurations without this option.
+		const bool enabled = ReadIntegralEffectParameter(
+			effect, "duplicateFrameFiltering", 0, 1, 1) != 0;
+		_frameSource->DuplicateFrameDetectionOverride(enabled);
+		Logger::Get().Info(fmt::format(
+			"Frame Generation: exact duplicate-frame filtering {} for captured input",
+			enabled ? "enabled" : "disabled"));
+		break;
 	}
 
 	Logger::DiagnosticCapture captureDiagnostic;
@@ -2637,6 +2642,14 @@ ID3D11Texture2D* Renderer::_ResizeEffects() noexcept {
 		if (_nativeEffectBackends[i] && !_nativeEffectBackends[i]->Resize(
 			_backendResources, _effectDrawers[i].GetTexture(0), _effectDrawers[i].GetOutputTexture())) {
 			if (effects[i].name == "DLSSNR\\DLSSNR_AI_Filter") {
+				const int count = DLSSNRPassCount([&](std::string_view name, float fallback) {
+					const auto it = effects[i].parameters.find(std::string(name));
+					return it == effects[i].parameters.end() ? fallback : it->second;
+				});
+				if (count > 1) {
+					Logger::Get().Error("Resize DLSSNR Multi Pass failed; stopping the complete chain");
+					return nullptr;
+				}
 				const char status[] =
 					"DLSSNR STATUS: Feature=18 created=false stage=resize "
 					"fallback=pass-through";
@@ -3691,6 +3704,18 @@ void Renderer::_BackendRender(
 			if (!nativeDrawSucceeded && component == HdrComponentKind::RtxVideoHdr) {
 				_FailColorPipeline(_runtimeEffectOptions[i].name, ScalingError::RtxHdrUnavailable);
 				return;
+			}
+			if (!nativeDrawSucceeded && _runtimeEffectOptions[i].name == "DLSSNR\\DLSSNR_AI_Filter") {
+				const int count = DLSSNRPassCount([&](std::string_view name, float fallback) {
+					const auto& values = _runtimeEffectOptions[i].parameters;
+					const auto it = values.find(std::string(name));
+					return it == values.end() ? fallback : it->second;
+				});
+				if (count > 1) {
+					_FailColorPipeline(_runtimeEffectOptions[i].name + "\nMulti Pass evaluation failed",
+						NgxRuntimeGuard::IsFaulted() ? ScalingError::NgxRestartRequired : ScalingError::DlssNrUnavailable);
+					return;
+				}
 			}
 			if (!nativeDrawSucceeded) {
 				const HdrEffectBoundaryContext& boundary = effectDrawer.GetHdrBoundary();

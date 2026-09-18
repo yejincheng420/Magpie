@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "EffectCatalog.h"
+#include "LocalizationService.h"
 #include "Logger.h"
 #include "StrHelper.h"
 #include <rapidjson/document.h>
@@ -19,7 +20,13 @@ const EffectPickerEntry* EffectCatalog::Find(std::wstring_view id) const {
 EffectCatalog::EffectCatalog() {
 	// Descriptions are embedded with the executable, never read from user settings.
 	const HMODULE module = GetModuleHandle(nullptr);
-	const HRSRC resource = FindResource(module, L"EFFECT_CATALOG", RT_RCDATA);
+	const bool chinese = std::wstring_view(LocalizationService::Get().Language()).starts_with(L"zh");
+	HRSRC resource = FindResource(module,
+		chinese ? L"EFFECT_CATALOG_ZH_HANS" : L"EFFECT_CATALOG_EN_US", RT_RCDATA);
+	// Keep the picker usable if a localized resource is accidentally omitted.
+	if (!resource && !chinese) {
+		resource = FindResource(module, L"EFFECT_CATALOG_ZH_HANS", RT_RCDATA);
+	}
 	const HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
 	const auto bytes = loaded ? static_cast<const char*>(LockResource(loaded)) : nullptr;
 	if (!bytes) {

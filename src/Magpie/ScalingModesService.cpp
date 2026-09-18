@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "RTXVideoParameters.h"
+#include "XeSSFGParameters.h"
 #include "DlssOpticalFlowParameters.h"
 #include "AppSettings.h"
 #include "EffectHelper.h"
@@ -535,6 +536,10 @@ bool ScalingModesService::Import(const rapidjson::GenericObject<true, rapidjson:
 
 	if (scalingModes.empty()) {
 		return true;
+	}
+
+	if (MigrateXeSSFGEffects(scalingModes) && loadingSettings) {
+		AppSettings::Get().MarkConfigMigrationNeeded();
 	}
 
 	bool migratedR1 = false;

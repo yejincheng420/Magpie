@@ -5,6 +5,7 @@
 #include "EffectsService.h"
 #include "EffectPickerLayout.h"
 #include "App.h"
+#include "CommonSharedConstants.h"
 #include "MainWindow.h"
 #include "XamlHelper.h"
 #include <shellscalingapi.h>
@@ -17,6 +18,14 @@ using namespace Windows::UI::Xaml::Input;
 using Windows::UI::Xaml::Automation::AutomationProperties;
 namespace winrt::Magpie::implementation {
 namespace {
+std::wstring PickerString(std::wstring_view key) {
+	return std::wstring(ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID)
+		.GetString(hstring(key)));
+}
+std::wstring PickerEffectCount(std::wstring_view name, size_t count) {
+	return std::wstring(name) + PickerString(L"EffectPicker_NameSeparator") +
+		std::to_wstring(count) + PickerString(L"EffectPicker_EffectCountSuffix");
+}
 TextBlock PickerText(std::wstring_view text, double size = 13, bool singleLine = false) {
 	TextBlock block;
 	block.Text(text);
@@ -90,9 +99,8 @@ void ScalingModesPage::_BuildEffectPicker() {
 			entry.id = effect.name;
 			entry.name = EffectHelper::GetDisplayName(effect.name);
 			entry.category = L"custom";
-			entry.summary = L"自定义效果器；请参考作者说明。";
-			entry.details =
-				L"此效果器尚无用途 review。请参考作者提供的用途、参数与组合说明。HDR 兼容性待验证。";
+			entry.summary = PickerString(L"EffectPicker_CustomSummary");
+			entry.details = PickerString(L"EffectPicker_CustomDetails");
 			entry.searchText = NormalizeEffectSearch(effect.name);
 		}
 		_pickerEntries.push_back(std::move(entry));
@@ -104,9 +112,9 @@ void ScalingModesPage::_BuildEffectPicker() {
 	_pickerDetailPane = layout.details;
 	_pickerDetailContent = StackPanel();
 	_pickerDetailContent.Spacing(6);
-	_pickerDetailTitle = PickerText(L"全部", 15);
+	_pickerDetailTitle = PickerText(PickerString(L"EffectPicker_All"), 15);
 	_pickerDetailTitle.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
-	_pickerDetails = PickerText(L"查看已安装效果器的用途、适用场景和组合建议。", 12);
+	_pickerDetails = PickerText(PickerString(L"EffectPicker_AllDescription"), 12);
 	_pickerDetails.IsTextSelectionEnabled(true);
 	_pickerDetailContent.Children().Append(_pickerDetailTitle);
 	_pickerDetailContent.Children().Append(_pickerDetails);
@@ -115,7 +123,7 @@ void ScalingModesPage::_BuildEffectPicker() {
 	Row(_pickerDetailArea, 1, GridUnitType::Star);
 	Row(_pickerDetailArea, 1, GridUnitType::Auto);
 	_pickerDetailArea.Children().Append(_pickerDetailScroll);
-	_pickerDetailHint = PickerText(L"Ctrl + 滚轮：滚动说明", 10, true);
+	_pickerDetailHint = PickerText(PickerString(L"EffectPicker_DetailScrollHint"), 10, true);
 	_pickerDetailHint.HorizontalAlignment(HorizontalAlignment::Right);
 	_pickerDetailHint.Margin({0, 4, 0, 0});
 	_pickerDetailHint.Opacity(0.7);
@@ -174,7 +182,7 @@ void ScalingModesPage::_BuildEffectPicker() {
 		// One button owns the icon, label, count and padding, including all
 		// pointer, keyboard and accessibility activation feedback.
 		row.button.Content(layout);
-		AutomationProperties::SetName(row.button, name + L"，" + std::to_wstring(count) + L" 个效果器");
+		AutomationProperties::SetName(row.button, PickerEffectCount(name, count));
 		AutomationProperties::SetHelpText(row.button, description);
 		row.button.Click([weak, index](auto const &, auto const &) {
 			if (auto page = weak.get()) {
@@ -238,11 +246,13 @@ void ScalingModesPage::_BuildEffectPicker() {
 		categories.Children().Append(row.container);
 		_pickerCategories.push_back(std::move(row));
 	};
-	addCategory(L"入门", L"first_try", L"", L"按适用场景选择容易上手的效果器，先从一个开始比较画面。", -1,
+	addCategory(PickerString(L"EffectPicker_GettingStarted"), L"first_try", L"",
+		PickerString(L"EffectPicker_GettingStartedDescription"), -1,
 				false);
-	addCategory(L"进阶", L"advanced", L"",
-		L"视频超分、补帧、AI 画面重塑与帧率调节，按显卡条件和目标画面选择。", -1, false);
-	addCategory(L"全部", L"", L"", L"查看已安装效果器的用途、适用场景和组合建议。", -1, false);
+	addCategory(PickerString(L"EffectPicker_Advanced"), L"advanced", L"",
+		PickerString(L"EffectPicker_AdvancedDescription"), -1, false);
+	addCategory(PickerString(L"EffectPicker_All"), L"", L"",
+		PickerString(L"EffectPicker_AllDescription"), -1, false);
 	for (const auto &category : catalog.Categories()) {
 		const int parent = int(_pickerCategories.size());
 		addCategory(category.name, category.id, L"", category.description, -1,
@@ -250,8 +260,8 @@ void ScalingModesPage::_BuildEffectPicker() {
 		for (const auto &[name, description] : category.subcategories)
 			addCategory(name, category.id, name, description, parent, false);
 	}
-	addCategory(L"自定义／未归类", L"custom", L"",
-				L"已安装但尚无用途说明的效果器。请参考作者说明选择参数和组合位置。", -1, false);
+	addCategory(PickerString(L"EffectPicker_CustomCategory"), L"custom", L"",
+		PickerString(L"EffectPicker_CustomCategoryDescription"), -1, false);
 	_pickerCategoryScroll = PickerScroll(categories);
 	_pickerCategoryPane.Child(_pickerCategoryScroll);
 	Grid right;
@@ -261,8 +271,8 @@ void ScalingModesPage::_BuildEffectPicker() {
 	_pickerListPane.Child(right);
 	_pickerSearch = TextBox();
 	_pickerSearch.FontSize(13);
-	_pickerSearch.PlaceholderText(L"搜索效果器、用途或关键词……");
-	AutomationProperties::SetName(_pickerSearch, L"搜索全部效果器");
+	_pickerSearch.PlaceholderText(PickerString(L"EffectPicker_SearchPlaceholder"));
+	AutomationProperties::SetName(_pickerSearch, PickerString(L"EffectPicker_SearchAutomationName"));
 	right.Children().Append(_pickerSearch);
 	_pickerCount = PickerText(L"", 11);
 	_pickerCount.Margin({2, 7, 0, 7});
@@ -288,7 +298,7 @@ void ScalingModesPage::_BuildEffectPicker() {
 		Button button;
 		button.Style(letterStyle);
 		button.Content(box_value(name));
-		AutomationProperties::SetName(button, L"定位 " + name);
+		AutomationProperties::SetName(button, PickerString(L"EffectPicker_JumpTo") + name);
 		button.Click([weak, i](auto const&, auto const&) {
 			if (auto page = weak.get()) page->_JumpEffectPickerLetter(i);
 		});
@@ -316,7 +326,7 @@ void ScalingModesPage::_BuildEffectPicker() {
 	indexScroll.VerticalScrollBarVisibility(ScrollBarVisibility::Hidden);
 	indexScroll.Margin({6, 0, 0, 0});
 	Grid::SetColumn(indexScroll, 1);
-	AutomationProperties::SetName(indexScroll, L"按首字母定位效果器");
+	AutomationProperties::SetName(indexScroll, PickerString(L"EffectPicker_AlphabetIndexAutomationName"));
 	resultsArea.Children().Append(indexScroll);
 	_pickerSearch.TextChanged([weak](auto const &, auto const &) {
 		if (const auto page = weak.get(); page && !page->_pickerChangingCategory)
@@ -372,10 +382,11 @@ void ScalingModesPage::_UpdateEffectPickerColors() {
 		item.container.Style(Resources().Lookup(box_value(selected || hiddenSelection
 			? L"EffectPickerSelectedCategoryStyle" : L"EffectPickerCategoryStyle")).as<Windows::UI::Xaml::Style>());
 		item.selectionMark.Visibility(selected || hiddenSelection ? Visibility::Visible : Visibility::Collapsed);
-		std::wstring status = selected ? L"已选中" : hiddenSelection ? L"已选中其子分组" : L"";
+		std::wstring status = selected ? PickerString(L"EffectPicker_Selected") :
+			hiddenSelection ? PickerString(L"EffectPicker_ChildSelected") : L"";
 		if (item.hasChildren) {
-			if (!status.empty()) status += L"，";
-			status += item.expanded ? L"已展开" : L"已收起";
+			if (!status.empty()) status += PickerString(L"EffectPicker_NameSeparator");
+			status += PickerString(item.expanded ? L"EffectPicker_Expanded" : L"EffectPicker_Collapsed");
 		}
 		AutomationProperties::SetItemStatus(item.button, status);
 	}
@@ -441,7 +452,8 @@ void ScalingModesPage::_RefreshEffectPicker(std::wstring anchor) {
 			count.VerticalAlignment(VerticalAlignment::Center);
 			Grid::SetColumn(count, 1);
 			label.Children().Append(count);
-			AutomationProperties::SetItemStatus(row.button, entry.expanded ? L"已展开" : L"已收起");
+			AutomationProperties::SetItemStatus(row.button,
+				PickerString(entry.expanded ? L"EffectPicker_Expanded" : L"EffectPicker_Collapsed"));
 		}
 		text.Children().Append(label);
 		if (!entry.summary.empty()) {
@@ -452,8 +464,8 @@ void ScalingModesPage::_RefreshEffectPicker(std::wstring anchor) {
 		Grid::SetColumn(text, 1);
 		content.Children().Append(text);
 		row.button.Content(content);
-		AutomationProperties::SetName(row.button, entry.IsFamily()
-			? entry.name + L"，" + std::to_wstring(entry.count) + L" 个效果器" : entry.name);
+		AutomationProperties::SetName(row.button,
+			entry.IsFamily() ? PickerEffectCount(entry.name, entry.count) : entry.name);
 		const auto problem = !entry.IsFamily() && _pickerMode
 			? get_self<ScalingModeItem>(_pickerMode)->EffectAddProblem(hstring(entry.effectId)) : hstring{};
 		AutomationProperties::SetHelpText(row.button, problem.empty() ? hstring(entry.summary) : problem);
@@ -479,7 +491,7 @@ void ScalingModesPage::_RefreshEffectPicker(std::wstring anchor) {
 		_pickerResults.Children().Append(row.button);
 		_pickerRows.push_back(std::move(row));
 	}
-	std::wstring scope = searching ? L"搜索全部分类" : L"全部";
+	std::wstring scope = PickerString(searching ? L"EffectPicker_SearchAllCategories" : L"EffectPicker_All");
 	if (!searching && anchor.empty()) {
 		for (const auto& item : _pickerCategories) {
 			if (item.category != _pickerCategory || item.subcategory != _pickerSubcategory) continue;
@@ -494,7 +506,8 @@ void ScalingModesPage::_RefreshEffectPicker(std::wstring anchor) {
 	}
 	_pickerCount.Text(scope + L" · " + std::to_wstring(tree.effectCount));
 	if (!tree.effectCount) {
-		_SetEffectPickerDetails(L"没有匹配的效果器", L"尝试缩短关键词、搜索算法家族名，或选择“全部”查看已安装效果器。");
+		_SetEffectPickerDetails(PickerString(L"EffectPicker_NoMatches"),
+			PickerString(L"EffectPicker_NoMatchesDescription"));
 	} else if (searching && anchor.empty()) {
 		_ShowEffectPickerDetails(_pickerRows.front().entry.key);
 	}
