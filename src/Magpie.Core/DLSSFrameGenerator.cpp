@@ -51,9 +51,11 @@ struct DLSSFrameGenerator::Impl {
 	winrt::com_ptr<ID3D12CommandAllocator> allocator12;
 	winrt::com_ptr<ID3D12GraphicsCommandList> commandList12;
 	winrt::com_ptr<ID3D11Texture2D> sharedInput11;
-	winrt::com_ptr<ID3D11Texture2D> sharedGenerated11;
+	// Per-index 生成输出：槽 0 不用，槽 1..3 与 multiFrameIndex 一一对应，
+	// 批量 Evaluate 的三次写入互不覆盖（P0 正确性修复）。
+	std::array<winrt::com_ptr<ID3D11Texture2D>, 4> sharedGenerated11;
 	winrt::com_ptr<ID3D12Resource> sharedInput12;
-	winrt::com_ptr<ID3D12Resource> sharedGenerated12;
+	std::array<winrt::com_ptr<ID3D12Resource>, 4> sharedGenerated12;
 	winrt::com_ptr<ID3D12Resource> zeroMotion12;
 	winrt::com_ptr<ID3D12Resource> zeroDepth12;
 	std::array<winrt::com_ptr<ID3D12Resource>, 4> interpolationDisable12;
@@ -780,9 +782,7 @@ bool DLSSFrameGenerator::Initialize(
 	}
 
 	if (!CreateSharedTexture(*impl, inputDesc, false,
-		impl->sharedInput11, impl->sharedInput12) ||
-		!CreateSharedTexture(*impl, inputDesc, true,
-			impl->sharedGenerated11, impl->sharedGenerated12)) {
+		impl->sharedInput11, impl->sharedInput12)) {
 		return false;
 	}
 
@@ -1065,9 +1065,14 @@ bool DLSSFrameGenerator::Initialize(
 			_requestedSettings.multiplier,
 			maxGeneratedFrames + 1, impl->multiplier));
 	}
+	// 按最终生效倍率（而非 reset 首帧的 generatedFrameCount=1）创建全部
+	// 输出槽与 disable 资源：reset 后第一张稳态 x4 帧不会触碰空槽。
 	for (uint32_t frameIndex = 1;
 		frameIndex < impl->multiplier; ++frameIndex) {
-		if (!CreateInterpolationDisableResources(*impl, frameIndex)) {
+		if (!CreateSharedTexture(*impl, inputDesc, true,
+			impl->sharedGenerated11[frameIndex],
+			impl->sharedGenerated12[frameIndex]) ||
+			!CreateInterpolationDisableResources(*impl, frameIndex)) {
 			return false;
 		}
 	}
@@ -1155,10 +1160,11 @@ bool DLSSFrameGenerator::Initialize(
 
 	Logger::Get().Info(fmt::format(
 		"DLSS FG_Experimental initialized: backbuffer={}x{}, render={}x{}, "
-		"multiplier={}x, opticalFlowMethod={} opticalFlowQuality={}, depth=zero-contract, "
+		"multiplier={}x, generatedOutputSlots={}, outputStorage=per-index, "
+		"opticalFlowMethod={} opticalFlowQuality={}, depth=zero-contract, "
 		"motionContract=current-to-previous/source-pixels scale=1,1",
 		impl->width, impl->height, impl->renderWidth, impl->renderHeight,
-		impl->multiplier,
+		impl->multiplier, impl->multiplier - 1,
 		static_cast<uint32_t>(impl->settings.motionRequest.method),
 		static_cast<uint32_t>(impl->settings.motionRequest.quality)));
 	_impl = std::move(impl);
@@ -1282,20 +1288,26 @@ bool DLSSFrameGenerator::Draw(
 		return false;
 	}
 
-	D3D12_RESOURCE_BARRIER barriers[2]{};
+	// input + 本组实际使用的每个 per-index 输出各一条 transition；reset 组
+	// 仅 output[1]，稳态 x4 为 output[1..3]，未使用的空槽不进 barrier。
+	D3D12_RESOURCE_BARRIER barriers[4]{};
+	const uint32_t barrierCount = 1 + generatedFrameCount;
 	barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 	barriers[0].Transition = {
 		impl.sharedInput12.get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
 		D3D12_RESOURCE_STATE_COMMON,
 		D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 	};
-	barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-	barriers[1].Transition = {
-		impl.sharedGenerated12.get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-		D3D12_RESOURCE_STATE_COMMON,
-		D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-	};
-	impl.commandList12->ResourceBarrier(2, barriers);
+	for (uint32_t frameIndex = 1; frameIndex <= generatedFrameCount; ++frameIndex) {
+		barriers[frameIndex].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barriers[frameIndex].Transition = {
+			impl.sharedGenerated12[frameIndex].get(),
+			D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+			D3D12_RESOURCE_STATE_COMMON,
+			D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+		};
+	}
+	impl.commandList12->ResourceBarrier(barrierCount, barriers);
 	if (sharedGuidanceBound) {
 		impl.guidanceInterop->Transition(
 			impl.commandList12.get(), D3D12_RESOURCE_STATE_COMMON,
@@ -1309,7 +1321,8 @@ bool DLSSFrameGenerator::Draw(
 			impl.guidanceInterop->Depth() : impl.zeroDepth12.get();
 		evalParams.pMVecs = sharedGuidanceBound ?
 			impl.guidanceInterop->Motion() : impl.zeroMotion12.get();
-		evalParams.pOutputInterpFrame = impl.sharedGenerated12.get();
+		evalParams.pOutputInterpFrame =
+			impl.sharedGenerated12[frameIndex].get();
 		evalParams.pOutputDisableInterpolation =
 			impl.interpolationDisable12[frameIndex].get();
 
@@ -1415,10 +1428,10 @@ bool DLSSFrameGenerator::Draw(
 			D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
 			D3D12_RESOURCE_STATE_COMMON);
 	}
-	for (D3D12_RESOURCE_BARRIER& barrier : barriers) {
-		std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+	for (uint32_t i = 0; i < barrierCount; ++i) {
+		std::swap(barriers[i].Transition.StateBefore, barriers[i].Transition.StateAfter);
 	}
-	impl.commandList12->ResourceBarrier(2, barriers);
+	impl.commandList12->ResourceBarrier(barrierCount, barriers);
 	hr = impl.commandList12->Close();
 	if (FAILED(hr)) {
 		return false;
@@ -1463,7 +1476,8 @@ bool DLSSFrameGenerator::Draw(
 		const auto disabled = ReadInterpolationDisabled(impl, frameIndex);
 		if (!disabled) return false;
 		if (!resetThisFrame && !*disabled) {
-			if (!publishGeneratedFrame(impl.sharedGenerated11.get(), reflexPresentId)) {
+			if (!publishGeneratedFrame(
+				impl.sharedGenerated11[frameIndex].get(), reflexPresentId)) {
 				++impl.diagnosticGeneratedPublishFailure;
 				return false;
 			}

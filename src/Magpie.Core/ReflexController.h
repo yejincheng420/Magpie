@@ -130,8 +130,19 @@ public:
 	}
 	void Generation(ID3D12CommandQueue* queue, uint64_t frameId,
 		uint64_t presentId, bool start) noexcept {
-		if (frameId && presentId && _Usable())
-			_Check("D3D12 async generation marker", _driver->Generation(queue, frameId, presentId, start));
+		if (!frameId || !presentId || !_Usable() ||
+			_generationMarkersDisabled.load(std::memory_order_relaxed)) {
+			return;
+		}
+		// D3D12 异步 out-of-band 标记在部分驱动/设备组合上不支持（实测
+		// status=-1）。它是 FG 帧的遥测标记，不是 Sleep/低延迟主路径——失败
+		// 只禁用自身并告警一次，不能经 _Check 停掉整个 Reflex 会话（否则连累
+		// Sleep 节流与 D3D11 标记，DLSSFG 每个会话开场即失效）。
+		const int status = _driver->Generation(queue, frameId, presentId, start);
+		if (status && !_generationMarkersDisabled.exchange(true)) {
+			_driver->ReportFailure(
+				"D3D12 async generation marker (disabled for session)", status);
+		}
 	}
 	// Frontend only. IDs come from the immutable published ring slot, never
 	// from the backend's currently running (possibly newer) capture.
@@ -201,6 +212,8 @@ private:
 	uint64_t _captureRevision = 0;
 	std::atomic<bool> _presentationAvailable = false;
 	std::atomic<bool> _stopped = false;
+	// D3D12 异步 generation 标记在本机驱动上不被接受时只降级该标记族。
+	std::atomic<bool> _generationMarkersDisabled = false;
 	uint64_t _nextFrameId = 0;
 	uint64_t _nextPresentId = 0;
 	uint64_t _captureFrameId = 0;
