@@ -81,13 +81,15 @@ static void InitializeLogger(const wchar_t* logFilePath) noexcept {
 	);
 }
 
-// DLSSG 代理加载（dlssg_sm75 / dlssg_sm86 部署包）：这类代理靠游戏静态导入
+// DLSSG 代理加载（dlssg 0.3.3 部署包）：代理内嵌 310.9 运行库，不导出 NGX
+// snippet API，加载后以 LoadLibrary 钩子拦截后续 nvngx_dlssg.dll 请求并替
+// 换为内嵌运行库（首个加载的实例成为 active）。这类代理靠游戏静态导入
 // version/dinput8/winmm 之一被系统加载器带起，而 Magpie 不导入任何一个，且
-// WinUI 栈会在进程早期抢先加载系统版 VERSION.dll，导致 NGX 特征 DLL 的
-// VERSION.dll 依赖解析永远命中系统版、目录内代理不会被加载。因此在任何
-// XAML/D3D/NvAPI 初始化之前按完整路径显式加载——完整路径加载不受同名已
-// 加载模块影响。以代理包自带的 dlssg_sm86.ini 作为部署标记：文件不存在时
-// 静默返回，零行为变化。代理是钩子 DLL，加载后必须驻留进程整个生命周期。
+// WinUI 栈会在进程早期抢先加载系统版 VERSION.dll，导致目录内代理不会被自
+// 动加载。因此在任何 XAML/D3D/NvAPI 初始化之前按完整路径显式加载——抢先成
+// 为 active、并抢在任何 slInit 类早期架构判定之前。以代理包自带的
+// dlssg_sm86.ini 作为部署标记：文件不存在时静默返回，零行为变化。代理是钩
+// 子 DLL，加载后必须驻留进程整个生命周期。
 static void TryLoadDlssgProxy() noexcept {
 	const std::filesystem::path exeDir = Win32Helper::GetExePath().parent_path();
 

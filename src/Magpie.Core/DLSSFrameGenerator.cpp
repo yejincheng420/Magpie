@@ -864,11 +864,14 @@ bool DLSSFrameGenerator::Initialize(
 
 		bool requirementsSupported = false;
 		// 模块解析（按优先级）：
-		// 1) dlssg Native 0.2.3（dlssg_for_sm86-main）：代理 version.dll 自身
-		//    导出完整 snippet API、无调用方身份检查（反汇编确认），直接调用。
-		//    TryLoadDlssgProxy 已在进程启动时按完整路径加载它，这里取句柄即可。
-		// 2) 旧式包（dlssg_sm75）：LoadLibraryW(nvngx_dlssg.dll) 被代理重定向
-		//    到已挂钩的 310.1 运行库，导出有 nvngx.dll 身份检查，经跳板调用。
+		// 1) dlssg 0.2.3 Native 代理（旧包）：version.dll 自身导出完整 snippet
+		//    API、无调用方身份检查（反汇编确认），直接调用。TryLoadDlssgProxy
+		//    已在进程启动时按完整路径加载它，这里取句柄即可。
+		// 2) dlssg 0.3.3 运行时拦截代理（当前部署）：version.dll 不导出 NGX
+		//    API（仅 Version 转发 + DlssgProxy_*），走下面的 GetProcAddress
+		//    检查即归入非 native 分支；LoadLibraryW(nvngx_dlssg.dll) 被其
+		//    LoadLibrary 钩子拦截并替换为内嵌 310.9 运行库，导出有 nvngx.dll
+		//    身份检查，经跳板调用（与旧式包同路径）。
 		// 3) 无代理：加载 EXE 目录的 SDK 运行库，得到真实结论（干净失败）。
 		HMODULE dlssgModule = nullptr;
 		bool nativeProxy = false;
@@ -876,7 +879,8 @@ bool DLSSFrameGenerator::Initialize(
 			(applicationDirectory / L"version.dll").c_str(), &dlssgModule);
 		if (dlssgModule &&
 			!GetProcAddress(dlssgModule, "NVSDK_NGX_D3D12_CreateFeature")) {
-			// exe 目录的 version.dll 不是 Native 代理（其他来源的代理）
+			// exe 目录的 version.dll 不是 Native 代理（0.3.3 拦截代理或其他
+			// 来源）——置空走 LoadLibrary 拦截/回退路径
 			dlssgModule = nullptr;
 		} else if (dlssgModule) {
 			nativeProxy = true;

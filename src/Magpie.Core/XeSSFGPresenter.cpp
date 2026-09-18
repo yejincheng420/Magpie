@@ -77,8 +77,6 @@ static void XeFGLogCallback(
 	}
 }
 
-}
-
 struct XeSSFGPresenter::Impl {
 	~Impl();
 	XeSSFGCompatibility::Lease compatibility;
