@@ -53,7 +53,7 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option, bool hdrEnabled) 
 		.enableFrameReuse = getParameter("enableFrameReuse", 0.0f) >= 0.5f,
 		.residualTransferMode = static_cast<uint32_t>(std::clamp(
 			static_cast<int>(std::lround(
-				getParameter("residualTransferMode", 0.0f))), 0, 2)),
+				getParameter("residualTransferMode", 0.0f))), 0, 1)),
 		.motionRequest = ParseDlssOpticalFlowRequest(option),
 		.experimentalHdr = DlssnrExperimentProtocol{ .enabled = hdrEnabled, .scale = 1.0f }
 	};
@@ -841,7 +841,8 @@ void TransferPrepareResidual(uint3 tid : SV_DispatchThreadID) {
 )";
 
 // 残差运动补偿转移：把偶帧的「降采样降噪图」按 MV 平移到奇帧位置。
-// mode 0(Copy)：不挪。mode 1(OF)：逐像素 NVOF MV。mode 2(GME)：全局单 MV。
+// mode 0(Copy)：不挪。mode 1(GME)：全局单 MV（原值 2，重编号为 1 保持
+// choice 值连续——{0,2} 空洞触发 UI 弹回 bug）。逐像素 OF warp 已移除。
 // 输出 = 转移后的低分辨率降噪图（进入转移合成流程的上游）。
 constexpr char RESIDUAL_TRANSFER_WARP_HLSL[] = R"(
 Texture2D<float4> EvenDenoised : register(t0);      // 偶帧低分辨率降噪图
@@ -854,7 +855,7 @@ SamplerState LinearClamp : register(s0);
 cbuffer TransferParams : register(b0) {
     uint2 ReducedExtent;    // 低分辨率（impl.width x impl.height）
     uint2 MotionExtent;     // 源分辨率（MV 纹理）
-    float TransferMode;     // 0=Copy 1=OF 2=GME
+    float TransferMode;     // 0=Copy 1=GME
     float MotionScale;      // 源像素 -> 低分辨率像素的缩放
     float Padding0;
     float Padding1;
@@ -869,30 +870,6 @@ void TransferWarp(uint3 tid : SV_DispatchThreadID) {
 
     float2 offset = 0.0;
     if (TransferMode == 1.0) {
-        // OF 模式（噪点治理版）：源分辨率 5x5 邻域的 MV 均值 + 幅度门控。
-        // NVOF 底噪为逐像素独立的 0.5-2px 抖动（temporal hints 扰动），直接
-        // 驱动残差位移会把它放大成全屏噪斑。5x5 均值把不相关的抖动稀释
-        // ~25 倍，真实运动（邻域一致）保留；幅度门槛把残余底噪压到零位移
-        //（退化为原位 Copy），只有邻域一致的真实运动才放行。
-        float2 sourcePos = reducedPos / float2(MotionExtent);
-        int2 mp0 = int2(sourcePos * float2(MotionExtent));
-        float2 mvSum = 0.0;
-        [unroll]
-        for (int y = -2; y <= 2; ++y) {
-            [unroll]
-            for (int x = -2; x <= 2; ++x) {
-                int2 p = clamp(mp0 + int2(x, y),
-                    int2(0, 0), int2(MotionExtent) - 1);
-                mvSum += DenseMotion.Load(int3(p, 0));
-            }
-        }
-        float2 mv = mvSum / 25.0;
-        // 幅度门控：< 0.5px 不挪（底噪），0.5→1.5px 渐入（真实慢运动）。
-        float mag = length(mv);
-        float motionWeight = smoothstep(0.5, 1.5, mag);
-        float2 scaledMv = mv * motionWeight * MotionScale;
-        offset = scaledMv / float2(MotionExtent);
-    } else if (TransferMode == 2.0) {
         float4 gme = GmeResult.Load(int3(0, 0, 0));
         float2 gmv = gme.xy;
         // GME 门控（瞬降 Copy）：幅度 < 1px 或峰值占比 < 0.5 → 零位移。
@@ -927,10 +904,13 @@ void GmeVote(uint3 tid : SV_DispatchThreadID) {
     if (any(tid.xy >= SampleExtent)) return;
     int2 p = int2(tid.xy) * 8 + 4;
     float2 mv = DenseMotion.Load(int3(p, 0));
-    int bx = int(round(mv.x)) + 32;
-    int by = int(round(mv.y)) + 32;
-    if (bx < 0 || bx > 63 || by < 0 || by > 63) return;
-    InterlockedAdd(Histogram[by * 64 + bx], 1u);
+    // ±64px 直方图（128x128 bins）：覆盖 46ms 内容间隔下 ~1400px/s 的快速
+    // 平移。原 ±32px 截止会把快移整体丢出投票 → 峰值占比≈0 → 退化 Copy
+    //（奇帧位置陈旧 = 快移抖动的直接来源）。超 ±64px 仍丢弃以保峰值纯度。
+    int bx = int(round(mv.x)) + 64;
+    int by = int(round(mv.y)) + 64;
+    if (bx < 0 || bx > 127 || by < 0 || by > 127) return;
+    InterlockedAdd(Histogram[by * 128 + bx], 1u);
 }
 )";
 
@@ -944,27 +924,20 @@ cbuffer GmeParams : register(b0) {
     uint Padding1;
 };
 
-groupshared uint sBins[4096];
-
-[numthreads(256, 1, 1)]
+// 16384 bins（±64px, 64KB）超出 D3D11 groupshared 上限，且原本也只有
+// 线程 0 在扫描（groupshared 暂存无并行收益）——直接串行读 buffer。
+[numthreads(1, 1, 1)]
 void GmePeak(uint3 tid : SV_DispatchThreadID) {
-    for (uint i = tid.x; i < 4096; i += 256) {
-        sBins[i] = Histogram[i];
-    }
-    GroupMemoryBarrierWithGroupSync();
-    if (tid.x != 0) return;
     uint bestCount = 0;
-    uint bestBin = 32 * 64 + 32;
-    uint totalVoted = 0;
-    for (uint b = 0; b < 4096; ++b) {
-        totalVoted += sBins[b];
-        if (sBins[b] > bestCount) {
-            bestCount = sBins[b];
+    uint bestBin = 64 * 128 + 64;
+    for (uint b = 0; b < 16384; ++b) {
+        if (Histogram[b] > bestCount) {
+            bestCount = Histogram[b];
             bestBin = b;
         }
     }
-    int bx = int(bestBin % 64) - 32;
-    int by = int(bestBin / 64) - 32;
+    int bx = int(bestBin % 128) - 64;
+    int by = int(bestBin / 128) - 64;
     float peakRatio = SampleCount > 0 ?
         float(bestCount) / float(SampleCount) : 0.0;
     // 输出通道复用：z = 峰值计数，w = 峰值占比（主导方向质量）。
@@ -1201,7 +1174,7 @@ struct DLSSNRFilter::Impl {
 	winrt::com_ptr<ID3D11ComputeShader> transferWarpShader11;
 	winrt::com_ptr<ID3D11ComputeShader> transferPrepareShader11;
 	winrt::com_ptr<ID3D11Buffer> transferParams11;
-	// GME（模式 2）：直方图 + 1x1 结果 + 两 pass。
+	// GME（模式 1）：直方图 + 1x1 结果 + 两 pass。
 	winrt::com_ptr<ID3D11Buffer> gmeHistogram11;
 	winrt::com_ptr<ID3D11UnorderedAccessView> gmeHistogramUav11;
 	winrt::com_ptr<ID3D11Texture2D> gmeResult11;
@@ -2179,9 +2152,9 @@ static bool TransferResidualToOddFrame(
 		return false;
 	}
 
-	// 2) 模式 2 先跑 GME。
+	// 2) 模式 1 先跑 GME。
 	winrt::com_ptr<ID3D11ShaderResourceView> gmeResultSrv;
-	if (settings.residualTransferMode == 2 && impl.gmeVoteShader11 &&
+	if (settings.residualTransferMode == 1 && impl.gmeVoteShader11 &&
 		impl.gmePeakShader11 && impl.gmeHistogram11 && impl.gmeResult11 &&
 		context.frameGuidance.motion.IsValid(
 			DXGI_FORMAT_R16G16_FLOAT, context.frameId,
@@ -2250,23 +2223,9 @@ static bool TransferResidualToOddFrame(
 	}
 
 	// 3) 转移 warp：偶帧低分辨率降噪图 → 奇帧位置。
+	// 模式 1（逐像素 OF warp）已从 UI 移除并被 Global MV 取代；此处仅剩
+	// GME 的全局 MV（gmeResultSrv），模式 0 无附加输入。
 	{
-		winrt::com_ptr<ID3D11ShaderResourceView> motionSrv;
-		if (settings.residualTransferMode == 1 &&
-			context.frameGuidance.motion.IsValid(
-				DXGI_FORMAT_R16G16_FLOAT, context.frameId,
-				{ impl.sourceWidth, impl.sourceHeight })) {
-			const auto sync = context.frameGuidance.motion.metadata.sync;
-			if (sync.fence && sync.value && FAILED(
-				impl.context11->Wait(sync.fence, sync.value))) {
-				return false;
-			}
-			HRESULT hr = impl.device11->CreateShaderResourceView(
-				context.frameGuidance.motion.texture, nullptr, motionSrv.put());
-			if (FAILED(hr)) {
-				return false;
-			}
-		}
 		struct alignas(16) TransferParams {
 			uint32_t reducedWidth;
 			uint32_t reducedHeight;
@@ -2289,7 +2248,7 @@ static bool TransferResidualToOddFrame(
 		ID3D11ShaderResourceView* srvs[]{
 			impl.evenDenoisedSrv11.get(),
 			impl.sharedInputSrv11.get(),
-			motionSrv.get(),
+			nullptr,	// t2 DenseMotion：仅模式 1 使用（已移除）
 			gmeResultSrv.get()
 		};
 		ID3D11UnorderedAccessView* uav = impl.transferredDenoisedUav11.get();
@@ -2739,10 +2698,13 @@ EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode(
 		parameterName == "skinStructureStrength" ||
 		parameterName == "useAutoMask" || parameterName == "uiCorrection" ||
 		parameterName == "samplingQuality" ||
-		parameterName == "enableFrameReuse" ||
-		parameterName == "residualTransferMode") {
+		parameterName == "enableFrameReuse") {
 		return EffectParameterApplyMode::Live;
 	}
+	// residualTransferMode 必须重启：模式切换改变转移 warp 的输入语义与
+	// GME/奇偶历史状态（热切 copy→gme 时 motionHistory 不会复位），且 Live
+	// 路径与参数会话的 APPLIED 快照交互会在桌面 UI 上把旧值弹回（实测
+	// 选 Global MV 立即回退 Copy）。重启路径资源全量重建，语义干净。
 	if (parameterName == "residualMultiplier" ||
 		parameterName == "residualSaturation" ||
 		parameterName == "residualLightness" ||
@@ -2808,12 +2770,11 @@ bool DLSSNRFilter::ApplyLiveParameters(
 				}
 			}
 			samplingChanged = true;
-		} else if (name == "enableFrameReuse" ||
-			name == "residualTransferMode") {
-			// 资源已无条件创建，开关/模式热切换零成本。关闭→开启从偶数帧
-			// 重新起步，避免陈旧奇偶/MV 状态。
+		} else if (name == "enableFrameReuse") {
+			// 资源已无条件创建，开关热切换零成本。关闭→开启从偶数帧
+			// 重新起步，避免陈旧奇偶/MV 状态。residualTransferMode 不在此
+			// 处理：模式切换需要重启（见 GetParameterApplyMode 注释）。
 			_settings.enableFrameReuse = candidate.enableFrameReuse;
-			_settings.residualTransferMode = candidate.residualTransferMode;
 			if (!candidate.enableFrameReuse) {
 				_impl->nextFrameIsReuse = false;
 				_impl->motionHistoryValid = false;
@@ -3153,8 +3114,7 @@ bool DLSSNRFilter::Initialize(
 		static_cast<uint32_t>(_settings.motionRequest.quality),
 		_settings.useAutoMask, _settings.uiCorrection,
 		_settings.enableFrameReuse,
-		_settings.residualTransferMode == 0 ? "copy" :
-			_settings.residualTransferMode == 1 ? "optical-flow" : "global-mv",
+		_settings.residualTransferMode == 0 ? "copy" : "global-mv",
 		impl->experimentalHdrPath, impl->experimentalHdrScale));
 
 	// 残差转移资源。任何一步失败仅禁用该功能（退回纯 NGX），不炸初始化。
@@ -3230,7 +3190,8 @@ bool DLSSNRFilter::Initialize(
 		// GME。
 		if (SUCCEEDED(localHr)) {
 			D3D11_BUFFER_DESC histDesc{};
-			histDesc.ByteWidth = 4096 * sizeof(uint32_t);
+			// 128x128 bins = ±64px（与 GME_VOTE/GME_PEAK 的 bin 布局一致）。
+			histDesc.ByteWidth = 16384 * sizeof(uint32_t);
 			histDesc.Usage = D3D11_USAGE_DEFAULT;
 			histDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 			histDesc.StructureByteStride = sizeof(uint32_t);
@@ -3240,7 +3201,7 @@ bool DLSSNRFilter::Initialize(
 				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 				uavDesc.Format = DXGI_FORMAT_R32_UINT;
 				uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-				uavDesc.Buffer.NumElements = 4096;
+				uavDesc.Buffer.NumElements = 16384;
 				localHr = impl->device11->CreateUnorderedAccessView(
 					impl->gmeHistogram11.get(), &uavDesc,
 					impl->gmeHistogramUav11.put());
@@ -3321,7 +3282,7 @@ bool DLSSNRFilter::Initialize(
 			failTransfer("Create DLSSNR residual transfer resources failed");
 		} else {
 			Logger::Get().Info(fmt::format(
-				"DLSSNR residual transfer enabled: mode={} (0=copy 1=of 2=gme)",
+				"DLSSNR residual transfer enabled: mode={} (0=copy 1=gme)",
 				_settings.residualTransferMode));
 		}
 	}

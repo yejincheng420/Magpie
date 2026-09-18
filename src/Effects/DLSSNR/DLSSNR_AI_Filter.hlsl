@@ -19,8 +19,7 @@ int enableFrameReuse;
 //!LABEL Residual Transfer Mode
 //!DEFAULT 0
 //!OPTION 0 Copy
-//!OPTION 1 Optical Flow
-//!OPTION 2 Global MV
+//!OPTION 1 Global MV
 int residualTransferMode;
 
 //!PARAMETER

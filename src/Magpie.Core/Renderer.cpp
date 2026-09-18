@@ -435,9 +435,11 @@ ScalingError Renderer::Initialize(HWND hwndAttach, OverlayOptions& overlayOption
 			static_cast<uint32_t>(_xessMotionRequest.quality)));
 		if (xessFrameGenerationMultiplier > 2 &&
 			adapterDesc.VendorId != 0x8086) {
-			Logger::Get().Error(
-				"XeSS Multi-Frame Generation x3/x4 requires an Intel adapter");
-			return ScalingError::XeSSMfgRequiresIntel;
+			// 非 Intel 适配器：不再硬性拒绝，由 XeSSFGPresenter 对
+			// libxess_fg 应用进程内 MFG 解锁补丁（见 ApplyXeSSMfgUnlock）；
+			// 解锁或哨兵初始化失败时按 XeSSMfgMultiplierUnsupported 干净降级。
+			Logger::Get().Info(
+				"XeSS Multi-Frame Generation on a non-Intel adapter: attempting libxess_fg unlock");
 		}
 
 		auto xessPresenter = std::make_unique<XeSSFGPresenter>(
@@ -840,6 +842,10 @@ Renderer::FrontendBaseResult Renderer::_UpdateFrontendBase(uint32_t sharedTextur
 	if (SUCCEEDED(hr)) {
 		_frontendResources.GetD3DDC()->CopyResource(_frontendBaseTexture.get(), source);
 		_frontendCaptureFrameId = _sharedTextureFrameIds[sharedTextureSlot].load(std::memory_order_acquire);
+		// 本槽位的奇偶与发布时刻随纹理一起消费（与呈现内容一一对应，供
+		// XeSSFG 前端 hold 分类；替代后端发布时写的单一原子，消除竞态）。
+		_frontendFrameParity = _sharedFrameParity[sharedTextureSlot].load(std::memory_order_acquire);
+		_frontendFramePublishNs = _sharedFramePublishNs[sharedTextureSlot].load(std::memory_order_acquire);
 		_frontendFrameMetadata = _sharedFrameMetadata[sharedTextureSlot];
 		_frontendReflexIds = _sharedReflexIds[sharedTextureSlot];
 		FrameTrace::SetFrame(_frontendCaptureFrameId);
@@ -1075,6 +1081,13 @@ bool Renderer::_SubmitFrontendFrame() noexcept {
 	_frontendPacingDeadline.reset();
 	const auto [stableBaseOnly, contentFrame, generatedFrame, uiInIndependentLayer,
 		waitForGpu, paced, overlayActionRevision, contentKey] = frame;
+	// 帧级奇偶随内容帧传递：按「本帧来自哪个槽位」分类（XeSSFG hold 用），
+	// 纯 overlay 呈现传 -1 不参与。原实现由后端发布时写单一原子、前端呈现
+	// 时读——偶帧发布后 1~3ms 奇帧即跟发布，呈现时几乎必然读到下一帧的
+	// parity，偶帧被系统性误判为奇帧（实测 odd=110/120）。
+	_presenter->SetReuseParity(
+		contentFrame ? _frontendFrameParity : -1,
+		contentFrame ? _frontendFramePublishNs : 0);
 	const bool submitted = _presenter->EndFrame(waitForGpu);
 	_pendingFrontendFrame.reset();
 	if (submitted && ActiveFrameSyncBackend() == FrameSyncBackend::FrontEdge && !_hasFrameGeneration &&
@@ -1377,6 +1390,11 @@ void Renderer::_RecordDLSSFGFrontendTimings(
 		_dlssFgDiagAnchorCommits = 0;
 		_dlssFgDiagGroups = 0;
 		_dlssFgDiagParity[0] = _dlssFgDiagParity[1] = _dlssFgDiagParity[2] = 0;
+		_dlssFgLastPresentTime = {};
+		_dlssFgPresentGapTotalMs = _dlssFgPresentGapMinMs = _dlssFgPresentGapMaxMs = 0;
+		_dlssFgPresentGapCount = _dlssFgPresentGapBursts = _dlssFgPresentGapStalls = 0;
+		_dlssFgLateTotalMs = _dlssFgLateMaxMs = 0;
+		_dlssFgLateSamples = 0;
 		_dlssFgRingWaitNanoseconds.exchange(0, std::memory_order_relaxed);
 		_dlssFgRingWaitSamples.exchange(0, std::memory_order_relaxed);
 	}
@@ -1412,7 +1430,9 @@ void Renderer::_RecordDLSSFGFrontendTimings(
 		"ringWait={:.3f} ms pairPaced={}/{} "
 		"decision[anchor={} paced={} late={} noAnchor={} noPeriod={}] "
 		"anchors={} groups={} period={:.1f}ms frameIdx={} "
-		"parity[-1/0/1]={}/{}/{}",
+		"parity[-1/0/1]={}/{}/{} "
+		"lateMs[avg={:.2f} max={:.2f}] "
+		"presentGapMs[avg={:.2f} min={:.2f} max={:.2f} burst={} stall={}]",
 		usesFrameLatencyWaitableObject ? "deadline+DXGI" : "DWM",
 		_dlssFgFrontendTimingFrames,
 		_dlssFgFrontendDropped,
@@ -1430,7 +1450,13 @@ void Renderer::_RecordDLSSFGFrontendTimings(
 		_dlssFgDiagNoAnchor, _dlssFgDiagNoPeriod,
 		_dlssFgDiagAnchorCommits, _dlssFgDiagGroups,
 		_dlssFgPairPeriodMs, _dlssFgPairFrameIndex,
-		_dlssFgDiagParity[0], _dlssFgDiagParity[1], _dlssFgDiagParity[2]));
+		_dlssFgDiagParity[0], _dlssFgDiagParity[1], _dlssFgDiagParity[2],
+		_dlssFgLateSamples ? _dlssFgLateTotalMs / _dlssFgLateSamples : 0.0,
+		_dlssFgLateMaxMs,
+		_dlssFgPresentGapCount ? _dlssFgPresentGapTotalMs / _dlssFgPresentGapCount : 0.0,
+		_dlssFgPresentGapCount ? _dlssFgPresentGapMinMs : 0.0,
+		_dlssFgPresentGapCount ? _dlssFgPresentGapMaxMs : 0.0,
+		_dlssFgPresentGapBursts, _dlssFgPresentGapStalls));
 
 	_dlssFgFrontendTimingFrames = 0;
 	_dlssFgPairPacedFrames = 0;
@@ -1442,6 +1468,10 @@ void Renderer::_RecordDLSSFGFrontendTimings(
 	_dlssFgDiagAnchorCommits = 0;
 	_dlssFgDiagGroups = 0;
 	_dlssFgDiagParity[0] = _dlssFgDiagParity[1] = _dlssFgDiagParity[2] = 0;
+	_dlssFgPresentGapTotalMs = _dlssFgPresentGapMinMs = _dlssFgPresentGapMaxMs = 0;
+	_dlssFgPresentGapCount = _dlssFgPresentGapBursts = _dlssFgPresentGapStalls = 0;
+	_dlssFgLateTotalMs = _dlssFgLateMaxMs = 0;
+	_dlssFgLateSamples = 0;
 	_dlssFgFrontendPacingWait = {};
 	_dlssFgFrontendCapacityWait = _dlssFgFrontendResourceWait = {};
 	_dlssFgFrontendCpu = _dlssFgFrontendQueueAge = {};
@@ -1550,6 +1580,9 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 
 	std::chrono::steady_clock::time_point targetTime = pacingStart;
 	bool pairPaced = false;
+	// due 提升到块外：成功呈现后用于滞后统计（lateness）。
+	std::chrono::steady_clock::time_point dueTime{};
+	bool dueValid = false;
 	// 决策分类（幂等，重试间结果一致；计数在成功呈现后提交）
 	enum class PacingDecision : uint8_t { Anchor, Paced, Late, NoAnchor, NoPeriod };
 	PacingDecision decision = PacingDecision::Anchor;
@@ -1582,6 +1615,8 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 				std::chrono::duration_cast<std::chrono::steady_clock::duration>(
 					std::chrono::duration<double, std::milli>(
 						frameIndex * slotMs));
+			dueTime = due;
+			dueValid = true;
 			if (pacingStart < due &&
 				// 防呆：锚点/估计异常时最多等 100ms（与 XeSSFG 相同上限）
 				due - pacingStart <= std::chrono::milliseconds(100)) {
@@ -1624,13 +1659,49 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 		return DLSSFGFrameRenderResult::Retry;
 	}
 	const auto presentEnd = std::chrono::steady_clock::now();
+	if (dueValid && presentEnd > dueTime) {
+		const double lateMs = std::chrono::duration<double, std::milli>(
+			presentEnd - dueTime).count();
+		_dlssFgLateTotalMs += lateMs;
+		_dlssFgLateMaxMs = std::max(_dlssFgLateMaxMs, lateMs);
+		++_dlssFgLateSamples;
+	}
+	// 真实 present 间隔（前端线程独占）：量化上屏节奏。burst（<2ms）意味着
+	// 同一刷新窗内多次 Present，FLIP 模型下中间帧永不上屏；stall（>50ms）
+	// 是可见空窗。
+	if (_dlssFgLastPresentTime.time_since_epoch().count() != 0) {
+		const double gapMs = std::chrono::duration<double, std::milli>(
+			presentEnd - _dlssFgLastPresentTime).count();
+		++_dlssFgPresentGapCount;
+		_dlssFgPresentGapTotalMs += gapMs;
+		if (_dlssFgPresentGapCount == 1) {
+			_dlssFgPresentGapMinMs = _dlssFgPresentGapMaxMs = gapMs;
+		} else {
+			_dlssFgPresentGapMinMs = std::min(_dlssFgPresentGapMinMs, gapMs);
+			_dlssFgPresentGapMaxMs = std::max(_dlssFgPresentGapMaxMs, gapMs);
+		}
+		if (gapMs < 2.0) ++_dlssFgPresentGapBursts;
+		if (gapMs > 50.0) ++_dlssFgPresentGapStalls;
+	}
+	_dlssFgLastPresentTime = presentEnd;
 
 	// ---- 成功呈现后一次性提交状态（Retry 路径绝不触达） ----
-	// 诊断分类计数（决策在上面幂等计算）
+	// 诊断分类计数（决策在上面幂等计算）。早到帧走 Retry，到点后重进时
+	// pacingStart >= due 被分类为 Late——decision==Paced 在呈现路径结构性
+	// 不可达，必须用累计的 deadline 等待把「hold 后到点释放」归回 Paced，
+	// 否则 paced/pairPaced 恒为 0（实测误导）。
 	switch (decision) {
 	case PacingDecision::Anchor: ++_dlssFgDiagAnchorFrame; break;
 	case PacingDecision::Paced: ++_dlssFgDiagPaced; break;
-	case PacingDecision::Late: ++_dlssFgDiagLate; break;
+	case PacingDecision::Late:
+		if (jobTiming.deadline.count() > 0) {
+			// 曾被 hold 到槽位后释放：节奏化成功
+			++_dlssFgDiagPaced;
+			++_dlssFgPairPacedFrames;
+		} else {
+			++_dlssFgDiagLate;
+		}
+		break;
 	case PacingDecision::NoAnchor: ++_dlssFgDiagNoAnchor; break;
 	case PacingDecision::NoPeriod: ++_dlssFgDiagNoPeriod; break;
 	}
@@ -1669,9 +1740,6 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 	if (!containsGenerated) {
 		// 真实帧（组内最后发布）呈现后，组关闭
 		_dlssFgGroupClosed = true;
-	}
-	if (pairPaced) {
-		++_dlssFgPairPacedFrames;
 	}
 	consumePendingFrame();
 	if (_sharedTextureAvailableEvents[sharedTextureSlot]) {
@@ -3819,9 +3887,8 @@ void Renderer::_CompleteBackendFrame(
 	{
 		const int32_t parity = _dlssFgPendingParity;
 		_reuseParityPublished.store(parity, std::memory_order_release);
-		if (_presenter) {
-			_presenter->SetReuseParity(parity);
-		}
+		// presenter 的帧级奇偶改由前端按消费槽位传递（_SubmitFrontendFrame），
+		// 此处不再写——发布时写单一原子会被前端呈现时的读取竞态污染。
 		if (parity == 1) {
 			_reuseOddPublishNs.store(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -4027,6 +4094,18 @@ bool Renderer::_PublishBackendTexture(
 				_frameSource->CaptureTimestamp100ns(), std::memory_order_release);
 			_sharedFrameMetadata[sharedTextureSlot] = publicationMetadata;
 			_sharedReflexIds[sharedTextureSlot] = { _reflex.CaptureFrameId(), reflexPresentId };
+			// per-slot 发布时刻/奇偶/生成标记：必须在释放 keyed mutex 前写入。
+			// 前端按 key 握手消费同一槽位；若等 fence（~1.5ms）后再写，轮询
+			// 驱动的消费会读到上一帧的 parity——XeSSFG 的奇偶分类被系统性
+			// 污染（实测 odd=110/120）。
+			_sharedFramePublishNs[sharedTextureSlot].store(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count(),
+				std::memory_order_release);
+			_sharedFrameParity[sharedTextureSlot].store(
+				_dlssFgPendingParity, std::memory_order_release);
+			_sharedTextureContainsGeneratedFrame[sharedTextureSlot].store(
+				generatedFrame, std::memory_order_release);
 			hr = ReleasePresentationTextures(mutexes, key);
 			if (SUCCEEDED(hr)) _sharedTextureMutexKeys[sharedTextureSlot].store(key, std::memory_order_release);
 		}
@@ -4073,16 +4152,7 @@ bool Renderer::_PublishBackendTexture(
 	}
 	_sharedPresentIntervalNs[sharedTextureSlot].store(
 		_synchronousPresentInterval.count(), std::memory_order_release);
-	// per-slot 发布时刻（到达）与奇偶：前端 RenderDLSSFGFrame 的 pair 相位
-	// 节奏化用它锚定与铺帧。
-	_sharedFramePublishNs[sharedTextureSlot].store(
-		std::chrono::duration_cast<std::chrono::nanoseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count(),
-		std::memory_order_release);
-	_sharedFrameParity[sharedTextureSlot].store(
-		_dlssFgPendingParity, std::memory_order_release);
-	_sharedTextureContainsGeneratedFrame[sharedTextureSlot].store(
-		generatedFrame, std::memory_order_release);
+	// 发布时刻/奇偶/生成标记已在上方锁内写入（key 释放前，防轮询消费竞态）。
 	_latestSharedTextureSlot.store(sharedTextureSlot, std::memory_order_release);
 
 	if (queuedPresentation) {

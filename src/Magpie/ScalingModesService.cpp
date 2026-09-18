@@ -312,6 +312,7 @@ struct V065NormalizationStats {
 	uint32_t insertedFallbacks = 0;
 	uint32_t migratedMotionVectorChoices = 0;
 	uint32_t normalizedOpticalFlowChoices = 0;
+	uint32_t migratedResidualTransferModes = 0;
 	uint32_t migratedXeSSMfgSettings = 0;
 	uint32_t removedXeSSMfgNvidiaParameters = 0;
 
@@ -320,6 +321,7 @@ struct V065NormalizationStats {
 			clampedParameters || migratedGuidanceModes ||
 			removedDepthDiagnostics || insertedFallbacks ||
 			migratedMotionVectorChoices || normalizedOpticalFlowChoices ||
+			migratedResidualTransferModes ||
 			migratedXeSSMfgSettings || removedXeSSMfgNvidiaParameters;
 	}
 };
@@ -340,6 +342,18 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 					effect.parameters.try_emplace(
 						L"residualTransferMode", legacyReuseMode->second);
 					effect.parameters.erase(legacyReuseMode);
+				}
+				// turing-ampere 分支历史：残差转移模式 1（逐像素 Optical Flow
+				// warp）已移除，Global MV 从 2 重编号为 1（choice 值必须连续，
+				// 部分 UI 层假设值==索引——{0,2} 的空洞导致选中 Global MV 被
+				// 立即弹回 Copy）。存量 1/2 都映射到 1（Global MV）。
+				{
+					auto transferMode = effect.parameters.find(L"residualTransferMode");
+					if (transferMode != effect.parameters.end() &&
+						(transferMode->second == 1.0f || transferMode->second == 2.0f)) {
+						transferMode->second = 1.0f;
+						++stats.migratedResidualTransferModes;
+					}
 				}
 				auto guidanceMode = effect.parameters.find(L"guidanceMode");
 				if (guidanceMode != effect.parameters.end()) {

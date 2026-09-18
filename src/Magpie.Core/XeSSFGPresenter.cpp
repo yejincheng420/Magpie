@@ -75,6 +75,164 @@ static void XeFGLogCallback(
 	}
 }
 
+// ---- XeSS-FG MFG 解锁（非 Intel 设备 3x/4x） ---------------------------
+// Intel libxess_fg.dll 1.3.1.78 在非 Intel 设备上把插帧上限钳到 1（设备
+// 上报 maxSupportedInterpolations=1）。社区 OptiScaler（XeFGUnlock）的解锁
+// 方式是进程内 .text 字节补丁：两条条件跳转改无条件（能力谓词恒真）+
+// 三条 imm32 重写（默认上限/每上下文钳制值/上报值替换为请求的插帧数）。
+// 补丁表按该 DLL 的 TimeDateStamp+SizeOfImage 识别构建，逐条校验期望字
+// 节后才写入（先全验后写、回读校验、幂等、失败回滚）。我们部署的 DLL 与
+// OptiScaler 使用的完全同版（MD5 一致）；SDK 升级后身份校验失败只是 MFG
+// 干净降级，x2 路径不受影响。
+namespace {
+
+struct XeSSMfgPatch {
+	const char* name;
+	uint32_t rva;
+	uint32_t length;
+	// 替换字节内 imm32 的偏移；补丁应用时把请求的插帧数写进这 4 字节。
+	static constexpr uint32_t kNoOverlay = 0xFFFFFFFF;
+	uint32_t imm32Offset;
+	std::array<uint8_t, 10> expected{};
+	std::array<uint8_t, 10> replacement{};
+};
+
+bool ApplyXeSSMfgUnlock(uint32_t interpolationCount) noexcept {
+	static constexpr std::array<XeSSMfgPatch, 5> patches{ {
+		{ "U1/frame-count-fallback", 0x20DA4F, 6, XeSSMfgPatch::kNoOverlay,
+			{ 0x0F, 0x85, 0xCC, 0x00, 0x00, 0x00 },
+			{ 0xE9, 0xCD, 0x00, 0x00, 0x00, 0x90 } },
+		{ "U2/model-downgrade", 0x1A5DE4, 2, XeSSMfgPatch::kNoOverlay,
+			{ 0x74, 0x09 }, { 0xEB, 0x06 } },
+		{ "U3/default-ceiling", 0x1A517D, 5, 1,
+			{ 0xBB, 0x03, 0x00, 0x00, 0x00 },
+			{ 0xBB, 0x00, 0x00, 0x00, 0x00 } },
+		{ "U4/override-clamp", 0x1A45C2, 10, 6,
+			{ 0xC7, 0x87, 0x6C, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 },
+			{ 0xC7, 0x87, 0x6C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } },
+		{ "U5/reported-maximum", 0x20973B, 5, 1,
+			{ 0xB8, 0x01, 0x00, 0x00, 0x00 },
+			{ 0xB8, 0x00, 0x00, 0x00, 0x00 } },
+	} };
+
+	const HMODULE module = GetModuleHandleW(L"libxess_fg.dll");
+	if (!module) {
+		Logger::Get().Warn("XeSS-FG MFG unlock: libxess_fg.dll is not loaded");
+		return false;
+	}
+	const auto* base = reinterpret_cast<const uint8_t*>(module);
+	const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+	const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+	// 身份校验：只对已验证过补丁表的构建打补丁。
+	if (nt->FileHeader.TimeDateStamp != 0x69cb0f4d ||
+		nt->OptionalHeader.SizeOfImage != 0x15ed000) {
+		Logger::Get().Warn(fmt::format(
+			"XeSS-FG MFG unlock: unrecognised libxess_fg build {:#x}/{:#x}, skipping",
+			nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage));
+		return false;
+	}
+	const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(nt);
+	const IMAGE_SECTION_HEADER* text = nullptr;
+	for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+		if (memcmp(section->Name, ".text", 5) == 0) {
+			text = section;
+			break;
+		}
+	}
+	if (!text) {
+		Logger::Get().Warn("XeSS-FG MFG unlock: libxess_fg has no .text section");
+		return false;
+	}
+
+	// 预生成最终替换字节（imm32 覆盖 = 请求的插帧数）。
+	std::array<std::array<uint8_t, 10>, patches.size()> finalBytes{};
+	bool allApplied = true;
+	for (size_t i = 0; i < patches.size(); ++i) {
+		const XeSSMfgPatch& patch = patches[i];
+		if (patch.rva < text->VirtualAddress ||
+			patch.rva + patch.length >
+				text->VirtualAddress + text->Misc.VirtualSize) {
+			Logger::Get().Warn(fmt::format(
+				"XeSS-FG MFG unlock: {} at {:#x} falls outside .text, aborting",
+				patch.name, patch.rva));
+			return false;
+		}
+		finalBytes[i] = patch.replacement;
+		if (patch.imm32Offset != XeSSMfgPatch::kNoOverlay) {
+			std::memcpy(finalBytes[i].data() + patch.imm32Offset,
+				&interpolationCount, 4);
+		}
+		const uint8_t* const target = base + patch.rva;
+		if (memcmp(target, finalBytes[i].data(), patch.length) == 0) {
+			continue;	// 已应用（重建缩放会话的二次 Initialize）——幂等
+		}
+		allApplied = false;
+		if (memcmp(target, patch.expected.data(), patch.length) != 0) {
+			Logger::Get().Warn(fmt::format(
+				"XeSS-FG MFG unlock: {} at {:#x} has unexpected bytes, aborting",
+				patch.name, patch.rva));
+			return false;
+		}
+	}
+	if (allApplied) {
+		return true;
+	}
+
+	// 全部校验通过后统一写入；任何一条写失败即回滚已写的条目。
+	size_t appliedCount = 0;
+	for (size_t i = 0; i < patches.size(); ++i) {
+		const XeSSMfgPatch& patch = patches[i];
+		uint8_t* const target = const_cast<uint8_t*>(base + patch.rva);
+		if (memcmp(target, finalBytes[i].data(), patch.length) == 0) {
+			++appliedCount;
+			continue;
+		}
+		DWORD oldProtect = 0;
+		if (!VirtualProtect(target, patch.length, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+			Logger::Get().Warn(fmt::format(
+				"XeSS-FG MFG unlock: {} at {:#x} VirtualProtect failed ({:#x})",
+				patch.name, patch.rva, GetLastError()));
+			break;
+		}
+		std::memcpy(target, finalBytes[i].data(), patch.length);
+		FlushInstructionCache(GetCurrentProcess(), target, patch.length);
+		VirtualProtect(target, patch.length, oldProtect, &oldProtect);
+		if (memcmp(target, finalBytes[i].data(), patch.length) != 0) {
+			// 写校验失败：还原期望字节（回滚本条）。
+			std::memcpy(target, patch.expected.data(), patch.length);
+			FlushInstructionCache(GetCurrentProcess(), target, patch.length);
+			Logger::Get().Warn(fmt::format(
+				"XeSS-FG MFG unlock: {} at {:#x} failed write verification, rolled back",
+				patch.name, patch.rva));
+			break;
+		}
+		++appliedCount;
+	}
+	if (appliedCount != patches.size()) {
+		// 回滚本次已写入的其余条目。
+		for (size_t i = 0; i < patches.size() && i < appliedCount; ++i) {
+			const XeSSMfgPatch& patch = patches[i];
+			uint8_t* const target = const_cast<uint8_t*>(base + patch.rva);
+			if (memcmp(target, finalBytes[i].data(), patch.length) == 0) {
+				DWORD oldProtect = 0;
+				if (VirtualProtect(target, patch.length,
+						PAGE_EXECUTE_READWRITE, &oldProtect)) {
+					std::memcpy(target, patch.expected.data(), patch.length);
+					FlushInstructionCache(GetCurrentProcess(), target, patch.length);
+					VirtualProtect(target, patch.length, oldProtect, &oldProtect);
+				}
+			}
+		}
+		return false;
+	}
+	Logger::Get().Info(fmt::format(
+		"XeSS-FG MFG unlock: {} patches applied (libxess_fg 1.3.1.78, {}X)",
+		appliedCount, interpolationCount + 1));
+	return true;
+}
+
+}
+
 struct XeSSFGPresenter::Impl {
 	~Impl();
 
@@ -129,11 +287,16 @@ struct XeSSFGPresenter::Impl {
 	bool resetHistory = true;
 	bool hdrEnabled = false;
 	std::chrono::steady_clock::time_point lastPresent{};
-	// 残差转移组合的节奏控制（parity 真值驱动,不再用时间阈值猜测）。后端
-	// 发布每帧后经 SetReuseParity 写入 0(偶)/1(奇)/-1(未启用)。P 的估计只
-	// 用偶帧的 EndFrame 到达间隔（hold 不改变到达时刻,估计无自反馈）。
-	std::atomic<int32_t> reuseParity{ -1 };
-	std::chrono::steady_clock::time_point lastEvenArrival{};
+	// 残差转移组合的节奏控制（parity 真值驱动）。parity 与发布时刻由前端在
+	// _SubmitFrontendFrame 按消费槽位传入（SetReuseParity）——不再读后端
+	// 发布时写的单一原子：偶帧发布后 1~3ms 奇帧即跟发布，EndFrame 时读原子
+	// 几乎必然读到下一帧的 parity，偶帧被系统性误判为奇帧（实测
+	// odd=110/120）。P 的估计只用偶帧的发布时刻间隔（后端到达，不受 hold/
+	// 呈现延迟影响，无自反馈）。前端线程独占读写。
+	int32_t frameParity = -1;
+	int64_t framePublishNs = 0;
+	int64_t lastEvenPublishNs = 0;
+	uint32_t pairRejectCount = 0;
 	float pairPeriodMs = 0.0f;
 	// present 间隔诊断统计（120-present 窗口,验证节奏均匀性）
 	std::chrono::steady_clock::time_point prevPresent{};
@@ -571,6 +734,19 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 		return false;
 	}
 
+	// 非 Intel MFG 解锁：在 CreateContext 之前对 libxess_fg 应用进程内补丁
+	// （见 ApplyXeSSMfgUnlock；OptiScaler 同样在上下文创建前应用，避免
+	// CreateContext 内部缓存钳制值）。x2 变体与 Intel 适配器完全不触发；
+	// x2 路径零改动。
+	bool mfgUnlocked = false;
+	if (_variant == XeSSFGVariant::MultiFrame && _requestedMultiplier > 2) {
+		DXGI_ADAPTER_DESC1 adapterDesc{};
+		_deviceResources->GetGraphicsAdapter()->GetDesc1(&adapterDesc);
+		if (adapterDesc.VendorId != 0x8086) {
+			mfgUnlocked = ApplyXeSSMfgUnlock(_requestedMultiplier - 1);
+		}
+	}
+
 	xefg_swapchain_result_t result = xefgSwapChainD3D12CreateContext(
 		impl->device12.get(), &impl->xefg);
 	if (!XeFGSucceeded(result)) {
@@ -593,18 +769,29 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 	const uint32_t requestedInterpolations = _requestedMultiplier - 1;
 	Logger::Get().Info(fmt::format(
 		"XeSSFG capabilities: variant={}, requested={}x, "
-		"maxSupportedInterpolations={}",
+		"maxSupportedInterpolations={} unlock={}",
 		_variant == XeSSFGVariant::X2 ? "x2" : "MFG",
-		_requestedMultiplier, properties.maxSupportedInterpolations));
+		_requestedMultiplier, properties.maxSupportedInterpolations,
+		mfgUnlocked ? "applied" : "off"));
 	if (properties.maxSupportedInterpolations < requestedInterpolations) {
-		Logger::Get().Error(fmt::format(
-			"XeSSFG {}x is unsupported: hardware supports at most {}x",
-			_requestedMultiplier, properties.maxSupportedInterpolations + 1));
-		_initializationError = _requestedMultiplier > 2 ?
-			ScalingError::XeSSMfgMultiplierUnsupported :
-			ScalingError::ScalingFailedGeneral;
-		return false;
+		if (!mfgUnlocked) {
+			Logger::Get().Error(fmt::format(
+				"XeSSFG {}x is unsupported: hardware supports at most {}x",
+				_requestedMultiplier, properties.maxSupportedInterpolations + 1));
+			_initializationError = _requestedMultiplier > 2 ?
+				ScalingError::XeSSMfgMultiplierUnsupported :
+				ScalingError::ScalingFailedGeneral;
+			return false;
+		}
+		// 已解锁但上报仍不足：以 USE_MAX_SUPPORTED 哨兵初始化，init 后按
+		// GetInitializationParameters 的实际生效值做最终裁决。
+		Logger::Get().Warn(fmt::format(
+			"XeSSFG MFG unlock applied but properties report {} < {}; "
+			"initializing with USE_MAX_SUPPORTED sentinel",
+			properties.maxSupportedInterpolations, requestedInterpolations));
 	}
+	const bool useSentinel =
+		properties.maxSupportedInterpolations < requestedInterpolations;
 	const uint32_t interpolatedFrames = requestedInterpolations;
 	impl->multiplier = _requestedMultiplier;
 
@@ -621,7 +808,8 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 		(_deviceResources->IsTearingSupported() && ScalingWindow::Get().Options().isVRREnabled ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
 
 	xefg_swapchain_d3d12_init_params_t initParams{};
-	initParams.maxInterpolatedFrames = interpolatedFrames;
+	initParams.maxInterpolatedFrames = useSentinel ?
+		XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES : interpolatedFrames;
 	initParams.uiMode = XEFG_SWAPCHAIN_UI_MODE_NONE;
 	result = xefgSwapChainD3D12InitFromSwapChainDesc(
 		impl->xefg, hwndAttach, &swapChainDesc, nullptr,
@@ -659,6 +847,24 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 		LogXeFGResult("set requested interpolation count failed", result);
 		return false;
 	}
+	if (useSentinel) {
+		// 哨兵初始化的最终裁决：SDK 实际生效的插帧数必须达到请求值。
+		xefg_swapchain_d3d12_init_params_t applied{};
+		const xefg_swapchain_result_t appliedResult =
+			xefgSwapChainD3D12GetInitializationParameters(impl->xefg, &applied);
+		if (!XeFGSucceeded(appliedResult) ||
+			applied.maxInterpolatedFrames < interpolatedFrames) {
+			Logger::Get().Error(fmt::format(
+				"XeSSFG MFG init applied only {} interpolated frames (requested {})",
+				XeFGSucceeded(appliedResult) ? applied.maxInterpolatedFrames : 0,
+				interpolatedFrames));
+			_initializationError = ScalingError::XeSSMfgMultiplierUnsupported;
+			return false;
+		}
+		Logger::Get().Info(fmt::format(
+			"XeSSFG MFG sentinel init confirmed: {} interpolated frames",
+			applied.maxInterpolatedFrames));
+	}
 	result = xefgSwapChainSetEnabled(impl->xefg, true);
 	if (!XeFGSucceeded(result)) {
 		LogXeFGResult("enable failed", result);
@@ -683,11 +889,13 @@ bool XeSSFGPresenter::_Initialize(HWND hwndAttach) noexcept {
 	return true;
 }
 
-void XeSSFGPresenter::SetReuseParity(int32_t parity) noexcept {
+void XeSSFGPresenter::SetReuseParity(int32_t parity, int64_t publishNs) noexcept {
 	if (!_impl) {
 		return;
 	}
-	_impl->reuseParity.store(parity, std::memory_order_relaxed);
+	// 前端线程在 _SubmitFrontendFrame 调用（按本帧消费的槽位取值）。
+	_impl->frameParity = parity;
+	_impl->framePublishNs = publishNs;
 }
 
 void XeSSFGPresenter::SetFrameGuidance(
@@ -923,24 +1131,33 @@ bool XeSSFGPresenter::EndFrame(bool waitForGpu) noexcept {
 	// 写入,零猜测:奇帧 hold 到「上次 present + P/2」,偶帧立即发布,P 用偶帧
 	// 到达间隔的 EMA（不受 hold 影响）。parity==-1（未启用复用）时全部旁路,
 	// 行为与上游完全一致。
-	const int32_t parity = impl.frameGenerationEnabled ?
-		impl.reuseParity.load(std::memory_order_relaxed) : -1;
+	const int32_t parity = impl.frameGenerationEnabled ? impl.frameParity : -1;
 	const auto arrivalNow = std::chrono::steady_clock::now();
-	if (parity == 0) {
-		// 偶帧到达:更新配对周期 EMA。
-		if (impl.lastEvenArrival.time_since_epoch().count() != 0) {
+	if (parity == 0 && impl.framePublishNs > 0) {
+		// 偶帧:配对周期 EMA 只用发布时刻间隔（后端到达，不受 hold/呈现
+		// 延迟影响，无自反馈）。拒收阈值 1.5×——原 2.5× 会级联接受
+		// 60→150→400ms 的间隔把 EMA 拉爆（实测 pairMs=400、present 停顿
+		// 190ms）；连续 3 次拒收说明节奏真实改变（读盘/场景切换结束），
+		// 重置为新周期。
+		if (impl.lastEvenPublishNs > 0 && impl.framePublishNs > impl.lastEvenPublishNs) {
 			const float pairDeltaMs = static_cast<float>(
-				std::chrono::duration<double, std::milli>(arrivalNow - impl.lastEvenArrival).count());
+				impl.framePublishNs - impl.lastEvenPublishNs) / 1e6f;
 			constexpr float kMinPairMs = 4.0f;
 			if (impl.pairPeriodMs < kMinPairMs) {
 				impl.pairPeriodMs = pairDeltaMs;
-			} else if (pairDeltaMs > impl.pairPeriodMs * 2.5f) {
-				// 场景切换/暂停后的长间隔:不更新,防 EMA 膨胀。
+				impl.pairRejectCount = 0;
+			} else if (pairDeltaMs > impl.pairPeriodMs * 1.5f) {
+				// 场景切换/暂停后的长间隔:拒收;连续 3 次则重置。
+				if (++impl.pairRejectCount >= 3) {
+					impl.pairPeriodMs = pairDeltaMs;
+					impl.pairRejectCount = 0;
+				}
 			} else {
 				impl.pairPeriodMs = impl.pairPeriodMs * 0.5f + pairDeltaMs * 0.5f;
+				impl.pairRejectCount = 0;
 			}
 		}
-		impl.lastEvenArrival = arrivalNow;
+		impl.lastEvenPublishNs = impl.framePublishNs;
 	}
 	bool presentHeld = false;
 	if (parity == 1 && impl.pairPeriodMs >= 4.0f &&
@@ -1197,7 +1414,7 @@ bool XeSSFGPresenter::BeginFrame(
 bool XeSSFGPresenter::EndFrame(bool) noexcept { return false; }
 bool XeSSFGPresenter::SetBaseFrameRateLimit(double) noexcept { return false; }
 bool XeSSFGPresenter::WaitForFrameCapacity(DWORD) noexcept { return false; }
-void XeSSFGPresenter::SetReuseParity(int32_t) noexcept {}
+void XeSSFGPresenter::SetReuseParity(int32_t, int64_t) noexcept {}
 void XeSSFGPresenter::SetFrameGuidance(
 	ID3D11Texture2D*, FrameGuidanceFrameId, bool, const RECT&) noexcept {}
 bool XeSSFGPresenter::HasIndependentOverlay() const noexcept { return false; }

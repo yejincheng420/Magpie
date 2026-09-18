@@ -458,6 +458,10 @@ private:
 	std::array<std::atomic<int64_t>, MAX_SHARED_TEXTURE_SLOTS> _sharedPresentIntervalNs{};
 	FramePresentationClock _presentationClock;
 	FrameGuidanceFrameId _frontendCaptureFrameId = 0;
+	// 当前前端内容帧的奇偶与发布时刻（_UpdateFrontendBase 随槽位消费写入，
+	// _SubmitFrontendFrame 传给 presenter；前端线程独占）。
+	int32_t _frontendFrameParity = -1;
+	int64_t _frontendFramePublishNs = 0;
 	FrameGuidanceFrameId _lastCountedRealFrameId = 0;
 	uint32_t _dlssFgFrontendTimingFrames = 0;
 	bool _dlssFgFrontendTimingModeInitialized = false;
@@ -499,6 +503,19 @@ private:
 	uint32_t _dlssFgDiagAnchorCommits = 0;	// 锚定组提交数
 	uint32_t _dlssFgDiagGroups = 0;			// 组关闭数（=真实帧呈现数）
 	uint32_t _dlssFgDiagParity[3] = {};		// parity[-1/0/1] 直方图
+	// 真实 present 间隔与到点滞后统计（前端线程独占，RenderDLSSFGFrame 记录，
+	// _RecordDLSSFGFrontendTimings 每 120 帧汇总清零）。burst: <2ms 的同刷新
+	// 窗突发（上屏丢帧）；stall: >50ms 的可见空窗。lateMs: 呈现晚于 due 的幅度。
+	std::chrono::steady_clock::time_point _dlssFgLastPresentTime{};
+	double _dlssFgPresentGapTotalMs = 0;
+	double _dlssFgPresentGapMinMs = 0;
+	double _dlssFgPresentGapMaxMs = 0;
+	uint32_t _dlssFgPresentGapCount = 0;
+	uint32_t _dlssFgPresentGapBursts = 0;
+	uint32_t _dlssFgPresentGapStalls = 0;
+	double _dlssFgLateTotalMs = 0;
+	double _dlssFgLateMaxMs = 0;
+	uint32_t _dlssFgLateSamples = 0;
 	std::atomic<uint64_t> _dlssFgRingWaitNanoseconds = 0;
 	std::atomic<uint64_t> _dlssFgRingWaitSamples = 0;
 	// DLSSFG 实际生效倍率（后端 init 后写，前端读；请求倍率可能被 SDK 上限钳制）。
