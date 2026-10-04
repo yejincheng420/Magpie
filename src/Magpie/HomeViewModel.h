@@ -2,6 +2,8 @@
 #include "HomeViewModel.g.h"
 #include "Event.h"
 
+namespace Magpie { struct Profile; }
+
 namespace winrt::Magpie::implementation {
 
 struct HomeViewModel : HomeViewModelT<HomeViewModel>, wil::notify_property_changed_base<HomeViewModel> {
@@ -81,21 +83,13 @@ struct HomeViewModel : HomeViewModelT<HomeViewModel>, wil::notify_property_chang
 	bool IsInlineParams() const noexcept;
 	void IsInlineParams(bool value);
 
-	bool IsFrontEdgeSyncEnabled() const noexcept;
 	bool IsStopEffectsOnTaskSwitchEnabled() const noexcept;
 	void IsStopEffectsOnTaskSwitchEnabled(bool value);
-	void IsFrontEdgeSyncEnabled(bool value);
 	bool IsVRREnabled() const noexcept;
 	void IsVRREnabled(bool value);
-	double FrontEdgeSyncFrameRate() const noexcept;
-	void FrontEdgeSyncFrameRate(double value);
-	int32_t FrameSyncModeIndex() const noexcept;
-	void FrameSyncModeIndex(int32_t value);
 
-	static IVector<IInspectable> MinFrameRateOptions();
-
-	int MinFrameRateIndex() const noexcept;
-	void MinFrameRateIndex(int value);
+	hstring DefaultFrameRefreshSummary() const;
+	void EditDefaultFrameRefresh();
 
 	bool IsDeveloperMode() const noexcept;
 	void IsDeveloperMode(bool value);
@@ -137,6 +131,8 @@ struct HomeViewModel : HomeViewModelT<HomeViewModel>, wil::notify_property_chang
 	void IsStatisticsForDynamicDetectionEnabled(bool value);
 
 private:
+	::Magpie::Event<>::EventRevoker _duplicateFrameDetectionModeChangedRevoker;
+	::Magpie::Event<::Magpie::Profile&>::EventRevoker _frameRefreshChangedRevoker;
 	void _ScalingService_IsTimerOnChanged(bool value, bool windowedMode);
 
 	void _ScalingService_TimerTick(double);
@@ -147,7 +143,6 @@ private:
 
 	::Magpie::Event<bool, bool>::EventRevoker _isTimerOnRevoker;
 	::Magpie::Event<>::EventRevoker _issueChangedRevoker;
-	::Magpie::Event<>::EventRevoker _frameSyncChangedRevoker;
 	::Magpie::Event<double>::EventRevoker _timerTickRevoker;
 	::Magpie::Event<bool>::EventRevoker _isScalingChangedRevoker;
 	::Magpie::Event<bool>::EventRevoker _isShowOnHomePageChangedRevoker;
@@ -156,5 +151,3 @@ private:
 };
 
 }
-
-BASIC_FACTORY(HomeViewModel)

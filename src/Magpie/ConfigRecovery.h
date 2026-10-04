@@ -10,7 +10,7 @@
 namespace Magpie::ConfigRecovery {
 
 // Increment when the recovery policy changes, independently of release versions.
-inline constexpr uint32_t POLICY_VERSION = 3;
+inline constexpr uint32_t POLICY_VERSION = 5;
 enum class Kind { None, Backup, Partial, Defaults, Repaired };
 struct Plan {
 	rapidjson::Document document;
@@ -112,6 +112,15 @@ inline Plan Prepare(std::string_view source, std::string_view backup,
 	};
 	for (const char* key : { "windowPos", "shortcuts", "hotkeys", "overlay" })
 		check(doc, key, "", object);
+	for (const char* objectKey : { "shortcuts", "hotkeys" }) {
+		if (!doc.HasMember(objectKey)) continue;
+		for (const char* key : { "scale", "windowedModeScale", "toolbar", "overlay",
+			"profiler", "effectParameters", "screenshot", "toolbarPin", "comparison" }) {
+			check(doc[objectKey], key, std::string("/") + objectKey, [](const auto& value) {
+				return value.IsUint() && value.GetUint() <= 0xfff;
+			});
+		}
+	}
 	for (const char* key : { "scalingModes", "profiles", "scalingProfiles" })
 		check(doc, key, "", array);
 	// Version migrations are normal loading, not evidence of damaged settings.
@@ -233,7 +242,42 @@ inline Plan Prepare(std::string_view source, std::string_view backup,
 				profile.RemoveMember("scalingMode");
 				profile.AddMember("scalingMode", i == 0 ? 0 : -1, allocator);
 			}
+			if (profile.HasMember("frontEdgeSync") && !profile["frontEdgeSync"].IsBool()) {
+				note(path + "/frontEdgeSync"); profile["frontEdgeSync"].SetBool(true);
+			}
+			if (profile.HasMember("frontEdgeSyncFrameRate") &&
+				(!FloatInRange(profile["frontEdgeSyncFrameRate"], 0, 1000) ||
+				 (profile["frontEdgeSyncFrameRate"].GetDouble() > 0 && profile["frontEdgeSyncFrameRate"].GetDouble() < 1))) {
+				note(path + "/frontEdgeSyncFrameRate"); profile["frontEdgeSyncFrameRate"].SetDouble(60);
+			}
+			if (profile.HasMember("frameSyncMode") &&
+				(!profile["frameSyncMode"].IsUint() || profile["frameSyncMode"].GetUint() > 2)) {
+				note(path + "/frameSyncMode"); profile["frameSyncMode"].SetUint(0);
+			}
 			number(profile, "maxFrameRate", path, 10, 1000);
+			if (profile.HasMember("frameRefresh")) {
+				if (!profile["frameRefresh"].IsObject()) {
+					note(path + "/frameRefresh");
+					// Retain the new-schema marker; removing it would reimport legacy fields.
+					profile["frameRefresh"].SetObject();
+				}
+				auto& refresh = profile["frameRefresh"];
+				const auto refreshPath = path + "/frameRefresh";
+				enumeration(refresh, "contentMode", refreshPath, 3);
+				enumeration(refresh, "pacing", refreshPath, 3);
+				enumeration(refresh, "cursorMode", refreshPath, 3);
+				enumeration(refresh, "cursorSupplement", refreshPath, 2);
+				for (const char* field : { "contentRate", "cursorRate", "idleRate" })
+					number(refresh, field, refreshPath, 1, 1000);
+				check(refresh, "legacyContentLimit", refreshPath, [](const auto& value) {
+					return FloatInRange(value, 0, 1000) && (value.GetDouble() == 0 || value.GetDouble() >= 1);
+				});
+				check(refresh, "legacySourceTarget", refreshPath, [](const auto& value) {
+					return value.IsNumber() && (value.GetDouble() == -1 || value.GetDouble() == 0 || FloatInRange(value, 1, 1000));
+				});
+				for (const char* field : { "idleEnabled", "legacyLimiterOnly", "legacyResponsiveMinimum" })
+					check(refresh, field, refreshPath, [](const auto& value) { return value.IsBool(); });
+			}
 			number(profile, "customInitialWindowedScaleFactor", path, 1, 1e4);
 			number(profile, "customCursorScaling", path, 0, 1e4);
 			number(profile, "autoHideCursorDelay", path, 0.1, 5);

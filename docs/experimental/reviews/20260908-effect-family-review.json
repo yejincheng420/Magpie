@@ -11,6 +11,7 @@
     { "sourceFamilies": ["RAVU"], "id": "ravu", "name": "RAVU", "summary": "视频、插画与边缘重建。普通与 Lite 固定 2×，Zoom 支持任意输出尺寸；R2–R4、AR 与 RGB 是不同采样和颜色变体。" },
     { "sourceFamilies": ["SMAA"], "id": "smaa", "name": "SMAA", "summary": "平滑边缘锯齿。Low–Ultra 是空间质量预设；T2x、4x 是时序近似实验变体，需比较运动重影，不能等同游戏内集成。" },
     { "sourceFamilies": ["FXAA"], "id": "fxaa", "name": "FXAA", "summary": "根据当前画面快速平滑锯齿。不同实现分别保留；留意文字、细线与纹理变软，按观感比较。" },
+    { "sourceFamilies": ["xBR"], "id": "xbr", "name": "xBR", "summary": "按边缘规则平滑像素画轮廓。标准 LV2 提供 2×–4×；NoBlend 3× 保持已有调色板，Hybrid 2× 面向预抗锯齿 SDR 素材。" },
     { "sourceFamilies": ["xBRZ"], "id": "xbrz", "name": "xBRZ", "summary": "平滑像素画轮廓。2×–6× 是固定整数倍率，Freescale 支持自由倍率；按目标尺寸比较边缘一致性。" },
     { "sourceFamilies": ["FSRCNNX"], "id": "fsrcnnx", "name": "FSRCNNX", "summary": "神经网络 2× 放大。不同网络规模独立提供，请比较目标画面的细节与性能成本。" },
     { "sourceFamilies": ["CAS"], "id": "cas", "name": "CAS", "summary": "对比度自适应锐化。CAS 保持输入尺寸；CAS Scaling 同时调整尺寸，按当前管线的缩放需求选择。" },

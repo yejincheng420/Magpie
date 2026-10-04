@@ -1,4 +1,5 @@
 #include "ReflexController.h"
+#include "include/DLSSNRTemporalState.h"
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -91,7 +92,8 @@ static void TestFrameLifecycle() {
 		const auto frame = reflex.BeginCapture(20);
 		Require(frame == 20, "Reflex must align with the minimum NGX base-frame ID");
 		for (int retry = 0; retry < 50; ++retry)
-			Require(reflex.BeginCapture(20) == frame, "duplicate capture must retain its ID");
+			Require(reflex.BeginCapture(20) == frame, "empty capture poll must retain its ID");
+		reflex.BeginCaptureRender();
 		reflex.EndCaptureRender();
 		reflex.EndCaptureRender();
 		uint64_t priorId = 0;
@@ -141,6 +143,7 @@ static void TestPauseAndFailure() {
 		reflex.Initialize(std::move(fake));
 		reflex.RegisterGenerationQueue(nullptr);
 		const auto frame = reflex.BeginCapture();
+		reflex.BeginCaptureRender();
 		const auto present = reflex.NextPresentId();
 		reflex.EndCaptureRender();
 		reflex.Generation(nullptr, frame, present, true);
@@ -214,6 +217,7 @@ static void TestOrdinaryFrameLimit() {
 	const auto frame = reflex.BeginCapture(9);
 	const auto present = reflex.NextPresentId();
 	for (int i = 0; i < 20; ++i) reflex.BeginCapture(9);
+	reflex.BeginCaptureRender();
 	reflex.EndCaptureRender();
 	reflex.CompleteCapture();
 	Present(reflex, frame, present, false);
@@ -231,6 +235,48 @@ static void TestOrdinaryFrameLimit() {
 	reflex.SetFrameRateLimit(16667);
 	Require(!reflex.Available() && driver->settings.back() == ReflexSettings{ .lowLatency = false },
 		"failed reconfiguration must clear all driver settings before Async fallback");
+}
+
+static void TestCaptureRenderBoundaries() {
+	ReflexController reflex;
+	auto fake = std::make_unique<FakeDriver>();
+	auto* driver = fake.get();
+	reflex.Initialize(std::move(fake));
+	const auto candidate = reflex.BeginCapture(30);
+	for (int i = 0; i < 100; ++i) {
+		reflex.DiscardCaptureRender();
+		Require(reflex.BeginCapture(30) == candidate, "empty polls must preserve the slept candidate");
+	}
+	Require(driver->Count("sleep") == 1 && driver->Count("sim-start") == 1 &&
+		driver->Count("render-start") == 0 && driver->Count("sim-end") == 0,
+		"idle capture waits must not open a render interval or sleep on every poll");
+	reflex.BeginCaptureRender();
+	reflex.BeginCaptureRender();
+	driver->Record("capture-copy", candidate);
+	Require(driver->events[2].name == "sim-start" && driver->events[3].name == "sim-end" &&
+		driver->events[4].name == "render-start" && driver->events[5].name == "capture-copy",
+		"render must start after readiness and before the first capture GPU operation");
+	// Pixel comparison used the GPU but rejected the frame. Close it before
+	// waiting again; the next GPU attempt needs a fresh monotonic frame ID.
+	reflex.DiscardCaptureRender();
+	reflex.DiscardCaptureRender();
+	Require(!reflex.CaptureFrameId() && driver->Count("render-start") == 1 &&
+		driver->Count("render-end") == 1, "rejected GPU input must close exactly one render attempt");
+	const auto next = reflex.BeginCapture(30);
+	Require(next > candidate && driver->Count("sleep") == 2, "rejected input must not reuse its ended render ID");
+	reflex.CompleteCapture();
+	Require(driver->Count("sim-end") == 2 && driver->Count("render-end") == 1,
+		"canceling an empty candidate closes simulation without inventing GPU work");
+	const auto staged = reflex.BeginCapture(31);
+	reflex.BeginCaptureRender();
+	reflex.EndCaptureRender();
+	reflex.EndCaptureRender();
+	reflex.BeginCaptureRender();
+	Require(reflex.BeginCapture(31) == staged && reflex.NextPresentId() != 0 &&
+		driver->Count("sleep") == 3 && driver->Count("render-start") == 2 &&
+		driver->Count("render-end") == 2,
+		"staged FG input retains IDs without reopening rendering or sleeping at its deadline");
+	reflex.CompleteCapture();
 }
 
 static void TestDriverOffIsNotFailure() {
@@ -260,6 +306,17 @@ static void TestDriverOffIsNotFailure() {
 		reflex.Stop();
 		Require(reflex.State() == ReflexState::Stopped, "explicit stop must differ from driver failure");
 	}
+}
+
+static void TestRejectedCapturePreservesMotionHistory() {
+	DLSSNRTemporalState state;
+	state.Commit(30, 1, 1, 100000);
+	Require(state.MotionPairMatches(33, 30), "rejected Reflex attempts must not break the accepted motion pair");
+	Require(state.Weight(33, 1, 1, 266667, false) > 0, "a legal ID gap must retain timestamp-based EMA history");
+	Require(!state.MotionPairMatches(35, 33), "skipping an accepted input must still invalidate the motion history pair");
+	Require(state.MotionPairMatches(30, 29), "same-frame reuse keeps the existing pair");
+	Require(state.MotionPairMatches(31, 0) && !state.MotionPairMatches(33, 0),
+		"callers without an explicit predecessor retain the conservative consecutive-ID contract");
 }
 
 static void TestClearBeforeFallback() {
@@ -344,12 +401,14 @@ int main() {
 		TestPauseAndFailure();
 		TestSleepDoesNotBlockPresentOrStop();
 		TestOrdinaryFrameLimit();
+		TestCaptureRenderBoundaries();
+		TestRejectedCapturePreservesMotionHistory();
 		TestDriverOffIsNotFailure();
 		TestClearBeforeFallback();
 		TestCandidateAcrossPause();
 		TestPauseDuringSleepAndClearQueryFailure();
 		TestUnsupportedZeroCapCanFallback();
-		std::cout << "PASS: Reflex 2x/3x/4x IDs, capture retries, skipped interpolation, FIFO IDs, 14 driver failure points, concurrent Sleep/Present/Stop; ordinary frame limits, same-target deduplication, Off-query distinction and pause/resume\n";
+		std::cout << "PASS: Reflex 2x/3x/4x IDs, capture retries, capture GPU boundaries, rejected/staged input, skipped interpolation, FIFO IDs, 14 driver failure points, concurrent Sleep/Present/Stop; ordinary frame limits, same-target deduplication, Off-query distinction and pause/resume\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

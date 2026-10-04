@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "DLSSNRDetailParameters.h"
 #include "RTXVideoParameters.h"
 #include "XeSSFGParameters.h"
 #include "DlssOpticalFlowParameters.h"
@@ -356,6 +357,7 @@ static V065NormalizationStats NormalizeV065ScalingModes(
 						++stats.migratedResidualTransferModes;
 					}
 				}
+				if (NormalizeDLSSNRDetailParameters(effect.parameters)) ++stats.insertedFallbacks;
 				auto guidanceMode = effect.parameters.find(L"guidanceMode");
 				if (guidanceMode != effect.parameters.end()) {
 					const int oldMode = std::clamp(
@@ -553,6 +555,7 @@ bool ScalingModesService::Import(const rapidjson::GenericObject<true, rapidjson:
 	const V065NormalizationStats normalization =
 		NormalizeV065ScalingModes(scalingModes);
 	if (normalization.Changed()) {
+		if (loadingSettings) AppSettings::Get().MarkConfigMigrationNeeded();
 		Logger::Get().Info(fmt::format(
 			"v0.6.5 scaling-mode normalization: migratedGuidanceModes={} "
 			"removedDepthParameters={} removedLegacyParameters={} "

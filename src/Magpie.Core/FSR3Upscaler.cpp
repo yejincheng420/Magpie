@@ -493,7 +493,7 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
 	Impl& impl = *_impl;
 	const bool guidanceReset = drawContext.frameGuidance.requiresHistoryReset &&
 		impl.lastGuidanceResetFrameId != drawContext.frameId;
-	impl.resetHistory |= guidanceReset;
+	impl.resetHistory |= guidanceReset || drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
 	if (!WaitForFence(impl, impl.lastSubmittedValue)) return false;
 	impl.context11->CopyResource(impl.sharedInput11.get(), input);
 	if (impl.enableOpticalFlow) {

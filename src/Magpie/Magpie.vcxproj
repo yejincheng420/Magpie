@@ -213,6 +213,7 @@
     </ClInclude>
     <ClInclude Include="ScalingMode.h" />
     <ClInclude Include="Profile.h" />
+    <ClInclude Include="ProfileFrameRefresh.h" />
     <ClInclude Include="ProfilePage.h">
       <DependentUpon>ProfilePage.xaml</DependentUpon>
       <SubType>Code</SubType>

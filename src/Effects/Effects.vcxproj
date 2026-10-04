@@ -221,6 +221,24 @@
     <CopyFileToFolders Include="xBRZ\xBRZ_Freescale.hlsl">
       <FileType>Document</FileType>
     </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_LV2_Common.hlsli">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_2x.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_3x.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_4x.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_NoBlend_3x.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_Hybrid_2x.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
     <CopyFileToFolders Include="FXAA\FXAA.hlsli">
       <FileType>Document</FileType>
     </CopyFileToFolders>

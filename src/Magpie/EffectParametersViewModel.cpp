@@ -19,6 +19,7 @@
 #include "EffectParameterRules.h"
 #include "ScalingService.h"
 #include "EffectParameterLocalization.h"
+#include "EffectParameterPopupLayout.h"
 #include "App.h"
 #include "EffectPickerModel.h"
 #include "ToastService.h"
@@ -207,46 +208,32 @@ EffectParametersViewModel::EffectParametersViewModel(uint32_t scalingModeIdx, ui
 		_groups = single_threaded_vector(std::move(groups));
 	}
 	_SynchronizeParameters();
-	if (IsFrameRateFilterEffect(StrHelper::UTF16ToUTF8(_effectInfo->name))) {
-		_frontEdgeSyncChangedRevoker = AppSettings::Get().FrontEdgeSyncChanged(
-			auto_revoke, [this] { if (!_IsRemoved()) _SynchronizeParameters(); });
-	}
 	_parameterChangedRevoker = ScalingModesService::Get().EffectParametersChanged(
 		auto_revoke, [this](uint32_t mode, uint32_t effect) {
 			if (!_IsRemoved() && mode == _scalingModeIdx && effect == _effectIdx) _SynchronizeParameters();
 		});
 }
 
-void EffectParametersViewModel::UpdateLayoutWidth(double availableWidth) {
+void EffectParametersViewModel::UpdateLayoutSize(double availableWidth, double availableHeight) {
 	_availableLayoutWidth = std::max(availableWidth, 0.0);
+	_contentMaxHeight = std::max(1.0, availableHeight);
+	RaisePropertyChanged(L"ContentMaxHeight");
 	_RefreshLayoutWidth();
 }
 
 void EffectParametersViewModel::_RefreshLayoutWidth() {
-	constexpr double DEFAULT_COLUMN_WIDTH = 260.0;
-	const double MIN_COLUMN_WIDTH = _effectInfo->name == L"DLSSNR\\DLSSNR_AI_Filter" ? 240.0 : 120.0;
-	constexpr double COLUMN_SPACING = 24.0;
-
 	const size_t visibleGroupCount = std::max<size_t>(1, std::ranges::count_if(
 		_groupImpls, [](const auto& group) { return group->IsVisible(); }));
-	const double totalSpacing = COLUMN_SPACING * (visibleGroupCount - 1);
-	double columnWidth = DEFAULT_COLUMN_WIDTH;
-	const double idealWidth = columnWidth * visibleGroupCount + totalSpacing;
-	if (std::isfinite(_availableLayoutWidth) && _availableLayoutWidth < idealWidth) {
-		columnWidth = std::max(
-			MIN_COLUMN_WIDTH,
-			(_availableLayoutWidth - totalSpacing) / visibleGroupCount);
-	}
+	const auto layout = GetEffectParameterColumnLayout(visibleGroupCount, _availableLayoutWidth);
 
 	bool hasVisibleGroup = false;
 	for (const auto& group : _groupImpls) {
-		group->ColumnWidth(columnWidth);
+		group->ColumnWidth(layout.columnWidth);
 		group->ShowLeadingSeparator(group->IsVisible() && hasVisibleGroup);
 		hasVisibleGroup = hasVisibleGroup || group->IsVisible();
 	}
 
-	const double contentWidth = std::min(columnWidth * visibleGroupCount + totalSpacing,
-		std::max(0.0, _availableLayoutWidth));
+	const double contentWidth = layout.viewportWidth;
 	if (std::abs(_contentWidth - contentWidth) >= 0.01) {
 		_contentWidth = contentWidth;
 		RaisePropertyChanged(L"ContentWidth");
@@ -298,7 +285,7 @@ void EffectParametersViewModel::_RefreshConditionalVisibility() {
 		if (descriptor == _effectInfo->params.end()) return fallback;
 		return descriptor->constant.index() == 0 ? std::get<0>(descriptor->constant).defaultValue : float(std::get<1>(descriptor->constant).defaultValue);
 	};
-	const bool frontEdgeSyncEnabled = AppSettings::Get().IsFrontEdgeSyncEnabled();
+	const bool frontEdgeSyncEnabled = false;
 	const bool wasSynchronizing = std::exchange(_synchronizing, true);
 	auto reset = wil::scope_exit([this, wasSynchronizing] { _synchronizing = wasSynchronizing; });
 	for (const auto& parameter : _parameterImpls) {
@@ -310,6 +297,10 @@ void EffectParametersViewModel::_RefreshConditionalVisibility() {
 		const bool visible = IsEffectParameterVisible(effect, name, getValue);
 		parameter->IsVisible(visible);
 		parameter->IsEnabled(visible && IsEffectParameterEnabled(effect, name, frontEdgeSyncEnabled, getValue));
+		auto display = _effectInfo->params[parameter->Index()];
+		std::vector<EffectParameterDesc> localized{ std::move(display) };
+		EffectParameterLocalization::Localize(effect, localized);
+		parameter->Tooltip(to_hstring(EffectParameterLocalization::Tooltip(effect, localized.front(), parameter->IsEnabled())));
 	}
 	for (const auto& group : _groupImpls) group->RefreshVisibility();
 }

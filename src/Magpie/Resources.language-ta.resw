@@ -1060,4 +1060,11 @@
   <data name="Home_Advanced_DeveloperOptions_DisableTopmost.Content" xml:space="preserve">
     <value>எப்பொழுதும் மேல்நிலையை முடக்கு</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>அமைப்புக் கோப்புறை</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>மீட்டமை</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>மேலும் விருப்பங்கள்</value></data>
 </root>

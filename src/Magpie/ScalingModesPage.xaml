@@ -7,6 +7,12 @@
       xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
       mc:Ignorable="d">
 	<Page.Resources>
+		<Style x:Key="ScalingModesHeaderButtonStyle" TargetType="Button"
+		       BasedOn="{StaticResource DefaultButtonStyle}">
+			<Setter Property="MinWidth" Value="0" />
+			<Setter Property="Height" Value="{StaticResource PaneToggleButtonHeight}" />
+			<Setter Property="BorderThickness" Value="0" />
+		</Style>
 		<Style x:Key="EffectPickerPresenterStyle" TargetType="FlyoutPresenter"
 		       BasedOn="{StaticResource DefaultFlyoutPresenterStyle}">
 			<Setter Property="MaxWidth" Value="1000" />
@@ -105,6 +111,7 @@
 		<DataTemplate x:Key="EffectParametersFlyout"
 		              x:DataType="local:EffectParametersViewModel">
 			<ScrollViewer Width="{x:Bind ContentWidth, Mode=OneWay}"
+			              MaxHeight="{x:Bind ContentMaxHeight, Mode=OneWay}"
 			              HorizontalScrollBarVisibility="Auto"
 			              HorizontalScrollMode="Enabled"
 			              VerticalScrollBarVisibility="Auto"
@@ -147,7 +154,13 @@
 												          IsChecked="{x:Bind BooleanValue, Mode=TwoWay}"
 												          Visibility="{x:Bind IsBoolean, Mode=OneTime}">
 													<TextBlock Text="{x:Bind Label, Mode=OneTime}"
-													           TextWrapping="WrapWholeWords" />
+													           TextWrapping="WrapWholeWords" AutomationProperties.HelpText="{x:Bind Tooltip, Mode=OneWay}">
+														<ToolTipService.ToolTip>
+															<ToolTip MaxWidth="360" Placement="Top">
+																<TextBlock MaxWidth="328" Text="{x:Bind Tooltip, Mode=OneWay}" TextWrapping="Wrap" />
+															</ToolTip>
+														</ToolTipService.ToolTip>
+													</TextBlock>
 												</CheckBox>
 												<local:SimpleStackPanel Visibility="{x:Bind IsFloat, Mode=OneTime}">
 													<Grid ColumnSpacing="4"
@@ -159,7 +172,13 @@
 														<TextBlock Grid.Column="0"
 														           VerticalAlignment="Center"
 														           Text="{x:Bind Label, Mode=OneTime}"
-														           TextWrapping="WrapWholeWords" />
+														           TextWrapping="WrapWholeWords" AutomationProperties.HelpText="{x:Bind Tooltip, Mode=OneWay}">
+															<ToolTipService.ToolTip>
+																<ToolTip MaxWidth="360" Placement="Top">
+																	<TextBlock MaxWidth="328" Text="{x:Bind Tooltip, Mode=OneWay}" TextWrapping="Wrap" />
+																</ToolTip>
+															</ToolTipService.ToolTip>
+														</TextBlock>
 														<TextBlock Grid.Column="1"
 														           HorizontalAlignment="Right"
 														           VerticalAlignment="Center"
@@ -178,7 +197,13 @@
 														           Grid.Column="0"
 														           VerticalAlignment="Center"
 														           Text="{x:Bind PrimaryLabel, Mode=OneTime}"
-														           TextWrapping="WrapWholeWords" />
+														           TextWrapping="WrapWholeWords" AutomationProperties.HelpText="{x:Bind Tooltip, Mode=OneWay}">
+															<ToolTipService.ToolTip>
+																<ToolTip MaxWidth="360" Placement="Top">
+																	<TextBlock MaxWidth="328" Text="{x:Bind Tooltip, Mode=OneWay}" TextWrapping="Wrap" />
+																</ToolTip>
+															</ToolTipService.ToolTip>
+														</TextBlock>
 														<TextBlock Grid.Row="0"
 														           Grid.Column="1"
 														           HorizontalAlignment="Right"
@@ -205,7 +230,13 @@
 								<local:SimpleStackPanel Spacing="4"
 								                        Visibility="{x:Bind IsChoice, Mode=OneTime}">
 									<TextBlock Text="{x:Bind Label, Mode=OneTime}"
-									           TextWrapping="WrapWholeWords" />
+									           TextWrapping="WrapWholeWords" AutomationProperties.HelpText="{x:Bind Tooltip, Mode=OneWay}">
+										<ToolTipService.ToolTip>
+											<ToolTip MaxWidth="360" Placement="Top">
+												<TextBlock MaxWidth="328" Text="{x:Bind Tooltip, Mode=OneWay}" TextWrapping="Wrap" />
+											</ToolTip>
+										</ToolTipService.ToolTip>
+									</TextBlock>
 									<ComboBox HorizontalAlignment="Stretch"
 									          IsEnabled="{x:Bind IsEnabled, Mode=OneWay}"
 									          ItemsSource="{x:Bind Choices, Mode=OneWay}"
@@ -225,35 +256,46 @@
 	</Page.Resources>
 	<local:PageFrame x:Uid="ScalingModes_PageFrame">
 		<local:PageFrame.HeaderAction>
-			<Button x:Uid="ScalingModes_General_MoreOptions">
-				<Button.Content>
-					<FontIcon Glyph="&#xE712;" />
-				</Button.Content>
-				<Button.Flyout>
-					<MenuFlyout Placement="Bottom"
-					            ShouldConstrainToRootBounds="False">
-						<MenuFlyoutItem x:Uid="ScalingModes_General_Export"
-						                Click="{x:Bind ViewModel.Export}">
-							<MenuFlyoutItem.Icon>
-								<FontIcon Glyph="&#xEDE1;" />
-							</MenuFlyoutItem.Icon>
-						</MenuFlyoutItem>
-						<MenuFlyoutItem x:Uid="ScalingModes_General_Import"
-						                Click="{x:Bind ViewModel.Import}">
-							<MenuFlyoutItem.Icon>
-								<FontIcon Glyph="&#xE8B5;" />
-							</MenuFlyoutItem.Icon>
-						</MenuFlyoutItem>
-						<MenuFlyoutSeparator />
-						<MenuFlyoutItem x:Uid="ScalingModes_General_Reset"
-						                Click="ResetScalingModesButton_Click">
-							<MenuFlyoutItem.Icon>
-								<FontIcon Glyph="&#xE777;" />
-							</MenuFlyoutItem.Icon>
-						</MenuFlyoutItem>
-					</MenuFlyout>
-				</Button.Flyout>
-			</Button>
+			<local:SimpleStackPanel Orientation="Horizontal" Spacing="2">
+				<local:SimpleStackPanel.Resources>
+					<ResourceDictionary>
+						<ResourceDictionary.ThemeDictionaries>
+							<ResourceDictionary x:Key="Default">
+								<StaticResource x:Key="ButtonBackground" ResourceKey="ControlFillColorDefaultBrush" />
+								<StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="ControlFillColorSecondaryBrush" />
+								<StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="ControlFillColorTertiaryBrush" />
+								<StaticResource x:Key="ButtonBackgroundDisabled" ResourceKey="ControlFillColorDisabledBrush" />
+							</ResourceDictionary>
+							<ResourceDictionary x:Key="Light">
+								<StaticResource x:Key="ButtonBackground" ResourceKey="ControlFillColorDefaultBrush" />
+								<StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="ControlFillColorSecondaryBrush" />
+								<StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="ControlFillColorTertiaryBrush" />
+								<StaticResource x:Key="ButtonBackgroundDisabled" ResourceKey="ControlFillColorDisabledBrush" />
+							</ResourceDictionary>
+						</ResourceDictionary.ThemeDictionaries>
+					</ResourceDictionary>
+				</local:SimpleStackPanel.Resources>
+				<Button x:Uid="ScalingModes_General_MoreOptions"
+				        Style="{StaticResource ScalingModesHeaderButtonStyle}">
+					<Button.Flyout>
+						<MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="False">
+							<MenuFlyoutItem x:Uid="ScalingModes_General_Import" Click="{x:Bind ViewModel.Import}">
+								<MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B5;" /></MenuFlyoutItem.Icon>
+							</MenuFlyoutItem>
+							<MenuFlyoutItem x:Uid="ScalingModes_General_Export" Click="{x:Bind ViewModel.Export}">
+								<MenuFlyoutItem.Icon><FontIcon Glyph="&#xEDE1;" /></MenuFlyoutItem.Icon>
+							</MenuFlyoutItem>
+							<MenuFlyoutItem x:Uid="ScalingModes_General_ConfigFolder" Click="OpenConfigFolderButton_Click">
+								<MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8B7;" /></MenuFlyoutItem.Icon>
+							</MenuFlyoutItem>
+							<MenuFlyoutSeparator />
+							<MenuFlyoutItem x:Uid="ScalingModes_General_Reset" Click="ResetScalingModesButton_Click">
+								<MenuFlyoutItem.Icon><FontIcon Glyph="&#xE777;" /></MenuFlyoutItem.Icon>
+							</MenuFlyoutItem>
+						</MenuFlyout>
+					</Button.Flyout>
+				</Button>
+			</local:SimpleStackPanel>
 		</local:PageFrame.HeaderAction>
 
 		<local:SimpleStackPanel Padding="0,4,0,0"
@@ -571,11 +613,11 @@
 															<FontIcon Glyph="&#xE9E9;" />
 														</Button.Content>
 													<Button.Flyout>
-														<Flyout Opening="EffectParametersFlyout_Opening">
+														<Flyout Opening="EffectParametersFlyout_Opening" ShouldConstrainToRootBounds="False">
 															<Flyout.FlyoutPresenterStyle>
 																<Style BasedOn="{StaticResource DefaultFlyoutPresenterStyle}"
 																       TargetType="FlyoutPresenter">
-																	<Setter Property="MaxHeight" Value="650" />
+																	<Setter Property="MaxHeight" Value="10000" />
 																	<Setter Property="MaxWidth" Value="10000" />
 																</Style>
 															</Flyout.FlyoutPresenterStyle>
@@ -678,7 +720,8 @@
 					</DataTemplate>
 				</ListView.ItemTemplate>
 			</ListView>
-			<local:SimpleStackPanel Margin="0,-36,0,0">
+			<!-- Positive extent keeps the footer arranged by SimpleStackPanel. -->
+			<local:SimpleStackPanel>
 				<Button HorizontalAlignment="Right"
 				        Click="NewScalingModeButton_Click"
 				        Style="{StaticResource AccentButtonStyle}">

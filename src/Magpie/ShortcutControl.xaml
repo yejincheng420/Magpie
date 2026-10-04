@@ -6,7 +6,12 @@
       xmlns:local="using:Magpie"
       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
       mc:Ignorable="d">
-	<Button Margin="0,-6,0,-6"
+	<Grid.ColumnDefinitions>
+		<ColumnDefinition Width="Auto" />
+		<ColumnDefinition Width="Auto" />
+	</Grid.ColumnDefinitions>
+	<Button x:Name="EditButton"
+	        Margin="0,-6,0,-6"
 	        Padding="0"
 	        Background="Transparent"
 	        BorderBrush="Transparent"
@@ -37,6 +42,11 @@
 		<local:SimpleStackPanel Margin="6,0,6,0"
 		                        Orientation="Horizontal"
 		                        Spacing="16">
+			<TextBlock x:Name="NotSetLabel"
+			           x:Uid="ShortcutControl_NotSet"
+			           VerticalAlignment="Center"
+			           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+			           Visibility="Collapsed" />
 			<ItemsControl x:Name="KeysControl"
 			              VerticalAlignment="Center"
 			              IsTabStop="False">
@@ -59,5 +69,19 @@
 			<FontIcon FontSize="16"
 			          Glyph="&#xE70F;" />
 		</local:SimpleStackPanel>
+	</Button>
+	<Button x:Name="ClearButton"
+	        x:Uid="ShortcutControl_ClearButton"
+	        Grid.Column="1"
+	        MinWidth="32"
+	        MinHeight="32"
+	        Margin="8,-6,0,-6"
+	        Padding="8"
+	        Click="ClearButton_Click"
+	        Background="Transparent"
+	        BorderBrush="Transparent"
+	        BorderThickness="0"
+	        Visibility="Collapsed">
+		<FontIcon FontSize="16" Glyph="&#xE74D;" />
 	</Button>
 </Grid>

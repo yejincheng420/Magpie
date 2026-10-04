@@ -25,18 +25,25 @@ template<class GetValue>
 bool IsEffectParameterVisible(std::string_view effect, std::string_view parameter,
 	GetValue&& getValue) noexcept {
 	if (effect == "DLSSNR\\DLSSNR_AI_Filter" &&
-		DLSSNRParameterPass(parameter) > DLSSNRPassCount(getValue)) return false;
+		(parameter == "residualChromaTemporalStrength" ||
+		 DLSSNRParameterPass(parameter) > DLSSNRPassCount(getValue))) return false;
 	if (HasOpticalFlowSelection(effect)) {
 		const float method = getValue("opticalFlowMethod", effect == "XeSSFG\\XeSS_FrameGeneration" ? 1.0f : 0.0f);
 		if (parameter == "amdOpticalFlowMode") return method == 1.0f;
 		if (parameter == "nvidiaOpticalFlowQuality") return method == 2.0f;
 	}
-	if (effect == "DLSSNR\\DLSSNR_AI_Filter" &&
-		(parameter == "samplingQuality" || parameter == "inputResolutionPercent" ||
-		 parameter == "residualMultiplier" || parameter == "residualSaturation" ||
-		 parameter == "residualLightness" ||
-		 parameter == "shadowStructureMultiplier" || parameter == "reflectionGlowMultiplier")) {
-		return getValue("enableInputResolutionScaling", 0.0f) != 0.0f;
+	if (effect == "DLSSNR\\DLSSNR_AI_Filter") {
+		if (parameter == "residualShowAdvanced")
+			return getValue("enableInputResolutionScaling", 0.f) != 0;
+		// samplingQuality 是本 fork 的降采样/残差上采样档位，与残差参数同样
+		// 只在启用输入分辨率缩放时有意义，但不属于上游的进阶折叠组。
+		if (parameter == "samplingQuality")
+			return getValue("enableInputResolutionScaling", 0.f) != 0;
+		if (parameter == "inputResolutionPercent" || IsDLSSNRResidualParameter(parameter)) {
+			if (getValue("enableInputResolutionScaling", 0.f) == 0) return false;
+			if (IsDLSSNRAdvancedParameter(parameter))
+				return getValue("residualShowAdvanced", 0.f) != 0;
+		}
 	}
 	return true;
 }

@@ -1060,4 +1060,11 @@
   <data name="Home_Advanced_DeveloperOptions_DisableTopmost.Content" xml:space="preserve">
     <value>Nonaktifkan selalu-di-atas</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Folder konfigurasi</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Reset</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Opsi lainnya</value></data>
 </root>

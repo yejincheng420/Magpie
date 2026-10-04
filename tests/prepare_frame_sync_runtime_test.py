@@ -52,7 +52,8 @@ struct Logger { static Logger& Get() { static Logger logger; return logger; } vo
 struct Timer {
     std::optional<float> limit;
     bool strict=false;
-    void Initialize(float, std::optional<float> value, bool strictValue=false) { limit=value; strict=strictValue; }
+    float minimum=0;
+    void Initialize(float minimumValue, std::optional<float> value, bool strictValue=false) { minimum=minimumValue; limit=value; strict=strictValue; }
 };
 struct Driver : ReflexDriver {
     bool failed=false, actualOn=true, failClear=false;
@@ -184,7 +185,29 @@ int main() {
     dlss._frameSyncBackend=FrameSyncBackend::XeLL;
     dlss._UpdateFrameRateLimits();
     assert(!dlss._stepTimer.limit && dlss._reflex.interval==0);
-    std::cout << "PASS: production renderer single limiter ownership, lower profile cap, Reflex failure fallback, DLSS recovery and XeLL handoff\n";
+    // Saved idle target stays 30 while the runtime projects 20. FG disables
+    // backend idle work only; the separately configured cursor isn't involved.
+    Renderer idle;
+    options.minFrameRate=30; options.frontEdgeSyncFrameRate=20;
+    idle._frameSyncBackend=FrameSyncBackend::Async;
+    idle._UpdateFrameRateLimits();
+    assert(idle._stepTimer.minimum==20 && options.minFrameRate==30);
+    idle._runtimeEffectOptions={{"DLSSFG",{}}};
+    idle._UpdateFrameRateLimits();
+    assert(idle._stepTimer.minimum==0 && options.minFrameRate==30);
+    idle._runtimeEffectOptions.clear();
+    idle._frameSyncBackend=FrameSyncBackend::None; idle._frameSyncEnabled=false;
+    idle._UpdateFrameRateLimits();
+    assert(idle._stepTimer.limit==20 && idle._stepTimer.minimum==20);
+    options.frontEdgeSyncFrameRate=0; idle._presentationRefreshRate=144;
+    idle._configuredFrameGenerationMultiplier=3;
+    idle._UpdateFrameRateLimits();
+    assert(idle._stepTimer.limit==48);
+    idle._presentationRefreshRate=240; idle._UpdateFrameRateLimits();
+    assert(idle._stepTimer.limit==80);
+    options.isFrontEdgeSyncEnabled=false; idle._UpdateFrameRateLimits();
+    assert(!idle._stepTimer.limit && idle._stepTimer.minimum==30);
+    std::cout << "PASS: production renderer single limiter ownership, lower profile cap, Reflex failure fallback, DLSS recovery, XeLL handoff, idle clamp/FG disable and unsupported-strategy targets\n";
 }
 '''
 start = header.index('FrameSyncBackend ActiveFrameSyncBackend()')

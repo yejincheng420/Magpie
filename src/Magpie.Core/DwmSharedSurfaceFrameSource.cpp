@@ -95,6 +95,7 @@ FrameSourceState DwmSharedSurfaceFrameSource::_Update() noexcept {
 	}
 
 	winrt::com_ptr<ID3D11Texture2D> sharedTexture;
+	_BeginCaptureRender();
 	HRESULT hr = _deviceResources->GetD3DDevice()
 		->OpenSharedResource(sharedTextureHandle, IID_PPV_ARGS(&sharedTexture));
 	if (FAILED(hr)) {

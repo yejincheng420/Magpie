@@ -116,7 +116,7 @@ public:
 	void RestartAfterSrcRepositioned() noexcept;
 	void RestartWithEffectParameters(
 		std::vector<EffectOption>&& effects,
-		FrameSyncSettings frameSync
+		FrameRefreshSettings frameRefresh
 	) noexcept;
 
 	void CleanAfterSrcRepositioned() noexcept;
@@ -251,7 +251,7 @@ private:
 	OverlaySessionState _restartOverlayState;
 	std::optional<OverlaySessionState> _repositionOverlayState;
 	std::optional<bool> _pendingWindowedMode;
-	std::optional<std::pair<std::vector<EffectOption>, FrameSyncSettings>> _pendingManualParameterRestart;
+	std::optional<std::pair<std::vector<EffectOption>, FrameRefreshSettings>> _pendingManualParameterRestart;
 	std::unique_ptr<class Renderer> _renderer;
 	std::unique_ptr<class CursorManager> _cursorManager;
 

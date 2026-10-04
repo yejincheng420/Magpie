@@ -32,17 +32,21 @@ namespace Nr {
 struct DLSSNRSettings {
 	float residualMultiplier = 1, residualSaturation = 1, residualLightness = 1;
 	float shadowStructureMultiplier = 1, reflectionGlowMultiplier = 1;
+	int residualDebugView = 0;
+	float residualHueProtection = 0, residualDarkProtection = 0, residualHighlightProtection = 0, residualLocalCompression = 0;
+	float residualLowFrequencyGain = 1, residualDetailGain = 1;
 };
 struct DLSSNRFilter { struct Impl {
 	ID3D11Device* device11 = nullptr;
 	ID3D11DeviceContext* context11 = nullptr;
 	uint32_t width = 0, height = 0, sourceWidth = 0, sourceHeight = 0;
 	bool useResolutionScaling = true;
+	bool residualConstantsValid = false, residualParametersDirty = true;
 	com_ptr<ID3D11Texture2D> compositeOutput11;
 	com_ptr<ID3D11UnorderedAccessView> compositeOutputUav11, controlledResidualUav11, resampleIntermediateUav11;
 	com_ptr<ID3D11ShaderResourceView> inputSrv11, sharedInputSrv11, sharedOutputSrv11, controlledResidualSrv11, resampleIntermediateSrv11;
 	com_ptr<ID3D11ComputeShader> residualPrepareShader11, residualHorizontalShader11, residualVerticalCompositeShader11;
-	com_ptr<ID3D11Buffer> resampleConstants11;
+	com_ptr<ID3D11Buffer> residualConstants11;
 }; };
 }
 namespace Fg {
@@ -114,11 +118,11 @@ void TestResidual(UINT w, UINT h, UINT rw, UINT rh) {
 	impl.inputSrv11=Srv(input.get()); impl.sharedInputSrv11=Srv(low.get()); impl.sharedOutputSrv11=Srv(nr.get());
 	impl.controlledResidualSrv11=Srv(controlled.get()); impl.controlledResidualUav11=Uav(controlled.get());
 	impl.resampleIntermediateSrv11=Srv(horizontal.get()); impl.resampleIntermediateUav11=Uav(horizontal.get());
-	impl.residualPrepareShader11=Shader(Nr::RESIDUAL_PREPARE_HLSL, "PrepareResidual");
+	impl.residualPrepareShader11=Shader(Nr::RESIDUAL_PREPARE_SHADER.c_str(), "PrepareResidual");
 	impl.residualHorizontalShader11=Shader(Nr::RESIDUAL_HORIZONTAL_HLSL, "UpsampleResidualHorizontal");
 	impl.residualVerticalCompositeShader11=Shader(Nr::RESIDUAL_VERTICAL_COMPOSITE_HLSL, "CompositeResidualVertical");
 	D3D11_BUFFER_DESC cb{}; cb.ByteWidth=sizeof(Nr::ResampleConstants); cb.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
-	Hr(device->CreateBuffer(&cb, nullptr, impl.resampleConstants11.put()));
+	Hr(device->CreateBuffer(&cb, nullptr, impl.residualConstants11.put()));
 	const std::array<Nr::DLSSNRSettings, 5> settings{{{}, {0,1,1,1,1}, {2,0,0.5f,0,2}, {0.4f,2,1.8f,2,0}, {1,1,1,0.2f,1.8f}}};
 	for (const auto& s : settings) {
 		D3D11_TEXTURE2D_DESC d{}; copied->GetDesc(&d);

@@ -17,7 +17,8 @@ public:
 	) noexcept;
 	bool WaitForProducer(
 		ID3D11DeviceContext4* context,
-		const FrameGuidanceView& view
+		const FrameGuidanceView& view,
+		bool includeConfidence = false
 	) noexcept;
 	void Transition(
 		ID3D12GraphicsCommandList* commandList,

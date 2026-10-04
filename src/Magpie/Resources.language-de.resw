@@ -340,10 +340,10 @@
     <value>Starten</value>
   </data>
   <data name="ScalingModes_General_Export.Text" xml:space="preserve">
-    <value>Exportieren</value>
+    <value>Export</value>
   </data>
   <data name="ScalingModes_General_Import.Text" xml:space="preserve">
-    <value>Importieren</value>
+    <value>Import</value>
   </data>
   <data name="Home_UpdateCard_ReleaseNotes.Content" xml:space="preserve">
     <value>Versionshinweise</value>
@@ -1060,4 +1060,11 @@
   <data name="Profile_Advanced_DestAlignment.Header" xml:space="preserve">
     <value>Ausgabeausrichtung</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Konfig.-Ordner</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Zurücksetzen</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Weitere Optionen</value></data>
 </root>

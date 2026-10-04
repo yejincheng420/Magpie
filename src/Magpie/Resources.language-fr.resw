@@ -1060,4 +1060,11 @@
   <data name="Home_Advanced_DeveloperOptions_DisableTopmost.Content" xml:space="preserve">
     <value>Désactiver l'option «Toujours au premier plan»</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Dossier config.</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Réinitialiser</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Plus d'options</value></data>
 </root>

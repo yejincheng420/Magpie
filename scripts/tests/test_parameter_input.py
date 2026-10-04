@@ -43,6 +43,7 @@ prefix = r'''
 #include <vector>
 #include <variant>
 #include "OverlayWindowGeometry.h"
+#include "ToolbarPlacement.h"
 namespace phmap { template<class K, class V> using flat_hash_map = std::unordered_map<K,V>; }
 namespace fmt { template<class... T> std::string format(const char* s, T&&...) { return s; } }
 static HWND game = (HWND)1, scaling = (HWND)2, foreground = game, capture = nullptr, inputHost = nullptr;
@@ -152,6 +153,8 @@ public:
     HOST_MEMBERS
     bool _isEffectParametersVisible = false, _overlayDirty = false;
     bool _isToolbarVisible=false, _isToolbarPinned=false, _isProfilerVisible=false;
+	ToolbarPlacement _toolbarPlacement;
+	bool IsToolbarMoveCursor() const { return _toolbarPlacement.IsDragging(); }
     OverlaySessionState CaptureSessionState() const noexcept;
     void RestoreSessionState(const OverlaySessionState&) noexcept;
     void InvokeAction(OverlayAction) { _isProfilerVisible = !_isProfilerVisible; }
@@ -610,7 +613,45 @@ int RunLegacyMode() {
     std::cout << "PASS default 0.6.6 input: toolbar open/close, direct first-click controls, drag/capture, popup dismissal, game-area continuity, no keyboard/Escape state interception, restore and title close, no input host or foreground activation\n";
     return 0;
 }
-int main() { RunFocusMode(); return RunLegacyMode(); }
+int RunToolbarEdgeInput() {
+    OverlayDrawer panel; overlay=&panel;
+    ScalingWindow::Get().alive=true;
+    foreground=game; capture=nullptr; cursor={510,599};
+    DeviceResources resources; assert(panel._imguiImpl.Initialize(resources));
+    auto& io=ImGui::GetIO(); unsigned char* pixels; int w,h;
+    io.Fonts->GetTexDataAsRGBA32(&pixels,&w,&h);
+    io.DeltaTime=1.0f/60;
+    auto frame=[&](float adjustment) {
+        panel._imguiImpl.NewFrame(windows,adjustment,1);
+        ImGui::SetNextWindowPos({500,adjustment<0 ? 569.0f : -6.0f});
+        ImGui::SetNextWindowSize({200,37});
+        ImGui::Begin("##toolbar",nullptr,ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar);
+        ImGui::SetCursorPosY(adjustment<0 ? 3.0f : 9.0f);
+        ImGui::Button("Grip",{24,24});
+        const bool active=ImGui::IsItemActive();
+        ImGui::End(); panel._imguiImpl.Draw({}); panel._imguiImpl.OnPresentSucceeded();
+        return active;
+    };
+    frame(-4); frame(-4);
+    assert(panel._imguiImpl.MessageHandler(WM_LBUTTONDOWN,0,0)==ImGuiInputResult::Urgent);
+    assert(frame(-4));
+    assert(panel._imguiImpl.FrameMousePosition().y==599 && io.MousePos.y==595);
+    assert(capture==scaling && panel._imguiImpl.HasPendingInput()==false);
+    cursor={20,300};
+    assert(panel._imguiImpl.MessageHandler(WM_MOUSEMOVE,0,0)==ImGuiInputResult::Urgent);
+    frame(0); assert(capture==scaling);
+    assert(panel._imguiImpl.MessageHandler(WM_CANCELMODE,0,0)==ImGuiInputResult::Urgent);
+    frame(0); assert(panel._imguiImpl.FrameInputCanceled() && !capture && !io.MouseDown[0]);
+    cursor={510,0}; frame(4); frame(4);
+    assert(panel._imguiImpl.MessageHandler(WM_LBUTTONDOWN,0,0)==ImGuiInputResult::Urgent);
+    assert(frame(4));
+    assert(panel._imguiImpl.FrameMousePosition().y==0 && io.MousePos.y==4);
+    assert(panel._imguiImpl.MessageHandler(WM_ACTIVATEAPP,FALSE,0)==ImGuiInputResult::Urgent);
+    frame(4); assert(panel._imguiImpl.FrameInputCanceled() && !capture && !io.MouseDown[0]);
+    std::cout << "PASS toolbar edge input: raw queued positions, top/bottom inward hit adjustment, owned urgent moves outside the toolbar, cancel and application deactivation release capture\n";
+    return 0;
+}
+int main() { RunFocusMode(); RunLegacyMode(); return RunToolbarEdgeInput(); }
 
 '''
 

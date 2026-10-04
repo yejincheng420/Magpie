@@ -107,6 +107,10 @@ inline HdrFormatRoutes Xbrz() {
 	return { SdrRoute("xBRZ", "rgba-u8", DXGI_FORMAT_R8G8B8A8_UNORM) };
 }
 
+inline HdrFormatRoutes Xbr() {
+	return { SdrRoute("xBR", "rgba-u8", DXGI_FORMAT_R8G8B8A8_UNORM) };
+}
+
 inline HdrFormatRoutes XeSS() {
 	HdrFormatRoute hdr10{
 		.effectId = "XeSS",
@@ -232,6 +236,7 @@ inline HdrFormatRoutes GetGroupCHdrRoutes(std::string_view effectGroup) {
     if (effectGroup == "Sharpen") return Sharpen();
     if (effectGroup == "SMAA") return SMAA();
     if (effectGroup == "xBRZ") return Xbrz();
+    if (effectGroup == "xBR") return Xbr();
     if (effectGroup == "XeSS") return XeSS();
     if (effectGroup == "XeSSFG") return XeSSFG();
     if (effectGroup == "DLSSFG") return DLSSFG();

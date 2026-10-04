@@ -5,11 +5,14 @@
 #include <wrl/client.h>
 #include <DirectXPackedVector.h>
 #include <array>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <vector>
+#include <fstream>
+#include <string>
 #include "DLSSNRTemporalShader.h"
 #include "DLSSNRTemporalState.h"
 using Microsoft::WRL::ComPtr;
@@ -39,6 +42,7 @@ struct Harness {
 		unsigned w = W, h = H, motion = 0, hdr = 0;
 		float weight = .8f; unsigned route = 1, lowWidth = (W+1)/2, lowHeight = (H+1)/2;
 		unsigned left = 0, top = 0, right = W, bottom = H;
+		float chromaStrength = 0; unsigned enforceZero = 0, padding0 = 0, padding1 = 0;
 	} constants;
 	Harness(unsigned w=W, unsigned h=H) : width(w), height(h) {
 		auto create = D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,D3D11_CREATE_DEVICE_DEBUG,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&dc);
@@ -139,7 +143,7 @@ struct Harness {
 	}
 };
 void Near(float a,float b,float tolerance=1e-4f) { if (!std::isfinite(a) || std::abs(a-b)>tolerance) { std::cerr<<"Expected "<<b<<", got "<<a<<'\n'; std::abort(); } }
-int main() {
+int main(int argc, char** argv) {
 	DLSSNRTemporalState state;
 	assert(state.Weight(1,0,0,1000000,false)==0);
 	state.Commit(1,4,3,1000000);
@@ -159,7 +163,17 @@ int main() {
 	// Stable negative residual and on/off disappearance remain signed and decay.
 	h.Constant(3,{-.2f,-.2f,-.2f,1}); h.Constant(2,{.4f,.4f,.4f,.7f});
 	Near(h.Run()[center][0],.24f);
+	h.constants.enforceZero=1;
+	Near(h.Run()[center][0],.4f); Near(h.Run(1)[center][3],0);
+	h.constants.enforceZero=0;
+	// Additional chroma history retains luma and follows the existing rejection.
+	h.Default(); h.Constant(2,{.42f,.38f,.4f,.7f}); h.Constant(3,{-.02f,.02f,0,1});
+	auto baseChroma=h.Run(); h.constants.chromaStrength=1; auto stableChroma=h.Run();
+	assert(std::abs(baseChroma[center][0]-stableChroma[center][0])>1e-4f);
+	h.Constant(0,{.8f,.8f,.8f,1}); auto rejectedChroma=h.Run();
+	Near(rejectedChroma[center][0],.42f); Near(rejectedChroma[center][1],.38f);
 	// Current input changes: reject old correction immediately.
+	h.Default(); h.Constant(2,{.4f,.4f,.4f,.7f}); h.Constant(3,{-.2f,-.2f,-.2f,1});
 	h.Constant(0,{.7f,.7f,.7f,1}); Near(h.Run()[center][0],.4f);
 	// Reset ignores invalid old values, and nonfinite current values do not seed history.
 	h.Default(); h.constants.weight=0;
@@ -314,5 +328,31 @@ int main() {
 	}
 	h.CheckDebug();
 	std::cout << "D3D11 debug layer: " << (h.debug ? "no resource/API warnings" : "not installed; validation skipped") << '\n';
+
+	if (argc > 1) {
+		// Fixed aligned history shows the extra chroma control on L/S axes.
+		h.Default();
+		Image axis(W*H), axisRaw(W*H), axisOld(W*H), axisGuide(W*H);
+		for (unsigned y=0;y<H;++y) for (unsigned x=0;x<W;++x) {
+			float light=float(y)/(H-1), sat=float(x)/(W-1);
+			float chroma=(1-std::abs(2*light-1))*sat, base=light-chroma*.5f;
+			const unsigned i=y*W+x;
+			axis[i]={base,base+chroma/3,base+chroma,1}; axisGuide[i]=axis[i];
+			axisRaw[i]={std::clamp(axis[i][0]+.03f,0.f,1.f),std::clamp(axis[i][1]-.01f,0.f,1.f),std::clamp(axis[i][2]-.02f,0.f,1.f),1};
+			axisOld[i]={-.02f,.01f,.01f,1};
+		}
+		h.Set(0,axis); h.Set(1,axis); h.Set(2,axisRaw); h.Set(3,axisOld); h.Set(4,axisGuide);
+		auto baseline=h.Run();
+		std::ofstream csv(std::string(argv[1])+"/temporal-response.csv");
+		csv<<"strength,lightness,saturation,r,g,b,delta\n";
+		for (float strength : {0.f,.5f,1.f}) {
+			h.constants.chromaStrength=strength; auto result=h.Run();
+			for (unsigned y=0;y<H;++y) for (unsigned x=0;x<W;++x) {
+				const unsigned i=y*W+x; float difference=0;
+				for (int c=0;c<3;++c) difference=std::max(difference,std::abs(result[i][c]-baseline[i][c]));
+				csv<<strength<<','<<float(y)/(H-1)<<','<<float(x)/(W-1)<<','<<result[i][0]<<','<<result[i][1]<<','<<result[i][2]<<','<<difference<<'\n';
+			}
+		}
+	}
 	std::cout<<"A/B/F/G production HLSL WARP tests passed: signed EMA, conditional persistence, attack/release, motion/reset/rejection, half-resolution reduction, guided reconstruction, tap validation, detail, odd extents and recurrent variance.\n";
 }

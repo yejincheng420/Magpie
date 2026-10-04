@@ -1,15 +1,19 @@
 #Requires -Version 7.0
-param([switch]$NativePrototype)
+param([switch]$NativePrototype, [string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $workspace = Split-Path $repo -Parent
-$output = Join-Path $workspace '.tools/067-beta4/parameter-input'
+$output = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else {
+    Join-Path $workspace '.tools/067-beta4/parameter-input'
+}
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $vs = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath | Select-Object -First 1
 Import-Module (Join-Path $vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
-[xml]$props = Get-Content -LiteralPath (Join-Path $workspace 'release/v0.6.7-local/obj/_ConanDeps/Magpie/conan_imgui_vars_release_x64.props')
-$imgui = $props.Project.PropertyGroup.ConanimguiRootFolder
+$imguiPackage = Get-ChildItem -LiteralPath (Join-Path $env:USERPROFILE '.conan2/p/b') -Directory -Filter 'imgui*' |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'p/lib/imgui.lib') } | Select-Object -First 1
+if (!$imguiPackage) { throw 'Restore imgui before running parameter input tests.' }
+$imgui = Join-Path $imguiPackage.FullName 'p'
 New-Item -ItemType Directory -Force $output | Out-Null
 foreach ($test in @('parameter_input', 'overlay_window_layout')) {
     & python (Join-Path $repo "scripts/tests/test_$test.py") $output

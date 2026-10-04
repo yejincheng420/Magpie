@@ -3,6 +3,7 @@
 #include "CursorDrawer.h"
 #include "DeviceResources.h"
 #include "EffectDrawer.h"
+#include "EffectFrameState.h"
 #include "EffectsProfiler.h"
 #include "FrameGuidanceService.h"
 #include "NgxD3D12Core.h"
@@ -57,7 +58,7 @@ public:
 	bool HasUrgentOverlayInput() const noexcept;
 	bool HasPendingContent() const noexcept;
 	std::chrono::nanoseconds FrontendPollInterval() const noexcept {
-		return _overlayPresentationClock.PollInterval();
+		return std::min(_overlayPresentationClock.PollInterval(), _cursorDrawer.PollInterval());
 	}
 
 	// Sleep in the outer message pump, never inside a prepared frame.
@@ -71,6 +72,8 @@ public:
 	void SwitchToolbarState() noexcept;
 	void InvokeOverlayAction(OverlayAction action) noexcept;
 	OverlaySessionState CaptureOverlayState() const noexcept { return _overlayDrawer.CaptureSessionState(); }
+	bool IsToolbarAt(POINT point) const noexcept { return _overlayDrawer.IsToolbarAt(point); }
+	bool IsToolbarMoveCursor() const noexcept { return _overlayDrawer.IsToolbarMoveCursor(); }
 	bool IsEditingParameters() const noexcept { return _overlayDrawer.IsEditingParameters(); }
 	bool IsParameterPreviewAt(POINT point) const noexcept { return _overlayDrawer.IsParameterPreviewAt(point); }
 	HWND ParameterInputHandle() const noexcept { return _overlayDrawer.ParameterInputHandle(); }
@@ -190,7 +193,7 @@ private:
 		return _overlayActionRevision != _presentedOverlayActionRevision;
 	}
 	void _UpdateOverlayRefreshRate() noexcept;
-	bool _CanRenderOverlay() const noexcept;
+	bool _CanRenderOverlay() noexcept;
 	struct FrontendRenderTimings {
 		std::chrono::nanoseconds beginFrame{};
 		std::chrono::nanoseconds draw{};
@@ -275,7 +278,7 @@ private:
 	bool _DrainNgxConsumers() noexcept;
 	void _ReleaseNgxConsumers() noexcept;
 
-	bool _UpdateDynamicConstants() const noexcept;
+	bool _UpdateDynamicConstants(uint32_t frameCount) const noexcept;
 
 
 	winrt::IAsyncOperation<bool> _TakeScreenshotImpl(
@@ -335,11 +338,14 @@ private:
 	bool _hasFrameGeneration = false;
 	mutable PresentationFrameRate _presentationRate;
 	FrameGuidanceFrameId _capturedFrameId = 0;
+	FrameGuidanceFrameId _previousCapturedFrameId = 0;
+	int64_t _acceptedCaptureTimestamp100ns = 0;
 	std::chrono::steady_clock::time_point _lastCapturedFrameTime{};
 	NgxD3D12Core _ngxD3D12Core;
 	std::vector<EffectDrawer> _effectDrawers;
 	std::vector<EffectOption> _runtimeEffectOptions;
-	std::vector<uint64_t> _effectInputRevisions;
+	std::vector<EffectFrameState> _effectFrameStates;
+	uint32_t _captureEffectFrameCount = 0;
 	struct PendingEffectParameterUpdate {
 		uint32_t effectIdx = 0;
 		uint32_t parameterIdx = 0;

@@ -892,4 +892,11 @@
   <data name="Home_Toolbar_StateToggle.Header" xml:space="preserve">
     <value>Atalho para alternar o estado da barra de ferramentas</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Pasta de config.</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Redefinir</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Mais opções</value></data>
 </root>

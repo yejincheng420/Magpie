@@ -1060,4 +1060,11 @@
   <data name="Overlay_Toolbar_Profiler" xml:space="preserve">
     <value>Cửa sổ Profiler</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Thư mục cấu hình</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Đặt lại</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Tùy chọn</value></data>
 </root>

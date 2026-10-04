@@ -15,7 +15,8 @@ enum class Event : uint16_t {
     Present, PresentGap, ContentSubmit, OverlaySubmit, DcompCommit, PresentGpuWait,
     RenderDecision, CaptureAccepted, FrontendMessage, WgcNotificationWait,
     WgcDequeue, CaptureWake, OverlayDeferred, InputBackpressure, GenerationFence,
-    FgQueued, FgDequeued, Count
+    FgQueued, FgDequeued, CaptureClassification, RenderReason, EffectReuse, EffectExecute,
+    HdrCapture, CursorPublish, Count
 };
 
 #ifdef MP_ENABLE_FRAME_TRACE

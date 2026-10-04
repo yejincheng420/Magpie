@@ -4,7 +4,7 @@
 namespace Magpie {
 
 struct EffectOption;
-struct FrameSyncSettings;
+struct FrameRefreshSettings;
 struct ToolbarShortcutLabels;
 enum class OverlayAction;
 
@@ -31,7 +31,7 @@ public:
 	void Stop();
 	// Main-thread system-key notification; cancels pending fullscreen restarts too.
 	bool StopForTaskSwitch();
-	void UpdateFrameSyncSettings(FrameSyncSettings settings);
+	void UpdateFrameRefreshSettings(FrameRefreshSettings settings);
 	void UpdateToolbarShortcutLabels(ToolbarShortcutLabels labels);
 
 	uint32_t RunId() const noexcept;
@@ -43,7 +43,7 @@ public:
 		HWND hwndScaling,
 		uint32_t scalingRunId,
 		std::vector<EffectOption>&& effects,
-		FrameSyncSettings frameSync
+		FrameRefreshSettings frameRefresh
 	);
 
 	ScalingState State() const noexcept {

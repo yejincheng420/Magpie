@@ -928,4 +928,11 @@
   <data name="Profile_WindowedScaling_InitialScaleFactor_Custom.Content" xml:space="preserve">
     <value>Personalizado</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Carpeta de config.</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Restablecer</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Mas opciones</value></data>
 </root>

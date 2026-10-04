@@ -62,6 +62,10 @@ ProfileViewModel::ProfileViewModel(int profileIdx, bool initializePageData)
 		return;
 	}
 
+	_frameSyncChangedRevoker = ProfileService::Get().FrameRefreshChanged(auto_revoke, [this](const Profile& profile) {
+		if (profile.runtimeIdentity != _data->runtimeIdentity) return;
+		_NotifyFrameRefreshChanged();
+	});
 	_BuildMonitorOptions();
 
 	_adaptersChangedRevoker = AdaptersService::Get().AdaptersChanged(auto_revoke,
@@ -679,35 +683,144 @@ bool ProfileViewModel::IsNoGraphicsCard() const noexcept {
 	return AdaptersService::Get().AdapterInfos().empty();
 }
 
-bool ProfileViewModel::IsFrameRateLimiterEnabled() const noexcept {
-	return _data->isFrameRateLimiterEnabled;
+void ProfileViewModel::_NotifyFrameRefreshChanged() {
+	RaisePropertyChanged(L"ContentFrameRateModeIndex");
+	RaisePropertyChanged(L"ContentFrameRate");
+	RaisePropertyChanged(L"FrameSyncModeIndex");
+	RaisePropertyChanged(L"IsContentPacingEnabled");
+	RaisePropertyChanged(L"ShowContentFrameRate");
+	RaisePropertyChanged(L"CursorRefreshModeIndex");
+	RaisePropertyChanged(L"CursorSupplementModeIndex");
+	RaisePropertyChanged(L"CursorSupplementRate");
+	RaisePropertyChanged(L"ShowCursorSupplement");
+	RaisePropertyChanged(L"ShowCursorSupplementRate");
+	RaisePropertyChanged(L"IdleRedrawModeIndex");
+	RaisePropertyChanged(L"IdleRedrawRate");
+	RaisePropertyChanged(L"ShowIdleRedrawRate");
+	RaisePropertyChanged(L"FrameRefreshNotice");
+	RaisePropertyChanged(L"ShowFrameRefreshNotice");
 }
 
-void ProfileViewModel::IsFrameRateLimiterEnabled(bool value) {
-	if (_data->isFrameRateLimiterEnabled == value) {
-		return;
-	}
-
-	_data->isFrameRateLimiterEnabled = value;
+void ProfileViewModel::_SaveFrameRefresh() {
+	ProfileService::Get().FrameRefreshChanged.Invoke(*_data);
 	AppSettings::Get().SaveAsync();
-
-	RaisePropertyChanged(L"IsFrameRateLimiterEnabled");
 }
 
-double ProfileViewModel::MaxFrameRate() const noexcept {
-	return _data->maxFrameRate;
+int32_t ProfileViewModel::ContentFrameRateModeIndex() const noexcept { return int32_t(_data->frameRefresh.contentMode); }
+void ProfileViewModel::ContentFrameRateModeIndex(int32_t value) {
+	if (value < 0 || value > 2) return;
+	const auto next = ContentFrameRateMode(value);
+	if (_data->frameRefresh.contentMode == next) return;
+	_data->frameRefresh.contentMode = next;
+	_data->frameRefresh.ContentEdited();
+	_SaveFrameRefresh();
 }
 
-void ProfileViewModel::MaxFrameRate(double value) {
-	if (_data->maxFrameRate == value) {
-		return;
+double ProfileViewModel::ContentFrameRate() const noexcept { return double(_data->frameRefresh.contentRate); }
+void ProfileViewModel::ContentFrameRate(double value) {
+	const auto next = FrameRefreshSettings::ValidateEditedRate(value, 60);
+	if (_data->frameRefresh.contentRate == next) return;
+	_data->frameRefresh.contentRate = next;
+	_data->frameRefresh.ContentEdited();
+	_SaveFrameRefresh();
+}
+
+int32_t ProfileViewModel::FrameSyncModeIndex() const noexcept { return int32_t(_data->frameRefresh.pacing); }
+void ProfileViewModel::FrameSyncModeIndex(int32_t value) {
+	if (value < 0 || value > 2) return;
+	const auto next = FrameSyncMode(value);
+	if (_data->frameRefresh.pacing == next) return;
+	_data->frameRefresh.pacing = next;
+	_data->frameRefresh.ContentEdited();
+	_SaveFrameRefresh();
+}
+
+int32_t ProfileViewModel::CursorRefreshModeIndex() const noexcept { return int32_t(_data->frameRefresh.cursorMode); }
+void ProfileViewModel::CursorRefreshModeIndex(int32_t value) {
+	if (value < 0 || value > 2) return;
+	const auto next = CursorRefreshMode(value);
+	if (_data->frameRefresh.cursorMode == next) return;
+	_data->frameRefresh.cursorMode = next;
+	_data->frameRefresh.CursorEdited();
+	_SaveFrameRefresh();
+}
+
+int32_t ProfileViewModel::CursorSupplementModeIndex() const noexcept { return int32_t(_data->frameRefresh.cursorSupplement); }
+void ProfileViewModel::CursorSupplementModeIndex(int32_t value) {
+	if (value < 0 || value > 1) return;
+	const auto next = CursorSupplementMode(value);
+	if (_data->frameRefresh.cursorSupplement == next) return;
+	_data->frameRefresh.cursorSupplement = next;
+	_SaveFrameRefresh();
+}
+
+double ProfileViewModel::CursorSupplementRate() const noexcept { return double(_data->frameRefresh.cursorRate); }
+void ProfileViewModel::CursorSupplementRate(double value) {
+	const auto next = FrameRefreshSettings::ValidateEditedRate(value, 60);
+	if (_data->frameRefresh.cursorRate == next) return;
+	_data->frameRefresh.cursorRate = next;
+	_SaveFrameRefresh();
+}
+
+int32_t ProfileViewModel::IdleRedrawModeIndex() const noexcept { return int32_t(_data->frameRefresh.idleEnabled); }
+void ProfileViewModel::IdleRedrawModeIndex(int32_t value) {
+	if (value < 0 || value > 1) return;
+	const auto next = bool(value);
+	if (_data->frameRefresh.idleEnabled == next) return;
+	_data->frameRefresh.idleEnabled = next;
+	_SaveFrameRefresh();
+}
+
+double ProfileViewModel::IdleRedrawRate() const noexcept { return double(_data->frameRefresh.idleRate); }
+void ProfileViewModel::IdleRedrawRate(double value) {
+	const auto next = FrameRefreshSettings::ValidateEditedRate(value, 30);
+	if (_data->frameRefresh.idleRate == next) return;
+	_data->frameRefresh.idleRate = next;
+	_SaveFrameRefresh();
+}
+
+bool ProfileViewModel::IsContentPacingEnabled() const noexcept { return _data->frameRefresh.contentMode != ContentFrameRateMode::Source; }
+bool ProfileViewModel::ShowContentFrameRate() const noexcept { return _data->frameRefresh.contentMode == ContentFrameRateMode::Custom; }
+bool ProfileViewModel::ShowCursorSupplement() const noexcept { return _data->frameRefresh.cursorMode == CursorRefreshMode::Supplement; }
+bool ProfileViewModel::ShowCursorSupplementRate() const noexcept { return ShowCursorSupplement() && _data->frameRefresh.cursorSupplement == CursorSupplementMode::Custom; }
+bool ProfileViewModel::ShowIdleRedrawRate() const noexcept { return _data->frameRefresh.idleEnabled; }
+int32_t ProfileViewModel::DuplicateFrameDetectionMode() const noexcept {
+	return int32_t(AppSettings::Get().DuplicateFrameDetectionMode());
+}
+void ProfileViewModel::DuplicateFrameDetectionMode(int32_t value) {
+	if (value < 0 || value > int32_t(::Magpie::DuplicateFrameDetectionMode::Never)) return;
+	const auto mode = ::Magpie::DuplicateFrameDetectionMode(value);
+	AppSettings& settings = AppSettings::Get();
+	if (settings.DuplicateFrameDetectionMode() == mode) return;
+	if (mode != ::Magpie::DuplicateFrameDetectionMode::Dynamic)
+		settings.IsStatisticsForDynamicDetectionEnabled(false);
+	settings.DuplicateFrameDetectionMode(mode);
+	RaisePropertyChanged(L"DuplicateFrameDetectionMode");
+}
+bool ProfileViewModel::ShowFrameRefreshNotice() const noexcept {
+	return !FrameRefreshNotice().empty();
+}
+hstring ProfileViewModel::FrameRefreshNotice() const noexcept {
+	const auto loader = ResourceLoader::GetForViewIndependentUse(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+	const auto& s = _data->frameRefresh;
+	std::wstring text;
+	if (s.legacyContentLimit > 0 || s.legacySourceTarget >= 0 || s.legacyLimiterOnly || s.legacyResponsiveMinimum) {
+		text += loader.GetString(L"FrameRefresh_LegacyNotice");
 	}
-
-	// 用户已清空数字框则重置为 60
-	_data->maxFrameRate = std::isnan(value) ? 60.0f : (float)value;
-	AppSettings::Get().SaveAsync();
-
-	RaisePropertyChanged(L"MaxFrameRate");
+	if (s.legacyContentLimit > 0) {
+		text += L"\n";
+		text += fmt::format(fmt::runtime(std::wstring_view(loader.GetString(L"FrameRefresh_LegacyCapNotice"))), s.legacyContentLimit);
+	}
+	if (s.idleEnabled && ((s.contentMode == ContentFrameRateMode::Custom && s.idleRate > s.contentRate) ||
+		(s.legacyContentLimit > 0 && s.idleRate > s.legacyContentLimit))) {
+		if (!text.empty()) text += L"\n";
+		text += loader.GetString(L"FrameRefresh_IdleLimitNotice");
+	}
+	return hstring(text);
+}
+void ProfileViewModel::ResetFrameRefresh() {
+	_data->frameRefresh = {};
+	_SaveFrameRefresh();
 }
 
 bool ProfileViewModel::IsCaptureTitleBar() const noexcept {

@@ -69,6 +69,9 @@ void ScalingOptions::Log() const noexcept {
 	frameSyncMode: {}
 	vrr: {}
 	cursorScaling: {}
+	cursorPreferOriginalFrames: {}
+	cursorMinimumRefreshEnabled: {}
+	cursorMinimumRefreshRate: {}
 	captureMethod: {}
 	multiMonitorUsage: {}
 	preferredMonitorId: {}
@@ -108,6 +111,9 @@ void ScalingOptions::Log() const noexcept {
 		static_cast<uint32_t>(frameSyncMode),
 		isVRREnabled,
 		cursorScaling,
+		cursorRefresh.preferOriginalFrames,
+		cursorRefresh.minimumRefreshEnabled,
+		cursorRefresh.minimumRefreshRate,
 		(int)captureMethod,
 		(int)multiMonitorUsage,
 		StrHelper::UTF16ToUTF8(preferredMonitorId),

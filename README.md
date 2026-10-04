@@ -3,6 +3,8 @@
 
 🌍 **English** | [简体中文](./README_ZH.md)
 
+**Current release: [Magpie Experimental v0.6.9](https://github.com/SAOG0721/Magpie/releases/tag/v0.6.9-experimental)** · [Release notes](docs/RELEASE_NOTES_v0.6.9-experimental.md)
+
 Magpie Experimental is a Windows tool for processing window content and an unofficial fork of [Blinue/Magpie](https://github.com/Blinue/Magpie). Built on Magpie's window-scaling and effect system, it explores DLSS, XeSS, FSR, RTX Video and related technologies for games, video and other windowed content.
 
 The application captures a target window, processes its images through a user-configured effect group, and displays the result fullscreen or in a window. The source application does not need to integrate these effects itself. This is not an official Magpie release; please report experimental-fork issues in this repository.

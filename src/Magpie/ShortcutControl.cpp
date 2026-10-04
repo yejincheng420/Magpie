@@ -13,6 +13,7 @@
 #include "App.h"
 #include "KeyVisualState.h"
 #include "MainWindow.h"
+#include <winrt/Windows.UI.Xaml.Automation.h>
 
 using namespace ::Magpie;
 using namespace winrt;
@@ -51,6 +52,7 @@ ShortcutControl::ShortcutControl() {
 }
 
 fire_and_forget ShortcutControl::EditButton_Click(IInspectable const&, RoutedEventArgs const&) {
+	auto lifetime = get_strong();
 	if (ContentDialogHelper::IsAnyDialogOpen()) {
 		co_return;
 	}
@@ -67,6 +69,7 @@ fire_and_forget ShortcutControl::EditButton_Click(IInspectable const&, RoutedEve
 		ResourceLoader resourceLoader =
 			ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
 		_shortcutDialog.PrimaryButtonText(resourceLoader.GetString(L"ShortcutDialog_Save"));
+		_shortcutDialog.SecondaryButtonText(resourceLoader.GetString(L"ShortcutDialog_Clear"));
 		_shortcutDialog.CloseButtonText(resourceLoader.GetString(L"ShortcutDialog_Cancel"));
 		_shortcutDialog.DefaultButton(ContentDialogButton::Primary);
 		// 在 Closing 事件中设置热键而不是等待 ShowAsync 返回
@@ -76,14 +79,15 @@ fire_and_forget ShortcutControl::EditButton_Click(IInspectable const&, RoutedEve
 
 	_shortcutDialog.XamlRoot(XamlRoot());
 	_shortcutDialog.RequestedTheme(ActualTheme());
+	_shortcutDialog.IsSecondaryButtonEnabled(!_shortcut.IsEmpty());
 
 	_that = this;
+	auto stopEditing = wil::scope_exit([this] { _StopEditing(); });
 	// 防止钩子冲突
 	ShortcutService::Get().StopKeyboardHook();
 	_keyboardHook.reset(SetWindowsHookEx(WH_KEYBOARD_LL, _LowLevelKeyboardProc, NULL, 0));
 	if (!_keyboardHook) {
 		Logger::Get().Win32Error("SetWindowsHookEx 失败");
-		ShortcutService::Get().StartKeyboardHook();
 		co_return;
 	}
 	_previewShortcut = _shortcut;
@@ -91,11 +95,47 @@ fire_and_forget ShortcutControl::EditButton_Click(IInspectable const&, RoutedEve
 	ShortcutError error = _isError ? ShortcutHelper::CheckShortcut(_previewShortcut) : ShortcutError::NoError;
 	_shortcutDialogContent->Keys(ToKeys(_previewShortcut, error != ShortcutError::NoError));
 	_shortcutDialogContent->Error(error);
-	_shortcutDialog.IsPrimaryButtonEnabled(error == ShortcutError::NoError);
+	_shortcutDialog.IsPrimaryButtonEnabled(!_previewShortcut.IsEmpty() && error == ShortcutError::NoError);
 	
 	_pressedKeys.Clear();
 
-	co_await ContentDialogHelper::ShowAsync(_shortcutDialog);
+	try {
+		co_await ContentDialogHelper::ShowAsync(_shortcutDialog);
+	} catch (...) {
+		Logger::Get().Error("Failed to show shortcut dialog");
+	}
+}
+
+void ShortcutControl::IsClearButtonVisible(bool value) {
+	_isClearButtonVisible = value;
+	ClearButton().Visibility(value ? Visibility::Visible : Visibility::Collapsed);
+}
+
+void ShortcutControl::ClearButton_Click(IInspectable const&, RoutedEventArgs const&) {
+	if (!ContentDialogHelper::IsAnyDialogOpen()) _ClearShortcut();
+}
+
+void ShortcutControl::_ClearShortcut() {
+	if (_action == ShortcutAction::COUNT_OR_NONE || _shortcut.IsEmpty()) return;
+	Shortcut empty;
+	empty.Clear();
+	AppSettings::Get().SetShortcut(_action, empty);
+}
+
+void ShortcutControl::_StopEditing() {
+	if (_that != this) return;
+	_keyboardHook.reset();
+	_that = nullptr;
+	ShortcutService::Get().StartKeyboardHook();
+}
+
+void ShortcutControl::_UpdateAutomationNames() {
+	using Windows::UI::Xaml::Automation::AutomationProperties;
+	AutomationProperties::SetName(EditButton(), _title);
+	const auto loader = ResourceLoader::GetForCurrentView(CommonSharedConstants::APP_RESOURCE_MAP_ID);
+	AutomationProperties::SetName(ClearButton(), fmt::format(
+		fmt::runtime(std::wstring_view(loader.GetString(L"ShortcutControl_ClearAutomationName"))),
+		std::wstring_view(_title)));
 }
 
 void ShortcutControl::Action(ShortcutAction value) {
@@ -116,6 +156,7 @@ void ShortcutControl::Title(hstring value) {
 
 	_title = std::move(value);
 	RaisePropertyChanged(L"Title");
+	_UpdateAutomationNames();
 
 	if (_shortcutDialog) {
 		_shortcutDialog.Title(box_value(_title));
@@ -123,11 +164,12 @@ void ShortcutControl::Title(hstring value) {
 }
 
 void ShortcutControl::_ShortcutDialog_Closing(ContentDialog const&, ContentDialogClosingEventArgs const& args) {
-	_keyboardHook.reset();
-	ShortcutService::Get().StartKeyboardHook();
+	_StopEditing();
 
 	if (args.Result() == ContentDialogResult::Primary) {
 		AppSettings::Get().SetShortcut(Action(), _previewShortcut);
+	} else if (args.Result() == ContentDialogResult::Secondary) {
+		_ClearShortcut();
 	}
 }
 
@@ -262,6 +304,9 @@ void ShortcutControl::_UpdateShortcut() {
 	// 此时 ShortcutService 中的回调已执行
 	_isError = ShortcutService::Get().IsError(action);
 	KeysControl().ItemsSource(ToKeys(_shortcut, _isError));
+	KeysControl().Visibility(_shortcut.IsEmpty() ? Visibility::Collapsed : Visibility::Visible);
+	NotSetLabel().Visibility(_shortcut.IsEmpty() ? Visibility::Visible : Visibility::Collapsed);
+	ClearButton().IsEnabled(!_shortcut.IsEmpty());
 }
 
 }

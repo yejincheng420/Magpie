@@ -78,6 +78,9 @@
     <ClInclude Include="include\ScalingOptions.h">
       <Filter>Include</Filter>
     </ClInclude>
+    <ClInclude Include="include\ToolbarPlacement.h">
+      <Filter>Include</Filter>
+    </ClInclude>
     <ClInclude Include="include\ScalingRuntime.h">
       <Filter>Include</Filter>
     </ClInclude>
@@ -102,6 +105,8 @@
     <ClInclude Include="CursorDrawer.h">
       <Filter>Render</Filter>
     </ClInclude>
+    <ClInclude Include="CursorRefreshPolicy.h"><Filter>Render</Filter></ClInclude>
+    <ClInclude Include="include\CursorRefreshSettings.h"><Filter>Include</Filter></ClInclude>
     <ClInclude Include="DeviceResources.h">
       <Filter>Render</Filter>
     </ClInclude>

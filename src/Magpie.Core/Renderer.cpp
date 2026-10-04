@@ -550,6 +550,7 @@ ScalingError Renderer::Initialize(HWND hwndAttach, OverlayOptions& overlayOption
 		Logger::Get().Error("Initialize CursorDrawer failed");
 		return ScalingError::OverlayInitFailed;
 	}
+	_cursorDrawer.SetDisplayRate(_presentationRefreshRate.load(std::memory_order_acquire));
 
 	if (!_overlayDrawer.Initialize(_frontendResources, overlayOptions)) {
 		Logger::Get().Error("初始化 OverlayDrawer 失败");
@@ -811,6 +812,12 @@ Renderer::FrontendBaseResult Renderer::_UpdateFrontendBase(uint32_t sharedTextur
 		return FrontendBaseResult::Dropped;
 	}
 
+	// IDs are protected by accessLock and belong to this publication. Start
+	// before texture creation/copies, after rejecting stale or unavailable slots.
+	_frontendReflexIds = _sharedReflexIds[sharedTextureSlot];
+	_presenter->SetReflexFrame(_frontendReflexIds.first, _frontendReflexIds.second,
+		_sharedFrameMetadata[sharedTextureSlot].generated);
+	_presenter->BeginReflexRender();
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	source->GetDesc(&sourceDesc);
 	bool recreateBase = !_frontendBaseTexture || !_frontendPresentedBaseTexture;
@@ -845,7 +852,6 @@ Renderer::FrontendBaseResult Renderer::_UpdateFrontendBase(uint32_t sharedTextur
 		_frontendFrameParity = _sharedFrameParity[sharedTextureSlot].load(std::memory_order_acquire);
 		_frontendFramePublishNs = _sharedFramePublishNs[sharedTextureSlot].load(std::memory_order_acquire);
 		_frontendFrameMetadata = _sharedFrameMetadata[sharedTextureSlot];
-		_frontendReflexIds = _sharedReflexIds[sharedTextureSlot];
 		FrameTrace::SetFrame(_frontendCaptureFrameId);
 		traceBase.FrameId(_frontendCaptureFrameId);
 		if (!_passThroughFrames.Consume(sharedTextureSlot) && _isPassThroughActive) {
@@ -936,7 +942,7 @@ bool Renderer::_FrontendRender(
 	if (droppedFrame) *droppedFrame = false;
 	if (_pendingFrontendFrame) return _SubmitFrontendFrame();
 	_frontendPacingDeadline.reset();
-	const bool paced = ActiveFrameSyncBackend() == FrameSyncBackend::FrontEdge && !_hasFrameGeneration &&
+	const bool paced = !stableBaseOnly && ActiveFrameSyncBackend() == FrameSyncBackend::FrontEdge && !_hasFrameGeneration &&
 		!waitForGpu && _presenter->SupportsDeferredPresent() &&
 		!ScalingWindow::Get().IsResizingOrMoving();
 	if (paced) {
@@ -945,10 +951,17 @@ bool Renderer::_FrontendRender(
 		const auto now = std::chrono::steady_clock::now();
 		const auto prepareAt = _frontEdgeClock.Due(now) - std::chrono::microseconds(1000);
 		if (now < prepareAt) {
+			// The queued content is not due yet. A changed cursor can use the
+			// last successfully presented background during that gap without
+			// consuming content, advancing history, or moving its deadline.
+			const bool overlayPending = _HasPendingOverlayAction() || _cursorDrawer.NeedRedraw() ||
+				_overlayDrawer.NeedRedraw(_stepTimer.FPS());
+			const bool submitted = _frontendPresentedBaseValid && overlayPending &&
+				_FrontendRender(false, sharedTextureSlot, nullptr, true);
 			_frontendPacingDeadline = prepareAt;
-			return false;
+			return submitted;
 		}
-	} else {
+	} else if (!stableBaseOnly) {
 		_frontEdgeClock.Reset();
 	}
 	if (stableBaseOnly && !paced && !_CanRenderOverlay()) return false;
@@ -968,6 +981,14 @@ bool Renderer::_FrontendRender(
 		return false;
 	}
 	const auto beginFrameStart = std::chrono::steady_clock::now();
+	if (!_presenter->PrepareFrame()) {
+		if (timings) {
+			timings->beginFrame = std::chrono::steady_clock::now() - beginFrameStart;
+			timings->capacityBusy = _presenter->WasFrameCapacityBusy();
+		}
+		return false;
+	}
+	auto cancelReflexRender = wil::scope_exit([this] { _presenter->CancelReflexRender(); });
 	if (sharedTextureSlot >= _sharedTextureSlotCount) {
 		sharedTextureSlot = _latestSharedTextureSlot.load(std::memory_order_acquire);
 	}
@@ -1018,6 +1039,7 @@ bool Renderer::_FrontendRender(
 		}
 		return false;
 	}
+	cancelReflexRender.release();
 	FrameTrace::Scope traceDraw(FrameTrace::Event::FrontendDraw, stableBaseOnly, _isPassThroughActive);
 	const auto drawStart = std::chrono::steady_clock::now();
 	if (timings) {
@@ -1044,6 +1066,10 @@ bool Renderer::_FrontendRender(
 		// Drain samples only when drawing the overlay. Front Edge Sync retries
 		// above must leave them available for the frame that actually draws it.
 		_overlayDrawer.Draw(_stepTimer.FPS(), _effectsProfiler.GetTimings(), drawOffset);
+		if (!stableBaseOnly && _frontendBaseNeedsPresent) {
+			_cursorDrawer.ObserveContent({ sourceMetadata.frameId, sourceMetadata.captureSequence,
+				sourceMetadata.resourceGeneration }, sourceMetadata.generated);
+		}
 		_cursorDrawer.Draw(frameTex.get(), drawOffset);
 	}
 
@@ -1092,7 +1118,7 @@ bool Renderer::_SubmitFrontendFrame() noexcept {
 		contentFrame ? _frontendFramePublishNs : 0);
 	const bool submitted = _presenter->EndFrame(waitForGpu);
 	_pendingFrontendFrame.reset();
-	if (submitted && ActiveFrameSyncBackend() == FrameSyncBackend::FrontEdge && !_hasFrameGeneration &&
+	if (submitted && contentFrame && ActiveFrameSyncBackend() == FrameSyncBackend::FrontEdge && !_hasFrameGeneration &&
 		_presenter->SupportsDeferredPresent() && !ScalingWindow::Get().IsResizingOrMoving()) {
 		_frontEdgeClock.SetInterval(std::chrono::duration_cast<std::chrono::nanoseconds>(
 			std::chrono::duration<double>(1.0 / _FrameSyncFrameRate())));
@@ -1121,21 +1147,29 @@ bool Renderer::_SubmitFrontendFrame() noexcept {
 		if (!stableBaseOnly) _frontendBaseNeedsPresent = false;
 		if (!uiInIndependentLayer) {
 			_overlayDrawer.OnPresentSucceeded();
+			_cursorDrawer.OnPresent(true);
 			_overlayPresentationClock.Presented(std::chrono::steady_clock::now());
 			_presentedOverlayActionRevision = overlayActionRevision;
 		}
 	} else if (!uiInIndependentLayer) {
 		_overlayDrawer.OnPresentFailed();
+		_cursorDrawer.OnPresent(false);
 	}
 	if (submitted && contentFrame && _frameSyncEnabled && _frameSyncUsesSharedSlot) {
 		_frameSyncAcknowledgedKey.store(contentKey, std::memory_order_release);
 		SetEvent(_frameSyncConsumedEvent.get());
 	}
 
+	if (submitted && contentFrame && uiInIndependentLayer) {
+		_cursorDrawer.OnContentPresented({ _frontendFrameMetadata.frameId,
+			_frontendFrameMetadata.captureSequence, _frontendFrameMetadata.resourceGeneration },
+			_frontendFrameMetadata.generated);
+	}
 	if (submitted && uiInIndependentLayer &&
 		(_HasPendingOverlayAction() || _isPassThroughActive || _cursorDrawer.NeedRedraw() || _cursorDrawer.IsBackgroundDependent() ||
 			_overlayDrawer.NeedRedraw(_stepTimer.FPS()))) {
-		_FrontendOverlayRender(_isPassThroughActive || _cursorDrawer.IsBackgroundDependent());
+		_FrontendOverlayRender(_cursorDrawer.HasOriginalRefreshPending() ||
+			_isPassThroughActive || _cursorDrawer.IsBackgroundDependent());
 	}
 	return submitted;
 }
@@ -1174,6 +1208,7 @@ bool Renderer::_FrontendOverlayRender(bool contentChanged) noexcept {
 	_cursorDrawer.Draw(frameTex.get(), drawOffset,
 		cursorBackground);
 	const bool submitted = _presenter->EndOverlayFrame();
+	_cursorDrawer.OnPresent(submitted, true);
 	if (submitted) {
 		_overlayDrawer.OnPresentSucceeded();
 		_overlayPresentationClock.Presented(std::chrono::steady_clock::now());
@@ -1317,13 +1352,14 @@ bool Renderer::HasPendingContent() const noexcept {
 		_sharedTextureMutexKeys[slot].load(std::memory_order_acquire);
 }
 
-bool Renderer::_CanRenderOverlay() const noexcept {
+bool Renderer::_CanRenderOverlay() noexcept {
 	// Button/wheel/cancel edges and explicit toolbar actions remain immediate.
 	// Continuous dragging is urgent to the input queue, but can be coalesced
 	// for presentation without dropping its latest position or button edges.
 	const bool due = _overlayPresentationClock.IsDue(std::chrono::steady_clock::now(),
 		_HasPendingOverlayAction() || _overlayDrawer.HasCriticalInput() ||
-		ScalingWindow::Get().IsResizingOrMoving());
+		ScalingWindow::Get().IsResizingOrMoving() || _cursorDrawer.IsMinimumRefreshDue() ||
+		_cursorDrawer.HasVisibilityTransition() || _cursorDrawer.HasOriginalRefreshPending());
 	if (!due) FrameTrace::Mark(FrameTrace::Event::OverlayDeferred);
 	return due;
 }
@@ -1336,6 +1372,8 @@ void Renderer::_UpdateOverlayRefreshRate() noexcept {
 	const double refreshRate = GetDisplayRefreshRate(window);
 	_presentationRefreshRate.store(refreshRate, std::memory_order_release);
 	_overlayPresentationClock.SetRefreshRate(refreshRate);
+	_cursorDrawer.SetDisplayRate(refreshRate);
+	_cursorDrawer.ResetVisual();
 	_frontEdgeClock.Reset();
 	if (_backendThreadDispatcher) {
 		_backendThreadDispatcher.TryEnqueue([this] { _UpdateFrameRateLimits(); });
@@ -1752,6 +1790,8 @@ DLSSFGFrameRenderResult Renderer::RenderDLSSFGFrame(
 }
 
 bool Renderer::OnResize() noexcept {
+	_cursorDrawer.OnPresent(false);
+	_cursorDrawer.ResetVisual();
 	if (_pendingFrontendFrame) {
 		// A deferred Present has not performed flip-model RTV unbinding yet.
 		// Drop the context's indirect back-buffer references before ResizeBuffers.
@@ -1794,6 +1834,7 @@ bool Renderer::OnResize() noexcept {
 		}
 
 		// 渲染完成再通知前端防止黑屏。前端会自动执行渲染，因此无需发送 WM_FRONTEND_RENDER
+		FrameTrace::Mark(FrameTrace::Event::RenderReason, 3); // Resize.
 		_BackendRender(outputTexture, false);
 
 		_sharedTextureHandle.store(sharedHandle, std::memory_order_release);
@@ -1829,6 +1870,7 @@ void Renderer::OnEndResize() noexcept {
 }
 
 void Renderer::OnMove() noexcept {
+	_cursorDrawer.ResetVisual();
 	_UpdateOverlayRefreshRate();
 	_UpdateDestRect();
 }
@@ -1958,6 +2000,7 @@ bool Renderer::_InitFrameSource() noexcept {
 		_backendInitSystemError = captureDiagnostic.SystemError();
 		return false;
 	}
+	_frameSource->SetReflexController(&_reflex);
 	if (ScalingWindow::Get().Options().IsHdrCompatibilityEnabled() &&
 		!_hdrPresentationAdapter.Initialize(_backendResources, _backendDescriptorStore)) {
 		Logger::Get().Error("初始化 HDR 发布适配器失败");
@@ -2188,7 +2231,6 @@ ID3D11Texture2D* Renderer::_BuildEffects() noexcept {
 	}
 
 	_BuildEffectParameterRuntimeInfos();
-	_effectInputRevisions.assign(effectCount, 0);
 
 	if (_ShouldAppendBicubic(inOutTexture)) {
 		if (!_AppendBicubic(&inOutTexture)) {
@@ -2205,6 +2247,7 @@ ID3D11Texture2D* Renderer::_BuildEffects() noexcept {
 
 	_UpdateActiveEffectDescs();
 	_UpdateHdrEffectBoundaryContexts();
+	_effectFrameStates.assign(_effectDrawers.size(), {});
 
 	// 初始化所有效果共用的动态常量缓冲区
 	for (const EffectDesc& effectDesc : _effectDescs) {
@@ -2482,12 +2525,20 @@ void Renderer::_ApplyPendingEffectParameters() noexcept {
 		}
 		anySucceeded |= succeeded;
 		if (succeeded && !isFrameRateFilter) {
-			// A forced render can reuse the same captured frame ID. Tell every
-			// later native effect that its actual input changed so a duplicate-
-			// frame cache cannot hide an upstream live shader/backend update.
-			for (size_t i = effectIdx + 1; i < _effectInputRevisions.size(); ++i) {
-				++_effectInputRevisions[i];
+			// The changed stage publishes an output version after its draw. Later
+			// stages consume that version, including time-driven shader changes.
+			bool changesOutput = true;
+			if (_runtimeEffectOptions[effectIdx].name == "DLSSNR\\DLSSNR_AI_Filter") {
+				const auto& values = _runtimeEffectOptions[effectIdx].parameters;
+				const int activePasses = DLSSNRPassCount([&](std::string_view name, float fallback) {
+					const auto it = values.find(std::string(name));
+					return it == values.end() ? fallback : it->second;
+				});
+				changesOutput = std::ranges::any_of(changedNames, [&](const std::string& name) {
+					return DLSSNRParameterPass(name) <= activePasses;
+				});
 			}
+			if (changesOutput) _effectFrameStates[effectIdx].ParametersChanged();
 		}
 	}
 
@@ -2591,6 +2642,8 @@ bool Renderer::_AppendBicubic(ID3D11Texture2D** inOutTexture) noexcept {
 }
 
 ID3D11Texture2D* Renderer::_ResizeEffects() noexcept {
+	// Invalidate before resources are touched, even if a later resize fails.
+	for (auto& state : _effectFrameStates) state.Invalidate();
 	const auto priorityCheck = wil::scope_exit([this] { _EnsureGpuPriority(true); });
 	const std::vector<EffectOption>& effects = _runtimeEffectOptions;
 	assert(!effects.empty());
@@ -2622,7 +2675,9 @@ ID3D11Texture2D* Renderer::_ResizeEffects() noexcept {
 		// Resize only reallocates provider resources. Re-seed them from the
 		// last real capture instead of manufacturing a color-less pseudo-frame.
 		if (_capturedFrameId != 0 && !_frameGuidanceService.BeginFrame(
-			_capturedFrameId, inOutTexture, guidanceRequirements
+			_capturedFrameId, inOutTexture, guidanceRequirements,
+			_captureSequence, _frameSource->ResourceGeneration(),
+			_acceptedCaptureTimestamp100ns, _frameSource->GetHdrFrameMetadata().color
 		).IsValidFor(_capturedFrameId, sourceExtent)) {
 			Logger::Get().Error("Produce Frame Guidance after resize failed");
 			return nullptr;
@@ -2719,6 +2774,7 @@ ID3D11Texture2D* Renderer::_ResizeEffects() noexcept {
 		}
 	}
 
+	_effectFrameStates.resize(_effectDrawers.size());
 	return inOutTexture;
 }
 
@@ -3229,6 +3285,11 @@ void Renderer::_BackendThreadProc() noexcept {
 		if (_sessionLifetime->IsStopping()) continue;
 		_stepTimer.CaptureStarting();
 		const FrameSourceState frameSourceState = _frameSource->Update();
+		// A rejected GPU comparison is a completed attempt. Polls without GPU
+		// work retain their slept candidate, and staged FG retains its base ID.
+		const auto discardReflexRender = wil::scope_exit([this] {
+			if (!_pendingFrameGenerationInput) _reflex.DiscardCaptureRender();
+		});
 		traceCapture.Data(static_cast<int64_t>(frameSourceState));
 		traceCapture.End();
 		FrameTrace::Mark(FrameTrace::Event::CaptureResult, static_cast<int64_t>(frameSourceState),
@@ -3237,6 +3298,7 @@ void Renderer::_BackendThreadProc() noexcept {
 		switch (frameSourceState) {
 		case FrameSourceState::Waiting:
 			if (_frameSource->IsCaptureInterrupted()) {
+				_reflex.CompleteCapture();
 				// Keep the last published frame; even live parameter edits must wait
 				// for valid input before re-entering temporal effects. The timeout
 				// also avoids busy spinning after the minimum-FPS deadline expires.
@@ -3263,6 +3325,8 @@ void Renderer::_BackendThreadProc() noexcept {
 			}
 			[[fallthrough]];
 		case FrameSourceState::NewFrame:
+			FrameTrace::Mark(FrameTrace::Event::RenderReason,
+				frameSourceState == FrameSourceState::NewFrame ? 0 : _forceNextRender ? 2 : 1);
 			_forceNextRender = false;
 			_backendMayDeferFG = true;
 			_BackendRender(
@@ -3278,6 +3342,7 @@ void Renderer::_BackendThreadProc() noexcept {
 			}
 			break;
 		case FrameSourceState::Error:
+			_reflex.CompleteCapture();
 			// 捕获出错，退出缩放
 			ScalingWindow::Dispatcher().TryEnqueue([
 				session = _sessionLifetime,
@@ -3337,6 +3402,14 @@ void Renderer::_UpdateFrameRateLimits() noexcept {
 	if (options.maxFrameRate &&
 		(!maxFrameRate || *options.maxFrameRate < *maxFrameRate)) {
 		maxFrameRate = options.maxFrameRate;
+	}
+	// A fixed/auto content choice still owns a target when the selected
+	// presentation strategy is unsupported (e.g. DirectFlip disabled).
+	// Recompute Auto on each monitor/multiplier change; do not persist this cap.
+	if (options.isFrontEdgeSyncEnabled && !_frameSyncEnabled && !options.IsBenchmarkMode()) {
+		maxFrameRate = float(ResolvePresentationFrameRate(options.frontEdgeSyncFrameRate,
+			maxFrameRate.value_or(0.0f), _presentationRefreshRate.load(std::memory_order_acquire),
+			_configuredFrameGenerationMultiplier));
 	}
 	const bool useFrameGeneration = std::ranges::any_of(
 		_runtimeEffectOptions,
@@ -3560,13 +3633,17 @@ void Renderer::_BackendRender(
 	ID3D11Texture2D* effectsOutput,
 	bool isNewCaptureFrame
 ) noexcept {
-	if (_colorPipelineFailed) return;
+	if (_colorPipelineFailed || (!isNewCaptureFrame &&
+		(_capturedFrameId == 0 || !_frameSource->IsHdrFrameReady()))) return;
+	_reflex.BeginCaptureRender();
+	_activeResourceGeneration.store(_frameSource->ResourceGeneration(), std::memory_order_release);
 	FrameTrace::Scope traceRender(FrameTrace::Event::BackendRender, isNewCaptureFrame);
 	_stepTimer.PrepareForRender();
 	if (isNewCaptureFrame) {
 		const auto captureTime = std::chrono::steady_clock::now();
 		const uint64_t sequence = _frameSource->CaptureSequence();
 		if (sequence != _captureSequence) {
+			_captureEffectFrameCount = 0;
 			_captureSequence = sequence;
 			_activeCaptureSequence.store(sequence, std::memory_order_release);
 			_activeResourceGeneration.store(
@@ -3584,6 +3661,7 @@ void Renderer::_BackendRender(
 				sequence, _capturedFrameId + 1, _frameSource->CaptureTimestamp100ns(),
 				_capturedFrameId != 0));
 		}
+		++_captureEffectFrameCount;
 		const auto downstreamWait = std::exchange(_captureCadenceQueueWait,
 			std::chrono::steady_clock::duration::zero());
 		if (_captureCadence.Observe(captureTime, downstreamWait)) {
@@ -3599,7 +3677,9 @@ void Renderer::_BackendRender(
 		_lastCapturedFrameTime = captureTime;
 		// A cancelled Reflex candidate may leave a gap. Keep NGX's
 		// BackbufferFrameID, guidance and Reflex on the same monotonic base ID.
+		_previousCapturedFrameId = _capturedFrameId;
 		_capturedFrameId = std::max(_capturedFrameId + 1, _reflex.CaptureFrameId());
+		_acceptedCaptureTimestamp100ns = _frameSource->CaptureTimestamp100ns();
 		FrameTrace::SetFrame(_capturedFrameId);
 		FrameTrace::Mark(FrameTrace::Event::CaptureAccepted, _frameSource->CaptureTimestamp100ns(), sequence);
 		const FrameGuidanceRequirements guidanceRequirements =
@@ -3610,7 +3690,7 @@ void Renderer::_BackendRender(
 			_frameGuidanceService.BeginFrame(
 			_capturedFrameId, _frameSource->GetPipelineTexture(), guidanceRequirements,
 			_frameSource->CaptureSequence(), _frameSource->ResourceGeneration(),
-			_frameSource->CaptureTimestamp100ns(),
+				_acceptedCaptureTimestamp100ns,
 			_frameSource->GetHdrFrameMetadata().color);
 		}
 	}
@@ -3635,29 +3715,75 @@ void Renderer::_BackendRender(
 	ID3D11DeviceContext4* d3dDC = _backendResources.GetD3DDC();
 	d3dDC->ClearState();
 
-	if (ID3D11Buffer* t = _dynamicCB.get()) {
-		_UpdateDynamicConstants();
-		d3dDC->CSSetConstantBuffers(1, 1, &t);
-	}
-
 	_effectsProfiler.OnBeginEffects(d3dDC);
 	if (isNewCaptureFrame) {
 		_UpdateHdrEffectBoundaryContexts();
 	}
 
+	uint64_t inputRevision = _capturedFrameId;
+	uint64_t inputHistoryRevision = 0;
 	for (uint32_t i = 0; i < _effectDrawers.size(); ++i) {
 		const EffectDrawer& effectDrawer = _effectDrawers[i];
-		// Native SDKs may clear the context. Restore dynamic constants for the
-		// next image effect instead of relying on the first binding of the frame.
-		if (ID3D11Buffer* dynamic = _dynamicCB.get()) d3dDC->CSSetConstantBuffers(1, 1, &dynamic);
+		const EffectDesc& desc = *_activeEffectDescs[i];
+		auto resourceKey = [](ID3D11Texture2D* texture) noexcept {
+			D3D11_TEXTURE2D_DESC td{};
+			texture->GetDesc(&td);
+			return EffectFrameResource{ reinterpret_cast<uintptr_t>(texture),
+				td.Width, td.Height, static_cast<uint32_t>(td.Format) };
+		};
+		ID3D11Texture2D* upstream = i == 0 ? _frameSource->GetPipelineTexture()
+			: _effectDrawers[i - 1].GetExternalOutputTexture();
+		auto& frameState = _effectFrameStates[i];
+		const EffectFrameKey key{
+			.frameId = _capturedFrameId,
+			.inputRevision = inputRevision,
+			.inputHistoryRevision = inputHistoryRevision,
+			.parameterRevision = frameState.ParameterRevision(),
+			.captureSequence = _frameSource->CaptureSequence(),
+			.resourceGeneration = _frameSource->ResourceGeneration(),
+			.input = resourceKey(upstream),
+			.output = resourceKey(effectDrawer.GetExternalOutputTexture())
+		};
+		const bool captureClock = UsesCaptureFrameClock(desc.name);
+		const bool native = i < _nativeEffectBackends.size() && _nativeEffectBackends[i];
+		const bool renderClock = !native && (desc.flags & EffectFlags::UseDynamic) && !captureClock;
+		if (!frameState.NeedsDraw(key, renderClock)) {
+			FrameTrace::Mark(FrameTrace::Event::EffectReuse, i, inputRevision);
+			// Keep the profiler's pass slots aligned without executing image work.
+			for (size_t p = 0; p < desc.passes.size(); ++p) _effectsProfiler.OnEndPass(d3dDC);
+			inputRevision = frameState.OutputRevision();
+			inputHistoryRevision = frameState.OutputHistoryRevision();
+			continue;
+		}
+		const bool historyReset = frameState.RequiresHistoryReset(key);
+		bool drawSucceeded = false;
+		const auto publishVersion = wil::scope_exit([&] {
+			frameState.Commit(key, drawSucceeded);
+			inputRevision = frameState.OutputRevision();
+			inputHistoryRevision = frameState.OutputHistoryRevision();
+		});
+		FrameTrace::Mark(FrameTrace::Event::EffectExecute, i, historyReset);
+		if (captureClock && (historyReset || frameState.ParametersDiffer(key)) &&
+			!effectDrawer.ResetCaptureHistory(desc)) {
+			_FailColorPipeline(desc.name, ScalingError::EffectResourceFailed);
+			return;
+		}
+		// Native SDKs may clear state. Select a clock and rebind for each drawn
+		// shader. SMAA advances only on accepted capture events; other dynamic
+		// shaders keep their animation clock and propagate every actual draw.
+		if (!native && (desc.flags & EffectFlags::UseDynamic)) {
+			if (!_UpdateDynamicConstants(captureClock ? _captureEffectFrameCount : _stepTimer.FrameCount())) {
+				_FailColorPipeline(desc.name, ScalingError::EffectResourceFailed);
+				return;
+			}
+			ID3D11Buffer* dynamic = _dynamicCB.get();
+			d3dDC->CSSetConstantBuffers(1, 1, &dynamic);
+		}
 		if (ScalingWindow::Get().Options().hdrComponents.enabled ||
 			ScalingWindow::Get().Options().IsHdrCompatibilityEnabled()) {
 			// Rebind every boundary to the actual upstream canonical handoff for
 			// this frame. Initialization-time pointers become stale after the
 			// first capture and after any resize/rebuild.
-			ID3D11Texture2D* upstream = i == 0
-				? _frameSource->GetPipelineTexture()
-				: _effectDrawers[i - 1].GetExternalOutputTexture();
 			_effectDrawers[i].SetHdrInputSource(upstream);
 		}
 		const auto component = i < _runtimeEffectOptions.size()
@@ -3667,12 +3793,14 @@ void Renderer::_BackendRender(
 				_FailColorPipeline(_runtimeEffectOptions[i].name, ScalingError::EffectResourceFailed);
 				return;
 			}
+			drawSucceeded = true;
 			continue;
 		}
 		if (i < _nativeEffectBackends.size() && _nativeEffectBackends[i]) {
 			if (!effectDrawer.PrepareHdrInput()) {
 				Logger::Get().Error("准备 native HDR 效果输入失败");
-				continue;
+				_FailColorPipeline(desc.name, ScalingError::EffectResourceFailed);
+				return;
 			}
 			D3D11_TEXTURE2D_DESC inputDesc{};
 			effectDrawer.GetTexture(0)->GetDesc(&inputDesc);
@@ -3681,6 +3809,12 @@ void Renderer::_BackendRender(
 					_capturedFrameId, { inputDesc.Width, inputDesc.Height },
 					GetMotionVectorRequest(
 						_nativeEffectBackends[i]->GetFrameGuidanceRequirements()));
+			// Recomputed old colors have no new current-to-previous motion pair.
+			// Diagnostics still display the captured pair. NR makes its residual-
+			// only cache decision first, then binds Zero for SDK re-evaluation;
+			// other temporal SDKs receive Zero immediately on this redraw.
+			const bool diagnostic = desc.name.starts_with("Diagnostics\\");
+			const bool nr = desc.name == "DLSSNR\\DLSSNR_AI_Filter";
 			const NativeEffectDrawContext drawContext{
 				.input = effectDrawer.GetTexture(0),
 				.output = effectDrawer.GetOutputTexture(),
@@ -3689,10 +3823,14 @@ void Renderer::_BackendRender(
 				.outputMetadata = effectDrawer.GetHdrBoundary().hdrEnabled
 					? effectDrawer.GetHdrBoundary().inputFrame.metadata : HdrFrameMetadata{},
 				.frameId = _capturedFrameId,
-				.inputRevision = i < _effectInputRevisions.size()
-					? _effectInputRevisions[i] : 0,
+				.previousCaptureFrameId = _previousCapturedFrameId,
+				.inputRevision = key.inputRevision,
+				.inputHistoryRevision = key.inputHistoryRevision,
+				.inputHistoryReset = historyReset,
+				.isNewCaptureFrame = isNewCaptureFrame,
+				// 残差转移用捕获时间戳估计源供给速率（与后端节奏无关的无污染度量）。
 				.captureTimestamp100ns = _frameSource->CaptureTimestamp100ns(),
-				.frameGuidance = guidance.produced,
+				.frameGuidance = !isNewCaptureFrame && !diagnostic && !nr ? guidance.zero : guidance.produced,
 				.zeroFrameGuidance = guidance.zero
 			};
 			FrameTrace::Scope traceNative(FrameTrace::Event::NativeEffect, i);
@@ -3734,13 +3872,24 @@ void Renderer::_BackendRender(
 				// A runtime SDK failure must not publish the cleared route output.
 				// Execute the production marker pass through the same drawer so the
 				// chain remains visible at the requested output size.
-				effectDrawer.Draw(_effectsProfiler);
+				if (!effectDrawer.Draw(_effectsProfiler)) {
+					_FailColorPipeline(desc.name, ScalingError::EffectResourceFailed);
+					return;
+				}
 			} else if (!effectDrawer.CompleteHdrOutput()) {
 				Logger::Get().Error("完成 native HDR 效果输出失败");
+				_FailColorPipeline(desc.name, ScalingError::EffectResourceFailed);
+				return;
+			} else {
+				drawSucceeded = true;
 			}
-			_effectsProfiler.OnEndPass(d3dDC);
+			if (nativeDrawSucceeded) _effectsProfiler.OnEndPass(d3dDC);
 		} else {
-			effectDrawer.Draw(_effectsProfiler);
+			drawSucceeded = effectDrawer.Draw(_effectsProfiler);
+			if (!drawSucceeded) {
+				_FailColorPipeline(desc.name, ScalingError::EffectResourceFailed);
+				return;
+			}
 			if (ScalingWindow::Get().Options().IsHdrCompatibilityEnabled() && isNewCaptureFrame && _capturedFrameId <= 2) {
 				_LogHdrTextureStats(effectDrawer.GetTexture(0), fmt::format("effect-{}-adapter-input", i));
 				_LogHdrTextureStats(effectDrawer.GetExternalOutputTexture(), fmt::format("effect-{}-canonical-output", i));
@@ -3761,6 +3910,7 @@ void Renderer::_BackendRender(
 		_backendMayDeferFG && _synchronousFramePresentationEnabled.load(std::memory_order_acquire)) {
 		_pendingFrameGenerationInput.copy_from(effectsOutput);
 		d3dDC->Flush();
+		_reflex.EndCaptureRender();
 		return;
 	}
 	// XeSSFG + 残差转移组合的输入节奏：后端保持零等待满速（串行单线程里
@@ -4247,7 +4397,7 @@ bool Renderer::_PublishBackendTexture(
 	return true;
 }
 
-bool Renderer::_UpdateDynamicConstants() const noexcept {
+bool Renderer::_UpdateDynamicConstants(uint32_t frameCount) const noexcept {
 	// cbuffer __CB2 : register(b1) { uint __frameCount; };
 
 	ID3D11DeviceContext4* d3dDC = _backendResources.GetD3DDC();
@@ -4257,7 +4407,6 @@ bool Renderer::_UpdateDynamicConstants() const noexcept {
 	if (SUCCEEDED(hr)) {
 		// 避免使用 *(uint32_t*)ms.pData，见
 		// https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-map
-		const uint32_t frameCount = _stepTimer.FrameCount();
 		std::memcpy(ms.pData, &frameCount, 4);
 		d3dDC->Unmap(_dynamicCB.get(), 0);
 	} else {
@@ -4354,10 +4503,14 @@ winrt::IAsyncOperation<bool> Renderer::_TakeScreenshotImpl(
 		d3dDC->ClearState();
 
 		if (ID3D11Buffer* t = _dynamicCB.get()) {
+			_UpdateDynamicConstants(UsesCaptureFrameClock(_activeEffectDescs[effectIdx]->name)
+				? _captureEffectFrameCount : _stepTimer.FrameCount());
 			d3dDC->CSSetConstantBuffers(1, 1, &t);
 		}
 
 		_effectDrawers[effectIdx].DrawForExport(*_activeEffectDescs[effectIdx], passIdx);
+		for (size_t i = effectIdx; i < _effectFrameStates.size(); ++i) _effectFrameStates[i].Invalidate();
+		_forceNextRender = true;
 	}
 
 	// 创建 staging 纹理

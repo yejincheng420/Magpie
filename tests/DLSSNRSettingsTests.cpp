@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <limits>
 #include <string>
 #include "DLSSNRParameters.h"
 #include "EffectParameterRestart.h"
@@ -50,6 +51,27 @@ int main() {
 	assert(ParseDLSSNRSettings(DLSSNRPassOption(option, 2)).intensity == 1);
 	assert(ParseDLSSNRSettings(DLSSNRPassOption(option, 1)).intensity == 0.5f);
 	assert(ParseDLSSNRSettings(DLSSNRPassOption(option, 3)).skinStructureStrength == 1.5f);
+	// Old mode selectors are ignored; numeric controls keep their semantics.
+	option.parameters["residualColorMode"] = 1;
+	option.parameters["residualMultiplier"] = 0;
+	option.parameters["residualHueProtection"] = 2;
+	option.parameters["residualDarkProtection"] = std::numeric_limits<float>::quiet_NaN();
+	option.parameters["residualLowFrequencyGain"] = -1;
+	option.parameters["residualChromaTemporalStrength"] = 1.f;
+	auto detail = ParseDLSSNRSettings(option);
+	assert(detail.residualMultiplier == 0);
+	assert(detail.residualHueProtection == 1 && detail.residualDarkProtection == 0);
+	assert(detail.residualLowFrequencyGain == 0 && detail.residualDetailGain == 1);
+	assert(detail.residualChromaTemporalStrength == 0 && detail.residualDebugView == 0);
+	option.parameters["residualColorMode"] = 0.5f;
+	for (float obsoleteMode : {0.f, 1.f, .5f, -3.f, std::numeric_limits<float>::quiet_NaN()}) {
+		option.parameters["residualColorMode"] = obsoleteMode;
+		const auto migrated = ParseDLSSNRSettings(option);
+		assert(migrated.residualMultiplier == detail.residualMultiplier);
+		assert(migrated.residualSaturation == detail.residualSaturation);
+		assert(migrated.residualHueProtection == detail.residualHueProtection);
+		assert(migrated.style == detail.style && migrated.intensity == detail.intensity);
+	}
 	EffectParameterRestartQueue queue;
 	const auto now = EffectParameterRestartQueue::Clock::now();
 	assert(queue.Update(0, "multiPass", 2, 1, now));

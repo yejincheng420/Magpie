@@ -178,7 +178,7 @@ void ImGuiImpl::NewFrame(
 		}
 	}
 
-	const ImVec2 mousePos = _CaptureMousePos(_fittsLawAdjustment);
+	const ImVec2 mousePos = _CaptureMousePos();
 	if (mousePos != _lastQueuedMousePos) {
 		_QueueMove(mousePos, _ownedMouseButtons != 0);
 	}
@@ -350,6 +350,10 @@ void ImGuiImpl::Tooltip(
 	const char* description,
 	float maxWidth
 ) noexcept {
+	const SIZE outputSize = Win32Helper::GetSizeOfRect(ScalingWindow::Get().Renderer().DestRect());
+	const float availableWidth = std::max(1.0f, float(outputSize.cx));
+	maxWidth = maxWidth > 0 ? std::min(maxWidth, availableWidth) : std::min(360.0f * dpiScale, availableWidth);
+
 	static constexpr float DESCRIPTION_SCALE = 0.9f;
 
 	ImVec2 padding = ImGui::GetStyle().WindowPadding;
@@ -374,9 +378,12 @@ void ImGuiImpl::Tooltip(
 	windowPos.x += 16.0f * dpiScale * ImGui::GetStyle().MouseCursorScale;
 	windowPos.y += 8.0f * dpiScale * ImGui::GetStyle().MouseCursorScale;
 
-	SIZE outputSize = Win32Helper::GetSizeOfRect(ScalingWindow::Get().Renderer().DestRect());
-	windowPos.x = std::clamp(windowPos.x, 0.0f, outputSize.cx - windowSize.x);
-	windowPos.y = std::clamp(windowPos.y, 0.0f, outputSize.cy - windowSize.y);
+	windowPos.x = std::clamp(windowPos.x, 0.0f, std::max(0.0f, outputSize.cx - windowSize.x));
+	if (_fittsLawAdjustment < 0.0f) {
+		// A bottom-docked toolbar opens its hints toward the viewport interior.
+		windowPos.y = ImGui::GetMousePos().y - windowSize.y - 8.0f * dpiScale;
+	}
+	windowPos.y = std::clamp(windowPos.y, 0.0f, std::max(0.0f, outputSize.cy - windowSize.y));
 
 	ImGui::SetNextWindowPos(windowPos);
 
@@ -407,7 +414,7 @@ void ImGuiImpl::Tooltip(
 	ImGui::End();
 }
 
-ImVec2 ImGuiImpl::_CaptureMousePos(float fittsLawAdjustment) const noexcept {
+ImVec2 ImGuiImpl::_CaptureMousePos() const noexcept {
 	// Resizing the scaling HWND and forwarding input to the source are explicit
 	// ownership boundaries. Queue an unavailable position instead of mutating
 	// ImGui state from WndProc.
@@ -421,9 +428,6 @@ ImVec2 ImGuiImpl::_CaptureMousePos(float fittsLawAdjustment) const noexcept {
 	const RECT& destRect = ScalingWindow::Get().Renderer().DestRect();
 	float mouseX = float(cursorPos.x - destRect.left);
 	float mouseY = float(cursorPos.y - destRect.top);
-	if (mouseY >= 0 && mouseY < fittsLawAdjustment) {
-		mouseY = fittsLawAdjustment;
-	}
 	return ImVec2(mouseX, mouseY);
 }
 
@@ -452,6 +456,17 @@ void ImGuiImpl::_QueueCancel(ImVec2 position) noexcept {
 
 void ImGuiImpl::_FlushPendingInput() noexcept {
 	ImGuiIO& io = ImGui::GetIO();
+	// Keep the event's physical position for grip offsets and drop targets.
+	// Only button hit testing receives the inward Fitts-law adjustment.
+	auto feedMousePosition = [&](ImVec2 position) {
+		_frameMousePosition = position;
+		if (_fittsLawAdjustment > 0.0f && position.y >= 0.0f && position.y < _fittsLawAdjustment)
+			position.y = _fittsLawAdjustment;
+		if (_fittsLawAdjustment < 0.0f && position.y >= io.DisplaySize.y + _fittsLawAdjustment &&
+			position.y < io.DisplaySize.y)
+			position.y = io.DisplaySize.y + _fittsLawAdjustment - 1.0f;
+		io.AddMousePosEvent(position.x, position.y);
+	};
 	_frameContainsCancel = false;
 	_leftReleaseWasDrag = false;
 	uint64_t consumedSerial = _pendingInput.consumedSerial;
@@ -464,10 +479,10 @@ void ImGuiImpl::_FlushPendingInput() noexcept {
 
 		switch (event.type) {
 		case PendingInputEventType::Move:
-			io.AddMousePosEvent(event.position.x, event.position.y);
+			feedMousePosition(event.position);
 			break;
 		case PendingInputEventType::Button:
-			io.AddMousePosEvent(event.position.x, event.position.y);
+			feedMousePosition(event.position);
 			io.AddMouseButtonEvent(event.button, event.down);
 			if (event.button == ImGuiMouseButton_Left) {
 				if (event.down) {
@@ -480,17 +495,17 @@ void ImGuiImpl::_FlushPendingInput() noexcept {
 			deliveredEdge = true;
 			break;
 		case PendingInputEventType::Wheel:
-			io.AddMousePosEvent(event.position.x, event.position.y);
+			feedMousePosition(event.position);
 			io.AddMouseWheelEvent(event.wheelX, event.wheelY);
 			deliveredEdge = true;
 			break;
 		case PendingInputEventType::Leave:
-			io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+			feedMousePosition({ -FLT_MAX, -FLT_MAX });
 			deliveredEdge = true;
 			break;
 		case PendingInputEventType::Cancel:
 			io.ClearInputKeys();
-			io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+			feedMousePosition({ -FLT_MAX, -FLT_MAX });
 			for (int button = 0; button < ImGuiMouseButton_COUNT; ++button) {
 				io.AddMouseButtonEvent(button, false);
 			}
@@ -567,6 +582,7 @@ void ImGuiImpl::ClearStates() noexcept {
 	_ReleaseOwnedMouseButtons();
 	_pendingInput.Reset();
 	_lastQueuedMousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+	_frameMousePosition = _lastQueuedMousePos;
 	_frameConsumedSerial = 0;
 	_frameContainsCancel = false;
 	_stagedPresentedWindowRects.clear();
@@ -764,7 +780,7 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 		const RECT& dest = ScalingWindow::Get().Renderer().DestRect();
 		const ImVec2 mousePos = pointerPosition
 			? ImVec2(float(pointerPosition->x - dest.left), float(pointerPosition->y - dest.top))
-			: _CaptureMousePos(_fittsLawAdjustment);
+			: _CaptureMousePos();
 		_QueueMove(mousePos, _ownedMouseButtons != 0);
 		const bool isDown = IsMouseButtonDownMessage(msg);
 		const uint32_t buttonMask = 1u << mouseButton;
@@ -817,7 +833,7 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 	case WM_MOUSEMOVE:
 	case WM_NCMOUSEMOVE:
 		ScalingWindow::Get().CursorManager().Update();
-		_QueueMove(_CaptureMousePos(_fittsLawAdjustment), _ownedMouseButtons != 0);
+		_QueueMove(_CaptureMousePos(), _ownedMouseButtons != 0);
 		return _ownedMouseButtons ? ImGuiInputResult::Urgent : ImGuiInputResult::Redraw;
 	case WM_MOUSELEAVE:
 	case WM_NCMOUSELEAVE:
@@ -832,7 +848,7 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 	case WM_MOUSEWHEEL:
 	{
 		ScalingWindow::Get().CursorManager().Update();
-		const ImVec2 mousePos = _CaptureMousePos(_fittsLawAdjustment);
+		const ImVec2 mousePos = _CaptureMousePos();
 		_QueueMove(mousePos, _ownedMouseButtons != 0);
 		if (_ownedMouseButtons || _GetPresentedHoveredWindowId(mousePos)) {
 			_pendingInput.Push(PendingInputEvent{
@@ -847,7 +863,7 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 	case WM_MOUSEHWHEEL:
 	{
 		ScalingWindow::Get().CursorManager().Update();
-		const ImVec2 mousePos = _CaptureMousePos(_fittsLawAdjustment);
+		const ImVec2 mousePos = _CaptureMousePos();
 		_QueueMove(mousePos, _ownedMouseButtons != 0);
 		if (_ownedMouseButtons || _GetPresentedHoveredWindowId(mousePos)) {
 			_pendingInput.Push(PendingInputEvent{
@@ -862,14 +878,20 @@ ImGuiInputResult ImGuiImpl::MessageHandler(
 	case WM_CAPTURECHANGED:
 		if ((HWND)lParam != ScalingWindow::Get().Handle() &&
 			!ScalingWindow::Get().IsParameterInputWindow((HWND)lParam) && _ownedMouseButtons) {
-			_QueueCancel(_CaptureMousePos(_fittsLawAdjustment));
+			_QueueCancel(_CaptureMousePos());
 			return ImGuiInputResult::Urgent;
 		}
 		break;
 	case WM_CANCELMODE:
 	case WM_KILLFOCUS:
-		_QueueCancel(_CaptureMousePos(_fittsLawAdjustment));
+		_QueueCancel(_CaptureMousePos());
 		return ImGuiInputResult::Urgent;
+	case WM_ACTIVATEAPP:
+		if (!wParam) {
+			_QueueCancel(_CaptureMousePos());
+			return ImGuiInputResult::Urgent;
+		}
+		break;
 	}
 
 	return ImGuiInputResult::None;

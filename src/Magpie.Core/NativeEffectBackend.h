@@ -14,13 +14,20 @@ struct NativeEffectDrawContext {
 	HdrFrameMetadata inputMetadata{};
 	HdrFrameMetadata outputMetadata{};
 	FrameGuidanceFrameId frameId = 0;
-	// Changes whenever an earlier effect in the chain changes its output for
-	// the same captured frame. Native effects that cache duplicate frames must
-	// include this value in their cache key.
+	// IDs may skip rejected Reflex GPU attempts. Motion still points to the
+	// previous accepted capture, rather than necessarily frameId - 1.
+	FrameGuidanceFrameId previousCaptureFrameId = 0;
+	// Content version of the actual upstream output, including ordinary new
+	// captures and same-frame edits. Include in cache keys, but use the separate
+	// history epoch/reset below when deciding whether to discard temporal state.
 	uint64_t inputRevision = 0;
 	// 本次 Draw 消费的捕获帧的 QPC 时间戳（100ns 单位，来自帧源）。0 = 未知。
 	// 残差转移用它估计源供给速率（与后端处理节奏无关的无污染度量）。
 	int64_t captureTimestamp100ns = 0;
+	// Separate from content versions so new captures can accumulate history.
+	uint64_t inputHistoryRevision = 0;
+	bool inputHistoryReset = false;
+	bool isNewCaptureFrame = true;
 	const FrameGuidanceView& frameGuidance;
 	const FrameGuidanceView& zeroFrameGuidance;
 };

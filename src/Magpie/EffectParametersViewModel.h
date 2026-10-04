@@ -169,6 +169,12 @@ struct ScalingModeParameter : ScalingModeParameterT<ScalingModeParameter>,
 	hstring Label() const noexcept {
 		return _label;
 	}
+	hstring Tooltip() const noexcept { return _tooltip; }
+	void Tooltip(hstring value) {
+		if (_tooltip == value) return;
+		_tooltip = std::move(value);
+		RaisePropertyChanged(L"Tooltip");
+	}
 
 	bool HasDescriptionLine() const noexcept {
 		return std::wstring_view(_label).find(L'\n') != std::wstring_view::npos;
@@ -207,6 +213,7 @@ struct ScalingModeParameter : ScalingModeParameterT<ScalingModeParameter>,
 private:
 	const uint32_t _index;
 	const hstring _label;
+	hstring _tooltip;
 	const bool _isBoolean = false;
 	const bool _isChoice = false;
 	bool _isVisible = true;
@@ -270,8 +277,9 @@ struct EffectParametersViewModel : EffectParametersViewModelT<EffectParametersVi
 		return _groups;
 	}
 	double ContentWidth() const noexcept { return _contentWidth; }
+	double ContentMaxHeight() const noexcept { return _contentMaxHeight; }
 
-	void UpdateLayoutWidth(double availableWidth);
+	void UpdateLayoutSize(double availableWidth, double availableHeight);
 
 private:
 	bool _IsRemoved() const noexcept;
@@ -289,12 +297,12 @@ private:
 	std::vector<com_ptr<EffectParameterGroupViewModel>> _groupImpls;
 	std::vector<com_ptr<ScalingModeParameter>> _parameterImpls;
 	::Magpie::Event<uint32_t, uint32_t>::EventRevoker _parameterChangedRevoker;
-	::Magpie::Event<>::EventRevoker _frontEdgeSyncChangedRevoker;
 	bool _synchronizing = false;
 	void _SynchronizeParameters();
 
 	double _availableLayoutWidth = std::numeric_limits<double>::infinity();
 	double _contentWidth = 260.0;
+	double _contentMaxHeight = 600.0;
 
 	uint32_t _scalingModeIdx;
 	uint32_t _effectIdx;

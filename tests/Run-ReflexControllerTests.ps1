@@ -13,3 +13,14 @@ Enter-VsDevShell -VsInstallPath $reflexVs -SkipAutomaticLocation -DevCmdArgument
 if ($LASTEXITCODE) { throw 'Reflex controller test compilation failed' }
 & "$reflexOutput/reflex-controller-tests.exe"
 if ($LASTEXITCODE) { throw 'Reflex controller test failed' }
+& python (Join-Path $PSScriptRoot 'prepare_reflex_marker_boundary_test.py') $reflexOutput
+if ($LASTEXITCODE) { throw 'Reflex marker production extraction failed' }
+foreach ($reflexTest in @('reflex-marker-boundaries', 'late-copy-marker', 'late-capacity')) {
+    & cl.exe /nologo /std:c++20 /EHsc /utf-8 /MT /O2 /W4 /WX "/I$reflexRepo/src/Magpie.Core" `
+        "$reflexOutput/$reflexTest.cpp" "/Fe:$reflexOutput/$reflexTest.exe" "/Fo:$reflexOutput/$reflexTest.obj"
+    if ($LASTEXITCODE) { throw "Reflex marker test compilation failed: $reflexTest" }
+    & "$reflexOutput/$reflexTest.exe"
+    $reflexExpected = if ($reflexTest -eq 'reflex-marker-boundaries') { 0 } else { 42 }
+    if ($LASTEXITCODE -ne $reflexExpected) { throw "Reflex marker test failed: $reflexTest (expected $reflexExpected)" }
+    if ($reflexExpected) { Write-Host "PASS: rejected production mutation $reflexTest" }
+}

@@ -472,6 +472,9 @@ bool XeSSZeroMVUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexce
 	ID3D11Texture2D* output = drawContext.output;
 	if (!_impl || !_impl->xessContext) return false;
 	Impl& impl = *_impl;
+	const bool resetInput = drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
+	impl.resetHistory |= resetInput;
+	if (resetInput && impl.opticalFlow) impl.opticalFlow->ResetHistory();
 	// A command allocator cannot be reset while its previous D3D12 submission
 	// is still executing. Usually the D3D11 consumer has already waited for it.
 	if (!WaitForFenceValue(impl, impl.lastSubmittedValue)) return false;
@@ -545,7 +548,8 @@ bool XeSSZeroMVUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexce
 	params.pOutputTexture = impl.sharedOutput12.get();
 	if (impl.enableJitter) {
 		// Metadata-only jitter: the source application's projection is unchanged.
-		const uint32_t sample = (impl.frameIndex++ & 7u) + 1u;
+		const uint32_t phase = drawContext.isNewCaptureFrame ? impl.frameIndex++ : (impl.frameIndex ? impl.frameIndex - 1 : 0);
+		const uint32_t sample = (phase & 7u) + 1u;
 		params.jitterOffsetX = Halton(sample, 2) - 0.5f;
 		params.jitterOffsetY = Halton(sample, 3) - 0.5f;
 	} else {

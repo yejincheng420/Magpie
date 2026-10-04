@@ -59,6 +59,7 @@ bool GDIFrameSource::_Initialize() noexcept {
 }
 
 FrameSourceState GDIFrameSource::_Update() noexcept {
+	_BeginCaptureRender();
 	HDC hdcDest;
 	HRESULT hr = _dxgiSurface->GetDC(TRUE, &hdcDest);
 	if (FAILED(hr)) {

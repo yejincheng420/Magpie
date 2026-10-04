@@ -135,6 +135,11 @@
   <data name="Home_Activation_Timer_Delay.Header" xml:space="preserve">
     <value>Delay in seconds</value>
   </data>
+  <data name="ShortcutDialog_Clear" xml:space="preserve"><value>Clear</value></data>
+  <data name="ShortcutControl_ClearButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve"><value>Clear shortcut</value></data>
+  <data name="ShortcutControl_NotSet.Text" xml:space="preserve"><value>Not set</value></data>
+  <data name="ShortcutControl_ClearAutomationName" xml:space="preserve"><value>Clear shortcut: {0}</value></data>
+  <data name="Overlay_Parameters_InputHintWithoutShortcut" xml:space="preserve"><value>Ctrl+click a slider to enter its value. Esc: Edit → Preview → Closed. Click the preview panel to edit.</value></data>
   <data name="ShortcutDialog_Cancel" xml:space="preserve">
     <value>Cancel</value>
   </data>
@@ -241,16 +246,16 @@
     <value>Launch</value>
   </data>
   <data name="ScalingModes_General_Export.Text" xml:space="preserve">
-    <value>Export configuration</value>
+    <value>Export</value>
   </data>
   <data name="ScalingModes_General_Import.Text" xml:space="preserve">
-    <value>Import configuration</value>
+    <value>Import</value>
   </data>
   <data name="ScalingModes_General_MoreOptions.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
-    <value>More options</value>
+    <value>Other options</value>
   </data>
   <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
-    <value>Reset configuration</value>
+    <value>Reset</value>
   </data>
   <data name="ScalingModes_ResetDialog_Title" xml:space="preserve">
     <value>Reset effect group configuration?</value>
@@ -899,7 +904,7 @@
     <value>Applies only to fullscreen mode</value>
   </data>
   <data name="Home_Toolbar.Description" xml:space="preserve">
-    <value>The toolbar is at the top of the output window and provides FPS display and screenshots. In windowed mode, drag the toolbar to move the output window.</value>
+    <value>Drag empty toolbar space or the FPS display to move the toolbar and dock it at the top or bottom.</value>
   </data>
   <data name="Home_Toolbar.Header" xml:space="preserve">
     <value>Toolbar</value>
@@ -1218,20 +1223,18 @@
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_multiplier_Label" xml:space="preserve"><value>Frame Multiplier</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_DLSSNR" xml:space="preserve"><value>DLSSNR</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Detail_Control" xml:space="preserve"><value>Detail Control</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Label" xml:space="preserve"><value>Adjust Input Resolution
-(Reduces DLSSNR Quality)</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Label" xml:space="preserve"><value>Adjust Input Resolution</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_inputResolutionPercent_Label" xml:space="preserve"><value>Input Resolution (%)</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Label" xml:space="preserve"><value>NR Intensity</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Label" xml:space="preserve"><value>Local Structure Strength</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Label" xml:space="preserve"><value>Local Tone Strength</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>Reflection / Glow Control</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>Residual Lightness Multiplier</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>Residual Multiplier</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Label" xml:space="preserve"><value>Residual Saturation Multiplier</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Label" xml:space="preserve"><value>Shadow / Structure Control</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>Highlight / Glow Strength</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>Overall Lightness Strength</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>Overall Strength</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Label" xml:space="preserve"><value>Chroma Strength</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Label" xml:space="preserve"><value>Shadow / Structure Strength</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_skinStructureStrength_Label" xml:space="preserve"><value>Skin Structure Strength</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Label" xml:space="preserve"><value>NR Style
-(0 Default, 1 Natural, 2 Cinematic)</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Label" xml:space="preserve"><value>NR Style</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_uiCorrection_Label" xml:space="preserve"><value>NR UI Correction</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_useAutoMask_Label" xml:space="preserve"><value>Automatic Mask</value></data>
   <data name="EffectParam_Deband_grain_Label" xml:space="preserve"><value>Grain</value></data>
@@ -1449,7 +1452,7 @@
   <data name="Home_FrameSync_VRR.Header" xml:space="preserve"><value>VRR (variable refresh rate)</value></data>
   <data name="Home_FrameSync_VRR.Description" xml:space="preserve"><value>Allow compatible FreeSync / G-SYNC presentation. Enable VRR on both the display and driver; tearing may occur when VRR is inactive.</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Label" xml:space="preserve"><value>Frame Rate Mode</value></data>
-  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>Follow frame synchronization</value></data>
+  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>Follow content target</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_1" xml:space="preserve"><value>Custom</value></data>
   <data name="Overlay_EffectParameters_AutoRestart" xml:space="preserve"><value>Auto restart</value></data>
   <data name="Overlay_EffectParameters_Reason_AutoRestart" xml:space="preserve"><value>After editing, the effect group stops and restarts after 500 ms to rebuild DLSSNR history.</value></data>
@@ -1563,16 +1566,16 @@
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_saturation_Label" xml:space="preserve"><value>Saturation</value></data>
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_middleGray_Label" xml:space="preserve"><value>Middle gray</value></data>
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_peakNits_Label" xml:space="preserve"><value>Peak brightness (nits)</value></data>
-  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge Sync</value></data>
+  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge</value></data>
   <data name="FrameSync_Mode_Async.Content" xml:space="preserve"><value>Async</value></data>
   <data name="FrameSync_Mode_Reflex.Content" xml:space="preserve"><value>NVIDIA Reflex</value></data>
   <data name="Home_FrameSync_Mode.Header" xml:space="preserve"><value>Pacing mode</value></data>
   <data name="Home_FrameSync_Mode.Description" xml:space="preserve"><value>Front Edge: steady submissions; Async: capture intervals; Reflex: driver base pacing, including DLSS FG.</value></data>
   <data name="Overlay_FrameSync_Enable" xml:space="preserve"><value>Enable frame synchronization</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Label" xml:space="preserve"><value>OF Quality</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Label" xml:space="preserve"><value>Optical Flow Quality</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Option_0" xml:space="preserve"><value>Performance</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Option_1" xml:space="preserve"><value>Quality</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Label" xml:space="preserve"><value>OF Quality</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Label" xml:space="preserve"><value>Optical Flow Quality</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_1" xml:space="preserve"><value>Performance</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_2" xml:space="preserve"><value>Balanced</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Option_3" xml:space="preserve"><value>Quality</value></data>
@@ -1639,19 +1642,19 @@
   <data name="Profile_Advanced_ParameterFocusSwitching.Description" xml:space="preserve"><value>Enable focus switching during live parameter adjustment. This may be unstable with some windows.</value></data>
   <data name="Home_Advanced_StopEffectsOnTaskSwitch.Header" xml:space="preserve"><value>Disable active effects when switching tasks</value></data>
   <data name="Home_Advanced_StopEffectsOnTaskSwitch.Description" xml:space="preserve"><value>If switching tasks while using DLSSNR makes you feel like you have eaten poisonous mushrooms, try enabling this.</value></data>
-  <data name="EffectPicker_CustomSummary" xml:space="preserve"><value>Custom effect; see the author's documentation.</value></data>
-  <data name="EffectPicker_CustomDetails" xml:space="preserve"><value>This effect has not been reviewed yet. See the author's documentation for its purpose, parameters, and recommended position in an effect chain. HDR compatibility has not been verified.</value></data>
+  <data name="EffectPicker_CustomSummary" xml:space="preserve"><value>Custom effect; see the author's guidance.</value></data>
+  <data name="EffectPicker_CustomDetails" xml:space="preserve"><value>Follow the author's guidance for parameters, output size, and chain placement. Also check the documented HDR support, runtime dependencies, and GPU requirements.</value></data>
   <data name="EffectPicker_All" xml:space="preserve"><value>All</value></data>
   <data name="EffectPicker_AllDescription" xml:space="preserve"><value>Browse the purpose, recommended scenarios, and combination guidance for installed effects.</value></data>
   <data name="EffectPicker_DetailScrollHint" xml:space="preserve"><value>Ctrl + wheel: scroll description</value></data>
   <data name="EffectPicker_NameSeparator" xml:space="preserve"><value>, </value></data>
   <data name="EffectPicker_EffectCountSuffix" xml:space="preserve"><value> effects</value></data>
   <data name="EffectPicker_GettingStarted" xml:space="preserve"><value>Getting started</value></data>
-  <data name="EffectPicker_GettingStartedDescription" xml:space="preserve"><value>Choose an approachable effect for your scenario, then compare the image before adding more.</value></data>
+  <data name="EffectPicker_GettingStartedDescription" xml:space="preserve"><value>Choose an approachable effect for your content. Tags guide where to start; they do not rank measured image quality.</value></data>
   <data name="EffectPicker_Advanced" xml:space="preserve"><value>Advanced</value></data>
   <data name="EffectPicker_AdvancedDescription" xml:space="preserve"><value>Video super resolution, frame generation, AI image enhancement, and frame-rate control. Choose according to your GPU and target image.</value></data>
   <data name="EffectPicker_CustomCategory" xml:space="preserve"><value>Custom / uncategorized</value></data>
-  <data name="EffectPicker_CustomCategoryDescription" xml:space="preserve"><value>Installed effects without catalog guidance. See the author's documentation for parameters and chain placement.</value></data>
+  <data name="EffectPicker_CustomCategoryDescription" xml:space="preserve"><value>Installed effects outside this catalog; follow the author's guidance for parameters, size, and chain placement.</value></data>
   <data name="EffectPicker_SearchPlaceholder" xml:space="preserve"><value>Search effects, purposes, or keywords…</value></data>
   <data name="EffectPicker_SearchAutomationName" xml:space="preserve"><value>Search all effects</value></data>
   <data name="EffectPicker_JumpTo" xml:space="preserve"><value>Jump to </value></data>
@@ -1675,4 +1678,132 @@
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Option_4" xml:space="preserve"><value>Low-frequency Temporal Reconstruction</value></data>
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_duplicateFrameFiltering_Label" xml:space="preserve"><value>Duplicate Frame Filtering</value></data>
   <data name="EffectParam_XeSSFG_XeSS_FrameGeneration_duplicateFrameFiltering_Label" xml:space="preserve"><value>Duplicate Frame Filtering</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramXbrYWeight_Label" xml:space="preserve"><value>Y Weight</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramXbrEqThreshold_Label" xml:space="preserve"><value>Eq Threshold</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 Coefficient</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramPreserveSmallDetails_Label" xml:space="preserve"><value>Preserve Small Details</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramPreserveSmallDetails_Option_0" xml:space="preserve"><value>Off</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramPreserveSmallDetails_Option_1" xml:space="preserve"><value>On</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramXbrYWeight_Label" xml:space="preserve"><value>Y Weight</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramXbrEqThreshold_Label" xml:space="preserve"><value>Eq Threshold</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 Coefficient</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramPreserveSmallDetails_Label" xml:space="preserve"><value>Preserve Small Details</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramPreserveSmallDetails_Option_0" xml:space="preserve"><value>Off</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramPreserveSmallDetails_Option_1" xml:space="preserve"><value>On</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramXbrYWeight_Label" xml:space="preserve"><value>Y Weight</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramXbrEqThreshold_Label" xml:space="preserve"><value>Eq Threshold</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 Coefficient</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramPreserveSmallDetails_Label" xml:space="preserve"><value>Preserve Small Details</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramPreserveSmallDetails_Option_0" xml:space="preserve"><value>Off</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramPreserveSmallDetails_Option_1" xml:space="preserve"><value>On</value></data>
+  <data name="EffectParam_xBR_xBR_NoBlend_3x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 Coefficient</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHueProtection_Label" xml:space="preserve"><value>Hue Protection</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDarkProtection_Label" xml:space="preserve"><value>Shadow Protection</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHighlightProtection_Label" xml:space="preserve"><value>Highlight Protection</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLocalCompression_Label" xml:space="preserve"><value>Overcorrection Suppression</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualShowAdvanced_Label" xml:space="preserve"><value>Advanced Adjustments</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLowFrequencyGain_Label" xml:space="preserve"><value>Low-frequency Range Strength</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDetailGain_Label" xml:space="preserve"><value>High-frequency Range Strength</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Label" xml:space="preserve"><value>Diagnostic View</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_0" xml:space="preserve"><value>Final Image</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_1" xml:space="preserve"><value>Raw Total Residual</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_2" xml:space="preserve"><value>Controlled Total Residual</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_3" xml:space="preserve"><value>Lightness Change</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_4" xml:space="preserve"><value>Chroma Change</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_5" xml:space="preserve"><value>Protection Weight</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_6" xml:space="preserve"><value>Gamut Scale</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_7" xml:space="preserve"><value>Compression Scale</value></data>
+  <data name="Profile_Cursor_Refresh.Header" xml:space="preserve"><value>Cursor refresh</value></data>
+  <data name="Profile_Cursor_Refresh.Description" xml:space="preserve"><value>Control cursor refresh; changes apply after restarting scaling.</value></data>
+  <data name="Profile_Cursor_Refresh_Original.Header" xml:space="preserve"><value>Prefer original content frames</value></data>
+  <data name="Profile_Cursor_Refresh_Original.Description" xml:space="preserve"><value>Prefer refreshing the cursor with content frames.</value></data>
+  <data name="Profile_Cursor_Refresh_Minimum.Header" xml:space="preserve"><value>Keep a minimum cursor refresh rate</value></data>
+  <data name="Profile_Cursor_Refresh_Minimum.Description" xml:space="preserve"><value>Refresh a changing cursor when content updates slowly.</value></data>
+  <data name="Profile_Cursor_Refresh_Rate.Header" xml:space="preserve"><value>Minimum refresh rate</value></data>
+  <data name="Profile_Cursor_Refresh_Rate.Description" xml:space="preserve"><value>Target minimum cursor refresh rate.</value></data>
+  <data name="Home_Advanced_DeveloperOptions_DuplicateFrameDetection.Description" xml:space="preserve"><value>Detects and skips identical images across all profiles.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Description" xml:space="preserve"><value>Adjust the input resolution sent to NR.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_inputResolutionPercent_Description" xml:space="preserve"><value>Set the NR input resolution as a percentage of the original image.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Description" xml:space="preserve"><value>Adjust the overall strength of NR processing.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Description" xml:space="preserve"><value>Adjust the strength of color changes from NR.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Description" xml:space="preserve"><value>Adjust the overall strength of lightness changes from NR.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Description" xml:space="preserve"><value>Adjust the strength of darkening corrections from NR.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Description" xml:space="preserve"><value>Adjust the strength of brightening corrections from NR.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualShowAdvanced_Description" xml:space="preserve"><value>Show advanced adjustment parameters.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHueProtection_Description" xml:space="preserve"><value>Reduce NR changes to the hue of the original image.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDarkProtection_Description" xml:space="preserve"><value>Reduce NR changes to dark areas of the original image.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHighlightProtection_Description" xml:space="preserve"><value>Reduce NR changes to bright areas of the original image.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLocalCompression_Description" xml:space="preserve"><value>Reduce excessive local corrections.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLowFrequencyGain_Description" xml:space="preserve"><value>Adjust the strength of smoothly varying corrections.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDetailGain_Description" xml:space="preserve"><value>Adjust the strength of detailed corrections.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Description" xml:space="preserve"><value>View correction and protection effects.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Description" xml:space="preserve"><value>Select the optical flow method used by NR.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Description" xml:space="preserve"><value>Set AMD optical flow quality.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Description" xml:space="preserve"><value>Set NVIDIA optical flow quality.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Description" xml:space="preserve"><value>Select the NR processing style for this pass.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Description" xml:space="preserve"><value>Adjust the NR processing strength for this pass.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Description" xml:space="preserve"><value>Adjust local tone processing for this pass.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Description" xml:space="preserve"><value>Adjust local structure processing for this pass.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_skinStructureStrength_Description" xml:space="preserve"><value>Adjust skin structure processing for this pass.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_useAutoMask_Description" xml:space="preserve"><value>Enable automatic masking for this pass.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_uiCorrection_Description" xml:space="preserve"><value>Improve interface elements and text after NR processing.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_multiPass_Description" xml:space="preserve"><value>Set the number of consecutive NR passes.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Description" xml:space="preserve"><value>Stabilize the image across consecutive frames.</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Advanced_Adjustments" xml:space="preserve"><value>Advanced Adjustments</value></data>
+  <data name="EffectParameter_Help_Range" xml:space="preserve"><value>Range</value></data>
+  <data name="EffectParameter_Help_Default" xml:space="preserve"><value>Default</value></data>
+  <data name="EffectParameter_Help_Step" xml:space="preserve"><value>Step</value></data>
+  <data name="EffectParameter_Help_AntiFlickerRequired" xml:space="preserve"><value>Enable Anti-flicker to adjust this parameter.</value></data>
+
+  <data name="FrameRefresh_Source.Content" xml:space="preserve"><value>Follow source</value></data>
+  <data name="FrameRefresh_Auto.Content" xml:space="preserve"><value>Auto</value></data>
+  <data name="FrameRefresh_Custom.Content" xml:space="preserve"><value>Custom</value></data>
+  <data name="FrameRefresh_Off.Content" xml:space="preserve"><value>Off</value></data>
+  <data name="FrameRefresh_Responsive.Content" xml:space="preserve"><value>Responsive</value></data>
+  <data name="FrameRefresh_OriginalOnly.Content" xml:space="preserve"><value>Original content frames only</value></data>
+  <data name="FrameRefresh_Supplement.Content" xml:space="preserve"><value>Original frames + supplement</value></data>
+  <data name="FrameRefresh_ResetButton.Content" xml:space="preserve"><value>Restore defaults</value></data>
+  <data name="Home_FrameRefresh_Edit.Content" xml:space="preserve"><value>Edit default profile</value></data>
+  <data name="Home_FrameRefresh_Summary" xml:space="preserve"><value>Content: {} · Cursor: {} · Idle redraw: {}</value></data>
+  <data name="FrameRefresh_RestartNotice" xml:space="preserve"><value>Automatically saved. Re-enable scaling or use Save and restart to apply.</value></data>
+  <data name="FrameRefresh_LegacyNotice" xml:space="preserve"><value>This profile uses legacy pacing and cursor settings.</value></data>
+  <data name="FrameRefresh_IdleLimitNotice" xml:space="preserve"><value>Idle redraw follows the content target and retained profile cap.</value></data>
+  <data name="FrameRefresh.Header" xml:space="preserve"><value>Frame rate and refresh</value></data>
+  <data name="FrameRefresh_Content.Header" xml:space="preserve"><value>Content frame rate</value></data>
+  <data name="FrameRefresh_Pacing.Header" xml:space="preserve"><value>Pacing method</value></data>
+  <data name="FrameRefresh_ContentRate.Header" xml:space="preserve"><value>Target base frame rate</value></data>
+  <data name="FrameRefresh_Cursor.Header" xml:space="preserve"><value>Cursor refresh mode</value></data>
+  <data name="FrameRefresh_CursorSupplement.Header" xml:space="preserve"><value>Supplemental cursor refresh rate</value></data>
+  <data name="FrameRefresh_CursorRate.Header" xml:space="preserve"><value>Target minimum refresh rate</value></data>
+  <data name="FrameRefresh_Advanced.Header" xml:space="preserve"><value>Advanced options</value></data>
+  <data name="FrameRefresh_Idle.Header" xml:space="preserve"><value>Continuous idle redraw</value></data>
+  <data name="FrameRefresh_IdleRate.Header" xml:space="preserve"><value>Idle redraw rate</value></data>
+  <data name="FrameRefresh_Reset.Header" xml:space="preserve"><value>Restore refresh defaults</value></data>
+  <data name="Home_FrameRefresh.Header" xml:space="preserve"><value>Default frame rate and refresh</value></data>
+  <data name="FrameRefresh.Description" xml:space="preserve"><value>Saved per profile. Re-enable scaling to apply.</value></data>
+  <data name="FrameRefresh_Content.Description" xml:space="preserve"><value>Sets Magpie’s content processing rate. Auto uses display refresh and the frame generation multiplier.</value></data>
+  <data name="FrameRefresh_Pacing.Description" xml:space="preserve"><value>Selects how content frames are paced.</value></data>
+  <data name="FrameRefresh_ContentRate.Description" xml:space="preserve"><value>Sets the target rate for base content processing.</value></data>
+  <data name="FrameRefresh_Cursor.Description" xml:space="preserve"><value>Selects how the system cursor is refreshed.</value></data>
+  <data name="FrameRefresh_CursorSupplement.Description" xml:space="preserve"><value>Selects automatic or custom supplemental cursor refresh.</value></data>
+  <data name="FrameRefresh_CursorRate.Description" xml:space="preserve"><value>Sets the target minimum rate for supplemental cursor refresh.</value></data>
+  <data name="FrameRefresh_Advanced.Description" xml:space="preserve"><value>Duplicate detection and idle redraw.</value></data>
+  <data name="FrameRefresh_Idle.Description" xml:space="preserve"><value>Redraws the current image while content is idle.</value></data>
+  <data name="FrameRefresh_IdleRate.Description" xml:space="preserve"><value>Sets the target rate for idle redraw.</value></data>
+  <data name="FrameRefresh_Reset.Description" xml:space="preserve"><value>Restores content 60, supplemental cursor 60, idle redraw 30 FPS, and Front Edge.</value></data>
+  <data name="FrameRefresh_Content_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Content frame rate</value></data>
+  <data name="FrameRefresh_Pacing_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Pacing method</value></data>
+  <data name="FrameRefresh_ContentRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Target base frame rate</value></data>
+  <data name="FrameRefresh_Cursor_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Cursor refresh mode</value></data>
+  <data name="FrameRefresh_CursorSupplement_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Supplemental cursor refresh rate</value></data>
+  <data name="FrameRefresh_CursorRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Target minimum refresh rate</value></data>
+  <data name="FrameRefresh_Idle_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Continuous idle redraw</value></data>
+  <data name="FrameRefresh_IdleRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Idle redraw rate</value></data>
+  <data name="FrameRefresh_LegacyCapNotice" xml:space="preserve"><value>Retained legacy cap: {} FPS</value></data>
+
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Config folder</value>
+  </data>
+  <data name="FrameRefresh_DuplicateDetection_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>Duplicate frame detection</value></data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Other options</value></data>
 </root>

@@ -156,6 +156,24 @@
     <CopyFileToFolders Include="xBRZ\xBRZ_Freescale.hlsl">
       <Filter>xBRZ</Filter>
     </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_LV2_Common.hlsli">
+      <Filter>xBR</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_2x.hlsl">
+      <Filter>xBR</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_3x.hlsl">
+      <Filter>xBR</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_4x.hlsl">
+      <Filter>xBR</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_NoBlend_3x.hlsl">
+      <Filter>xBR</Filter>
+    </CopyFileToFolders>
+    <CopyFileToFolders Include="xBR\xBR_Hybrid_2x.hlsl">
+      <Filter>xBR</Filter>
+    </CopyFileToFolders>
     <CopyFileToFolders Include="FXAA\FXAA_High.hlsl">
       <Filter>FXAA</Filter>
     </CopyFileToFolders>
@@ -481,6 +499,9 @@
     </Filter>
     <Filter Include="xBRZ">
       <UniqueIdentifier>{13943e28-4fe6-492b-bee1-1e5458d41763}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="xBR">
+      <UniqueIdentifier>{71f2c3bf-905d-418d-8af2-bef46b7f216c}</UniqueIdentifier>
     </Filter>
     <Filter Include="FXAA">
       <UniqueIdentifier>{dc735dd3-2692-4ab7-a861-792e2c2f8e5d}</UniqueIdentifier>

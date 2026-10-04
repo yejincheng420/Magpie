@@ -109,11 +109,32 @@ struct ProfileViewModel : ProfileViewModelT<ProfileViewModel>,
 
 	bool IsNoGraphicsCard() const noexcept;
 
-	bool IsFrameRateLimiterEnabled() const noexcept;
-	void IsFrameRateLimiterEnabled(bool value);
-
-	double MaxFrameRate() const noexcept;
-	void MaxFrameRate(double value);
+	int32_t ContentFrameRateModeIndex() const noexcept;
+	void ContentFrameRateModeIndex(int32_t value);
+	double ContentFrameRate() const noexcept;
+	void ContentFrameRate(double value);
+	int32_t FrameSyncModeIndex() const noexcept;
+	void FrameSyncModeIndex(int32_t value);
+	bool IsContentPacingEnabled() const noexcept;
+	bool ShowContentFrameRate() const noexcept;
+	int32_t CursorRefreshModeIndex() const noexcept;
+	void CursorRefreshModeIndex(int32_t value);
+	int32_t CursorSupplementModeIndex() const noexcept;
+	void CursorSupplementModeIndex(int32_t value);
+	double CursorSupplementRate() const noexcept;
+	void CursorSupplementRate(double value);
+	bool ShowCursorSupplement() const noexcept;
+	bool ShowCursorSupplementRate() const noexcept;
+	int32_t IdleRedrawModeIndex() const noexcept;
+	void IdleRedrawModeIndex(int32_t value);
+	double IdleRedrawRate() const noexcept;
+	void IdleRedrawRate(double value);
+	bool ShowIdleRedrawRate() const noexcept;
+	int32_t DuplicateFrameDetectionMode() const noexcept;
+	void DuplicateFrameDetectionMode(int32_t value);
+	bool ShowFrameRefreshNotice() const noexcept;
+	hstring FrameRefreshNotice() const noexcept;
+	void ResetFrameRefresh();
 
 	bool IsCaptureTitleBar() const noexcept;
 	void IsCaptureTitleBar(bool value);
@@ -146,7 +167,6 @@ struct ProfileViewModel : ProfileViewModelT<ProfileViewModel>,
 
 	int CursorInterpolationMode() const noexcept;
 	void CursorInterpolationMode(int value);
-
 	bool IsAutoHideCursorEnabled() const noexcept;
 	void IsAutoHideCursorEnabled(bool value);
 
@@ -165,6 +185,8 @@ struct ProfileViewModel : ProfileViewModelT<ProfileViewModel>,
 	void IsDirectFlipDisabled(bool value);
 
 private:
+	void _NotifyFrameRefreshChanged();
+	void _SaveFrameRefresh();
 	fire_and_forget _LoadIcon();
 
 	void _AdaptersService_AdaptersChanged();
@@ -183,6 +205,7 @@ private:
 	::Magpie::MultithreadEvent<bool>::EventRevoker _appThemeChangedRevoker;
 	::Magpie::Event<uint32_t>::EventRevoker _dpiChangedRevoker;
 	::Magpie::Event<>::EventRevoker _adaptersChangedRevoker;
+	::Magpie::Event<::Magpie::Profile&>::EventRevoker _frameSyncChangedRevoker;
 
 	IconElement _icon{ nullptr };
 	IVector<IInspectable> _monitorOptions{ nullptr };

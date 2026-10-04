@@ -63,6 +63,11 @@ Size SimpleStackPanel::MeasureOverride(const Size& availableSize) const {
 		}
 
 		const Size itemSize = item.DesiredSize();
+		// ItemsControl wraps a collapsed template in a visible presenter.
+		// Zero-extent children take neither a slot nor spacing in either pass.
+		if ((isVertical ? itemSize.Height : itemSize.Width) <= 0) {
+			continue;
+		}
 
 		if (isVertical) {
 			finalSize.Height += itemSize.Height;
@@ -132,6 +137,11 @@ Size SimpleStackPanel::ArrangeOverride(Size finalSize) const {
 		}
 
 		const Size itemSize = item.DesiredSize();
+		// ItemsControl wraps a collapsed template in a visible presenter.
+		// Zero-extent children take neither a slot nor spacing in either pass.
+		if ((isVertical ? itemSize.Height : itemSize.Width) <= 0) {
+			continue;
+		}
 		Rect itemRect{ position.X, position.Y, itemSize.Width, itemSize.Height };
 
 		if (isVertical) {

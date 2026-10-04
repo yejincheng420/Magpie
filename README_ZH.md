@@ -3,6 +3,8 @@
 
 🌍 [English](./README.md) | **简体中文**
 
+**当前版本：[Magpie Experimental v0.6.9](https://github.com/SAOG0721/Magpie/releases/tag/v0.6.9-experimental)** · [完整更新说明](docs/RELEASE_NOTES_v0.6.9-experimental.md)
+
 Magpie Experimental 是面向 Windows 的窗口画面处理工具，也是 [Blinue/Magpie](https://github.com/Blinue/Magpie) 的非官方实验分支。它在 Magpie 的窗口缩放与效果系统基础上，探索 DLSS、XeSS、FSR、RTX Video 等技术在游戏、视频和其他窗口内容中的应用。
 
 程序捕获目标窗口的画面，按用户配置的效果组处理，再以全屏或窗口形式显示。目标应用无需为这些效果单独集成接口。本项目不代表 Magpie 官方，实验分支的问题请在本仓库反馈。

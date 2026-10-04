@@ -134,9 +134,46 @@ void AdaptivePresenter::SetReflexController(ReflexController* controller) noexce
 }
 
 void AdaptivePresenter::SetReflexFrame(uint64_t frameId, uint64_t presentId, bool generated) noexcept {
+	if (_reflexFrameId != frameId || _reflexPresentId != presentId) CancelReflexRender();
 	_reflexFrameId = frameId;
 	_reflexPresentId = presentId;
 	_reflexGenerated = generated;
+}
+
+void AdaptivePresenter::BeginReflexRender() noexcept {
+	if (!_reflexRendering && !_isDCompPresenting && _reflex && _reflexFrameId && _reflexPresentId) {
+		_reflex->FrontendRender(_reflexFrameId, _reflexPresentId, true);
+		_reflexRendering = true;
+	}
+}
+
+void AdaptivePresenter::CancelReflexRender() noexcept {
+	if (_reflexRendering) {
+		_reflex->FrontendRender(_reflexFrameId, _reflexPresentId, false);
+		_reflexRendering = false;
+	}
+}
+
+bool AdaptivePresenter::PrepareFrame() noexcept {
+	_frameCapacityBusy = false;
+	if (_reflex) _reflex->SetPresentationAvailable(!_isDCompPresenting && !!_dxgiSwapChain);
+	if (_isDCompPresenting) return true;
+	// FrameLatencyGate retains an acquired token across shared-slot retries and
+	// the subsequent BeginFrame. No GPU work or Reflex render marker on timeout.
+	const DWORD waitResult = _frameLatencyGate.TryAcquire(_frameLatencyWaitableObject.get());
+	if (waitResult == WAIT_TIMEOUT) {
+		_frameCapacityBusy = true;
+		FrameTrace::Mark(FrameTrace::Event::CapacityBusy);
+		return false;
+	} else if (waitResult == WAIT_FAILED) {
+		Logger::Get().Win32Error("Swap-chain frame-latency wait failed");
+		return false;
+	} else if (waitResult != WAIT_OBJECT_0) {
+		Logger::Get().Warn(fmt::format(
+			"Unexpected swap-chain frame-latency wait result: 0x{:x}", waitResult));
+		return false;
+	}
+	return true;
 }
 
 bool AdaptivePresenter::BeginFrame(
@@ -144,8 +181,7 @@ bool AdaptivePresenter::BeginFrame(
 	winrt::com_ptr<ID3D11RenderTargetView>& frameRtv,
 	POINT& drawOffset
 ) noexcept {
-	_frameCapacityBusy = false;
-	if (_reflex) _reflex->SetPresentationAvailable(!_isDCompPresenting && !!_dxgiSwapChain);
+	if (!PrepareFrame()) return false;
 	if (_isDCompPresenting) {
 		HRESULT hr = _dcompSurface->BeginDraw(nullptr, IID_PPV_ARGS(&frameTex), &drawOffset);
 		if (FAILED(hr)) {
@@ -162,29 +198,9 @@ bool AdaptivePresenter::BeginFrame(
 	} else {
 		drawOffset = {};
 
-		{
-			const DWORD waitResult = _frameLatencyGate.TryAcquire(_frameLatencyWaitableObject.get());
-			if (waitResult == WAIT_TIMEOUT) {
-				_frameCapacityBusy = true;
-				FrameTrace::Mark(FrameTrace::Event::CapacityBusy);
-				return false;
-			} else if (waitResult == WAIT_FAILED) {
-				Logger::Get().Win32Error("Swap-chain frame-latency wait failed");
-				return false;
-			} else if (waitResult != WAIT_OBJECT_0) {
-				Logger::Get().Warn(fmt::format(
-					"Unexpected swap-chain frame-latency wait result: 0x{:x}",
-					waitResult));
-				return false;
-			}
-		}
-
 		frameTex = _backBuffer;
 		frameRtv = _backBufferRtv;
-		if (_reflex && _reflexFrameId && _reflexPresentId) {
-			_reflex->FrontendRender(_reflexFrameId, _reflexPresentId, true);
-			_reflexRendering = true;
-		}
+		BeginReflexRender();
 	}
 	
 	return true;
@@ -308,8 +324,7 @@ bool AdaptivePresenter::EndFrame(bool waitForGpu) noexcept {
 
 bool AdaptivePresenter::OnResize() noexcept {
 	if (_reflex) {
-		if (_reflexRendering) _reflex->FrontendRender(_reflexFrameId, _reflexPresentId, false);
-		_reflexRendering = false;
+		CancelReflexRender();
 		_reflex->SetPresentationAvailable(false);
 	}
 	_isResized = true;

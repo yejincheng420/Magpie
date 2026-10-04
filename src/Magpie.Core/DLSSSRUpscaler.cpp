@@ -192,6 +192,7 @@ bool DLSSSRUpscaler::Resize(
 }
 
 bool DLSSSRUpscaler::Draw(const NativeEffectDrawContext& context) noexcept {
+	_resetHistory |= context.inputHistoryReset || !context.isNewCaptureFrame;
 	ID3D11Texture2D* input = context.input;
 	ID3D11Texture2D* output = context.output;
 	if (!_feature || !_parameters || !_zeroMotionVectorsUav || !_zeroDepthUav ||

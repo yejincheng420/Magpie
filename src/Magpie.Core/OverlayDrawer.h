@@ -67,8 +67,10 @@ public:
 	void UpdateAfterActiveEffectsChanged() noexcept;
 
 	bool IsCursorOnCaptionArea() const noexcept {
-		return _isCursorOnCaptionArea;
+		return _isCursorOnCaptionArea && !_toolbarPlacement.IsDragging();
 	}
+	bool IsToolbarAt(POINT screenPoint) const noexcept;
+	bool IsToolbarMoveCursor() const noexcept { return _isToolbarDragHovered || _toolbarPlacement.IsDragging(); }
 
 private:
 	bool _parameterFocusSwitchingEnabled = false;
@@ -134,6 +136,7 @@ private:
 	);
 
 	bool _DrawToolbar(uint32_t fps, int& itemId) noexcept;
+	void _DrawToolbarDockHints(const ToolbarGeometry& geometry) noexcept;
 
 	bool _DrawProfiler(const SmallVector<float>& effectTimings, uint32_t fps, int& itemId) noexcept;
 	bool _DrawEffectParameters(int& itemId) noexcept;
@@ -172,9 +175,9 @@ private:
 	std::vector<std::vector<float>> _draftEffectParameterValues;
 	std::vector<std::vector<float>> _submittedEffectParameterValues;
 	std::vector<EffectOption> _submittedEffectOptions;
-	FrameSyncSettings _startupFrameSync;
-	FrameSyncSettings _draftFrameSync;
-	FrameSyncSettings _submittedFrameSync;
+	FrameRefreshSettings _startupFrameRefresh;
+	FrameRefreshSettings _draftFrameRefresh;
+	FrameRefreshSettings _submittedFrameRefresh;
 	std::shared_ptr<EffectParametersSaveState> _effectParametersSaveState;
 	uint64_t _effectParametersRevision = 0;
 	uint64_t _lastEffectParametersSaveResult = 0;
@@ -197,6 +200,10 @@ private:
 	bool _isToolbarPinned = false;
 	bool _isCursorOnCaptionArea = false;
 	bool _isToolbarItemActive = false;
+	ToolbarPlacement _toolbarPlacement;
+	bool _isToolbarDragHovered = false;
+	std::optional<ImVec4> _stagedToolbarRect, _presentedToolbarRect;
+	std::vector<ImVec4> _stagedToolbarButtons, _presentedToolbarButtons;
 	bool _isProfilerVisible = false;
 	bool _isEffectParametersVisible = false;
 	bool _isEffectParameterInputActive = false;

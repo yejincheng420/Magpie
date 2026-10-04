@@ -14,6 +14,17 @@ parser = source[source.index("DLSSNRSettings ParseDLSSNRSettings("):source.index
 (out / "DLSSNRSettingsUnderTest.h").write_text(settings + "DLSSNRSettings ParseDLSSNRSettings(const EffectOption&, bool = false) noexcept;\n" + parser, encoding="utf-8")
 session = source[source.index("static bool InitializeSignedSnippet(\n"):source.index("static void SetEvaluateParametersUnsafe(")]
 (out / "DLSSNRSessionUnderTest.h").write_text(session, encoding="utf-8")
+live = source[source.index("EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode("):source.index("EffectParameterRestartReason DLSSNRFilter::GetParameterRestartReason(")]
+live += source[source.index("static bool SameNRSettings("):source.index("bool DLSSNRFilter::Initialize(")]
+(out / "DLSSNRLiveUnderTest.h").write_text(live, encoding="utf-8")
+guidance_types = read("src/Magpie.Core/FrameGuidanceTypes.h")
+guidance_types = guidance_types[guidance_types.index("using FrameGuidanceFrameId"):guidance_types.index("struct MotionVectorProviderOutput;")]
+guidance = source[source.index("static FrameGuidanceRegion ScaleGuidanceRegion("):source.index("static bool CompositeResidual(")]
+guidance += source[source.index("static bool SameGuidance("):source.index("static void TransitionColor(")]
+interop = read("src/Magpie.Core/FrameGuidanceD3D12Interop.cpp")
+guidance += interop[interop.index("bool FrameGuidanceD3D12Interop::WaitForProducer("):interop.index("void FrameGuidanceD3D12Interop::Transition(")]
+(out / "DLSSNRGuidanceTypesUnderTest.h").write_text(guidance_types, encoding="utf-8")
+(out / "DLSSNRGuidanceUnderTest.h").write_text(guidance, encoding="utf-8")
 
 shader = read("src/Effects/DLSSNR/DLSSNR_AI_Filter.hlsl")
 blocks = {}
@@ -21,7 +32,8 @@ for block in shader.split("//!PARAMETER\n")[1:]:
     match = re.search(r"^(?:int|float) (\w+);", block, re.M)
     assert match and match[1] not in blocks
     blocks[match[1]] = block[:match.end()]
-assert len(blocks) == 33
+assert len(blocks) == 41
+assert "residualColorMode" not in blocks and "residualShowProtection" not in blocks
 anti = blocks["antiFlicker"]
 assert list(blocks).index("antiFlicker") == list(blocks).index("multiPass") + 1
 assert "//!GROUP DLSSNR · Pass 1" in anti and "//!DEFAULT 0" in anti
@@ -43,7 +55,7 @@ for name in names:
             pattern = rf"//!{field} (.*)"
             assert re.search(pattern, original)[1] == re.search(pattern, later)[1]
 vm = read("src/Magpie/EffectParametersViewModel.cpp")
-assert '240.0 : 120.0' in vm
+assert 'GetEffectParameterColumnLayout(visibleGroupCount, _availableLayoutWidth)' in vm
 xaml = ET.fromstring(read("src/Magpie/ScalingModesPage.xaml"))
 namespace = "{http://schemas.microsoft.com/winfx/2006/xaml/presentation}"
 template = next(element for element in xaml.iter(namespace + "DataTemplate")
@@ -59,4 +71,4 @@ for lang in ("en-US", "zh-Hans", "zh-Hant"):
         assert entries[f"EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Option_{i}"]
     for i in (1, 2, 3):
         assert entries[f"EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_DLSSNR____Pass_{i}"] == f"DLSSNR · Pass {i}"
-print("Multi Pass shader defaults/ranges, 33 unique keys, dynamic-column viewport and localization contracts passed.")
+print("Multi Pass shader defaults/ranges, 42 unique keys, dynamic-column viewport and localization contracts passed.")

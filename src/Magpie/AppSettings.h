@@ -58,12 +58,8 @@ struct _AppSettingsData {
 	DuplicateFrameDetectionMode _duplicateFrameDetectionMode =
 		DuplicateFrameDetectionMode::Dynamic;
 
-	float _minFrameRate = 10.0f;
-	bool _isFrontEdgeSyncEnabled = true;
 	bool _isStopEffectsOnTaskSwitchEnabled = false;
 	bool _isVRREnabled = false;
-	float _frontEdgeSyncFrameRate = 60.0f;
-	FrameSyncMode _frameSyncMode = FrameSyncMode::FrontEdge;
 
 	ToolbarState _fullscreenInitialToolbarState = ToolbarState::AutoHide;
 	ToolbarState _windowedInitialToolbarState = ToolbarState::AutoHide;
@@ -330,6 +326,7 @@ public:
 	void DuplicateFrameDetectionMode(enum DuplicateFrameDetectionMode value) noexcept {
 		_duplicateFrameDetectionMode = value;
 		SaveAsync();
+		DuplicateFrameDetectionModeChanged.Invoke();
 	}
 
 	bool IsStatisticsForDynamicDetectionEnabled() const noexcept {
@@ -348,40 +345,9 @@ public:
 		_isStopEffectsOnTaskSwitchEnabled = value;
 		SaveAsync();
 	}
-	bool IsFrontEdgeSyncEnabled() const noexcept { return _isFrontEdgeSyncEnabled; }
-	void IsFrontEdgeSyncEnabled(bool value) noexcept {
-		if (_isFrontEdgeSyncEnabled == value) return;
-		_isFrontEdgeSyncEnabled = value;
-		FrontEdgeSyncChanged.Invoke();
-		SaveAsync();
-	}
 	bool IsVRREnabled() const noexcept { return _isVRREnabled; }
 	void IsVRREnabled(bool value) noexcept {
 		_isVRREnabled = value;
-		SaveAsync();
-	}
-	float FrontEdgeSyncFrameRate() const noexcept { return _frontEdgeSyncFrameRate; }
-	FrameSyncMode GetFrameSyncMode() const noexcept { return _frameSyncMode; }
-	void SetFrameSyncMode(FrameSyncMode value) noexcept {
-		if (!IsValidFrameSyncMode(value) || _frameSyncMode == value) return;
-		_frameSyncMode = value;
-		FrontEdgeSyncChanged.Invoke();
-		SaveAsync();
-	}
-	void FrontEdgeSyncFrameRate(float value) noexcept {
-		value = SanitizePresentationFrameRate(value);
-		if (_frontEdgeSyncFrameRate == value) return;
-		_frontEdgeSyncFrameRate = value;
-		FrontEdgeSyncChanged.Invoke();
-		SaveAsync();
-	}
-
-	float MinFrameRate() const noexcept {
-		return _minFrameRate;
-	}
-
-	void MinFrameRate(float value) noexcept {
-		_minFrameRate = value;
 		SaveAsync();
 	}
 
@@ -411,12 +377,12 @@ public:
 		return _overlayOptions;
 	}
 
-	Event<> FrontEdgeSyncChanged;
 	Event<AppTheme> ThemeChanged;
 	Event<winrt::Magpie::ShortcutAction> ShortcutChanged;
 	Event<uint32_t> CountdownSecondsChanged;
 	Event<bool> IsShowNotifyIconChanged;
 	Event<bool> IsAutoCheckForUpdatesChanged;
+	Event<> DuplicateFrameDetectionModeChanged;
 
 private:
 	std::filesystem::path _recoveredConfigPath;
@@ -435,9 +401,13 @@ private:
 		const rapidjson::GenericObject<true, rapidjson::Value>& profileObj,
 		Profile& profile,
 		bool isDefault = false,
-		bool legacyParameterFocusSwitching = false
+		bool legacyParameterFocusSwitching = false,
+		const FrameSyncSettings& legacyFrameSync = {},
+		float legacyIdle = 10.0f,
+		bool migrateLegacyRefresh = true
 	) const noexcept;
-	bool _SetDefaultShortcuts() noexcept;
+	bool _LoadShortcuts(const rapidjson::GenericObject<true, rapidjson::Value>& root) noexcept;
+	void _SetDefaultShortcuts() noexcept;
 	void _SetDefaultScalingModes() noexcept;
 
 	bool _UpdateConfigPath(std::filesystem::path* existingConfigPath = nullptr) noexcept;

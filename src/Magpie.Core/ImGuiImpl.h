@@ -54,6 +54,7 @@ public:
 	bool LeftPressHasControl() const noexcept { return _leftPressHasControl; }
 	bool LeftReleaseWasDrag() const noexcept { return _leftReleaseWasDrag; }
 	bool FrameInputCanceled() const noexcept { return _frameContainsCancel; }
+	ImVec2 FrameMousePosition() const noexcept { return _frameMousePosition; }
 
 	std::optional<ImVec4> GetWindowRect(const char* id) const noexcept;
 
@@ -113,7 +114,7 @@ private:
 		uint32_t overflowCount = 0;
 	};
 
-	ImVec2 _CaptureMousePos(float fittsLawAdjustment) const noexcept;
+	ImVec2 _CaptureMousePos() const noexcept;
 	void _QueueMove(ImVec2 position, bool urgent) noexcept;
 	void _QueueCancel(ImVec2 position) noexcept;
 	void _FlushPendingInput() noexcept;
@@ -140,6 +141,7 @@ private:
 	bool _leftReleaseWasDrag = false;
 	float _fittsLawAdjustment = 0.0f;
 	ImVec2 _lastQueuedMousePos{ -FLT_MAX, -FLT_MAX };
+	ImVec2 _frameMousePosition{ -FLT_MAX, -FLT_MAX };
 	uint64_t _frameConsumedSerial = 0;
 	bool _frameContainsCancel = false;
 	std::chrono::steady_clock::time_point _lastSlowInputLog{};

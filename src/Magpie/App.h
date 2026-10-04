@@ -52,6 +52,7 @@ public:
 	}
 
 	static Windows::Globalization::NumberFormatting::INumberFormatter2 DoubleFormatter();
+	static Windows::Globalization::NumberFormatting::INumberFormatter2 IntegerFormatter();
 
 	::Magpie::MultithreadEvent<bool> ThemeChanged;
 

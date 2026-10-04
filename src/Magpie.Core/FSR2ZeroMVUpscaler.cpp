@@ -149,6 +149,9 @@ bool FSR2ZeroMVUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexce
 	ID3D11Texture2D* input = drawContext.input;
 	ID3D11Texture2D* output = drawContext.output;
 	if (!_context) return false;
+	const bool resetInput = drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
+	_resetHistory |= resetInput;
+	if (resetInput && _opticalFlow) _opticalFlow->ResetHistory();
 	static constexpr float ZERO[4]{};
 	static constexpr float REACTIVE_OF[4]{ 0.5f,0.5f,0.5f,0.5f };
 	static constexpr float REACTIVE_ZEROMV[4]{ 0.9f,0.9f,0.9f,0.9f };
@@ -180,7 +183,8 @@ bool FSR2ZeroMVUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexce
 	d.motionVectorScale = { 1.0f, 1.0f };
 	if (_enableJitter) {
 		// Metadata-only jitter: Magpie cannot modify the source application's projection.
-		const uint32_t sample = (_frameIndex++ & 7u) + 1u;
+		const uint32_t phase = drawContext.isNewCaptureFrame ? _frameIndex++ : (_frameIndex ? _frameIndex - 1 : 0);
+		const uint32_t sample = (phase & 7u) + 1u;
 		d.jitterOffset = { Halton(sample, 2) - 0.5f, Halton(sample, 3) - 0.5f };
 	} else {
 		d.jitterOffset = { 0.0f, 0.0f };

@@ -7,6 +7,7 @@ namespace Magpie {
 class ScalingRuntime;
 struct ScalingOptions;
 struct EffectParametersRequest;
+enum class ToolbarDock : uint8_t;
 }
 
 namespace Magpie {
@@ -73,6 +74,8 @@ private:
 	void _StartScale(HWND hWnd, const Profile& profile, bool windowedMode, bool force);
 
 	ScalingError _StartScaleImpl(HWND hWnd, const Profile& profile, bool windowedMode, bool force);
+	void _SaveToolbarDock(std::weak_ptr<const uint8_t> profileIdentity,
+		bool windowed, ToolbarDock dock, uint32_t runId);
 	void _HandleEffectParametersRequest(
 		ScalingOptions&& sessionOptions,
 		EffectParametersRequest&& request
@@ -85,7 +88,8 @@ private:
 
 	Event<winrt::Magpie::ShortcutAction>::EventRevoker _shortcutActivatedRevoker;
 	Event<winrt::Magpie::ShortcutAction>::EventRevoker _toolbarShortcutsChangedRevoker;
-	Event<>::EventRevoker _frameSyncChangedRevoker;
+	Event<Profile&>::EventRevoker _frameSyncChangedRevoker;
+	std::weak_ptr<const uint8_t> _activeFrameSyncProfile;
 
 	std::chrono::steady_clock::time_point _timerStartTimePoint;
 

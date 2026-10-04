@@ -3,8 +3,54 @@
 #include "Logger.h"
 #include "StrHelper.h"
 #include <d3dcompiler.h>
+#include <d3dkmthk.h>
 
 namespace Magpie {
+
+bool DirectXHelper::IsDisplayOnlyAdapter(IDXGIAdapter1* adapter) noexcept {
+	DXGI_ADAPTER_DESC1 desc;
+	const HRESULT hr = adapter->GetDesc1(&desc);
+	if (FAILED(hr)) {
+		Logger::Get().ComWarn("Adapter type probe: GetDesc1 failed; LUID unavailable", hr);
+		return false;
+	}
+
+	const auto logFailure = [&desc](const char* operation, NTSTATUS status) {
+		Logger::Get().Warn(fmt::format(
+			"Adapter type probe: {} failed; LUID={:08X}:{:08X} NTSTATUS=0x{:08X}",
+			operation, static_cast<uint32_t>(desc.AdapterLuid.HighPart),
+			desc.AdapterLuid.LowPart, static_cast<uint32_t>(status)));
+	};
+
+	D3DKMT_OPENADAPTERFROMLUID open{};
+	open.AdapterLuid = desc.AdapterLuid;
+	const NTSTATUS openStatus = D3DKMTOpenAdapterFromLuid(&open);
+	if (openStatus < 0) {
+		logFailure("D3DKMTOpenAdapterFromLuid", openStatus);
+		return false;
+	}
+
+	D3DKMT_ADAPTERTYPE type{};
+	D3DKMT_QUERYADAPTERINFO query{};
+	query.hAdapter = open.hAdapter;
+	query.Type = KMTQAITYPE_ADAPTERTYPE;
+	query.pPrivateDriverData = &type;
+	query.PrivateDriverDataSize = sizeof(type);
+	const NTSTATUS status = D3DKMTQueryAdapterInfo(&query);
+
+	D3DKMT_CLOSEADAPTER close{};
+	close.hAdapter = open.hAdapter;
+	const NTSTATUS closeStatus = D3DKMTCloseAdapter(&close);
+	if (closeStatus < 0) {
+		logFailure("D3DKMTCloseAdapter", closeStatus);
+	}
+	if (status < 0) {
+		logFailure("D3DKMTQueryAdapterInfo", status);
+		// 类型查询不可用时仍让原有 D3D 创建设备与回退路径决定是否可用。
+		return false;
+	}
+	return status >= 0 && type.IndirectDisplayDevice && !type.RenderSupported;
+}
 
 bool DirectXHelper::CompileComputeShader(
 	std::string_view hlsl,

@@ -206,6 +206,7 @@ FrameSourceState DesktopDuplicationFrameSource::_Update() noexcept {
 		return FrameSourceState::Error;
 	}
 
+	_BeginCaptureRender();
 	d3dDC->CopySubresourceRegion(
 		_output.get(), 0, 0, 0, 0, frameTexture.get(), 0, &_frameInMonitor);
 

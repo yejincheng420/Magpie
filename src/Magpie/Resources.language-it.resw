@@ -766,4 +766,11 @@
   <data name="Home_TouchSupport_Info.Title" xml:space="preserve">
     <value>Se il supporto touch fallisce, Magpie potrebbe richiedere privilegi di amministratore prima di effettuare il ridimensionamento per eseguire riparazioni.</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Cartella config.</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Ripristina</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Altre opzioni</value></data>
 </root>

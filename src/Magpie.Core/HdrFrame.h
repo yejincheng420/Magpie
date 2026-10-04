@@ -61,6 +61,7 @@ struct HdrMetadata {
     std::array<float, 8> displayPrimaries{};
     std::array<float, 2> whitePoint{};
     bool HasLuminanceRange() const noexcept;
+    bool operator==(const HdrMetadata&) const noexcept = default;
 };
 
 struct ColorDescription {
@@ -80,6 +81,7 @@ struct ColorDescription {
     float preExposure = 1.0f;
     HdrMetadata metadata{};
     bool IsValid() const noexcept;
+    bool operator==(const ColorDescription&) const noexcept = default;
 };
 
 struct HdrFrameMetadata {

@@ -24,6 +24,7 @@ public:
 	) noexcept;
 
 	void RemoveCache(ID3D11Texture2D* texture) noexcept;
+	void RemoveCache(ID3D11Buffer* buffer) noexcept { _uavMap.erase(buffer); }
 
 private:
 	ID3D11Device5* _d3dDevice = nullptr;

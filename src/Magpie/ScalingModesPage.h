@@ -35,6 +35,7 @@ struct ScalingModesPage : ScalingModesPageT<ScalingModesPage> {
 	void AddEffectButton_Click(IInspectable const& sender, RoutedEventArgs const&);
 
 	void NewScalingModeButton_Click(IInspectable const& sender, RoutedEventArgs const&);
+	void OpenConfigFolderButton_Click(IInspectable const& sender, RoutedEventArgs const&);
 
 	fire_and_forget ResetScalingModesButton_Click(
 		IInspectable const& sender,

@@ -97,7 +97,13 @@ void ShortcutService::_RegisterShortcut(ShortcutAction action) {
 
 	UnregisterHotKey(_hwndHotkey.get(), (int)action);
 
-	if (shortcut.IsEmpty() || ShortcutHelper::CheckShortcut(shortcut) != ShortcutError::NoError) {
+	if (shortcut.IsEmpty()) {
+		// An intentionally unbound action is not a registration failure.
+		isError = false;
+		return;
+	}
+
+	if (ShortcutHelper::CheckShortcut(shortcut) != ShortcutError::NoError) {
 		Logger::Get().Win32Error(fmt::format("注册热键 {} 失败", ShortcutHelper::ToString(action)));
 		isError = true;
 		return;
@@ -126,6 +132,8 @@ void ShortcutService::_RegisterShortcut(ShortcutAction action) {
 
 void ShortcutService::_FireShortcut(ShortcutAction action) {
 	using namespace std::chrono;
+	// Ignore queued hotkey/hook callbacks after a binding has been cleared.
+	if (IsError(action) || AppSettings::Get().GetShortcut(action).IsEmpty()) return;
 
 	// 限制触发频率
 	auto cur = steady_clock::now();
@@ -212,7 +220,8 @@ LRESULT CALLBACK ShortcutService::_LowLevelKeyboardProc(int nCode, WPARAM wParam
 			continue;
 		}
 
-		if (AppSettings::Get().GetShortcut(action) == curKeys) {
+		const Shortcut& shortcut = AppSettings::Get().GetShortcut(action);
+		if (!shortcut.IsEmpty() && shortcut == curKeys) {
 			// Parameter editing activates a window. Let Windows deliver the
 			// registered hotkey so this process receives the user-input activation
 			// permission; a swallowed low-level event only queues our callback.

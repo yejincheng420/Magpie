@@ -5,10 +5,54 @@
 #include <winrt/Windows.ApplicationModel.Resources.h>
 #include <winrt/Windows.ApplicationModel.Resources.Core.h>
 #include <winrt/Windows.Foundation.Collections.h>
+#include <fmt/format.h>
+#include <algorithm>
 
 namespace Magpie {
 
 struct EffectParameterLocalization {
+	static std::string Resource(std::wstring_view key, std::string_view fallback = {}) {
+		try {
+			const auto value = winrt::Windows::ApplicationModel::Resources::ResourceLoader::GetForViewIndependentUse(
+				CommonSharedConstants::APP_RESOURCE_MAP_ID).GetString(winrt::hstring(key));
+			if (!value.empty()) return winrt::to_string(value);
+		} catch (...) {}
+		return std::string(fallback);
+	}
+
+	// Display-only help shared by XAML and the runtime overlay. DLSSNR names
+	// show purpose only; other effects retain their descriptor-based numeric help.
+	static std::string Tooltip(std::string_view effect, const EffectParameterDesc& parameter,
+		bool /*enabled*/ = true) {
+		const std::string_view base = effect == "DLSSNR\\DLSSNR_AI_Filter"
+			? DLSSNRBaseParameter(parameter.name) : std::string_view(parameter.name);
+		std::string text = Resource(L"EffectParam_" + KeyPart(effect) + L"_" + KeyPart(base) + L"_Description");
+		if (text.empty()) {
+			const auto newline = parameter.label.find('\n');
+			if (newline != std::string::npos) text = parameter.label.substr(newline + 1);
+		}
+		if (effect == "DLSSNR\\DLSSNR_AI_Filter") return text;
+		auto append = [&](std::string value) {
+			if (!text.empty()) text += '\n';
+			text += value;
+		};
+		if (!parameter.choices.empty()) {
+			const int value = std::get<1>(parameter.constant).defaultValue;
+			const auto choice = std::find_if(parameter.choices.begin(), parameter.choices.end(),
+				[&](const auto& item) { return item.value == value; });
+			append(Resource(L"EffectParameter_Help_Default", "Default") + ": " +
+				(choice == parameter.choices.end() ? std::to_string(value) : choice->label));
+		} else {
+			std::visit([&](const auto& constant) {
+				append(fmt::format("{} {:.7g}–{:.7g} · {} {:.7g} · {} {:.7g}",
+					Resource(L"EffectParameter_Help_Range", "Range"), double(constant.minValue), double(constant.maxValue),
+					Resource(L"EffectParameter_Help_Default", "Default"), double(constant.defaultValue),
+					Resource(L"EffectParameter_Help_Step", "Step"), double(constant.step)));
+			}, parameter.constant);
+		}
+		return text;
+	}
+
 	static std::wstring KeyPart(std::string_view value) {
 		std::wstring result;
 		for (char c : value) {

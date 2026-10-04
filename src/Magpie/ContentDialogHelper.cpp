@@ -12,8 +12,8 @@ IAsyncOperation<ContentDialogResult> ContentDialogHelper::ShowAsync(ContentDialo
 	assert(activeDialog == nullptr);
 
 	activeDialog = dialog;
+	auto clearActiveDialog = wil::scope_exit([] { activeDialog = nullptr; });
 	ContentDialogResult result = co_await dialog.ShowAsync();
-	activeDialog = nullptr;
 	co_return result;
 }
 

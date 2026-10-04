@@ -37,7 +37,8 @@ public:
 		ID3D11Texture2D** inOutTexture
 	) noexcept;
 
-	void Draw(EffectsProfiler& profiler) const noexcept;
+	bool Draw(EffectsProfiler& profiler) const noexcept;
+	bool ResetCaptureHistory(const EffectDesc& desc) const noexcept;
 	void SetHdrComponent(const HdrComponentStage& stage, HdrTransformParameters parameters) noexcept {
 		_component = stage;
 		_componentTransform = parameters;

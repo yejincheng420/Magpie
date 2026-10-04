@@ -768,6 +768,12 @@ static constexpr const wchar_t* V0_11_100_FILES[] = {
 	L"effects\\Lanczos.hlsl",
 	L"effects\\Nearest.hlsl",
 	L"effects\\SSimDownscaler.hlsl",
+	L"effects\\xBR\\xBR_LV2_Common.hlsli",
+	L"effects\\xBR\\xBR_2x.hlsl",
+	L"effects\\xBR\\xBR_3x.hlsl",
+	L"effects\\xBR\\xBR_4x.hlsl",
+	L"effects\\xBR\\xBR_NoBlend_3x.hlsl",
+	L"effects\\xBR\\xBR_Hybrid_2x.hlsl",
 	L"Microsoft.UI.Xaml.dll",
 	L"resources.pri",
 	L"TouchHelper.exe"
@@ -789,6 +795,7 @@ static constexpr const wchar_t* V0_11_100_FOLDERS[] = {
 	L"effects\\Sharpen",
 	L"effects\\SMAA",
 	L"effects\\xBRZ",
+	L"effects\\xBR",
 	L"effects"
 };
 

@@ -196,6 +196,7 @@ FrameSourceState GraphicsCaptureFrameSource::_Update() noexcept {
 					timestamp - _lastFrameTimestamp100ns >= 50'000'000) {
 					_InterruptCapture("capture long-pause discontinuity");
 				}
+				_BeginCaptureRender();
 				_deviceResources->GetD3DDC()->CopySubresourceRegion(
 					_output.get(), 0, 0, 0, 0, texture.get(), 0, &_frameBox);
 				frame.Close();

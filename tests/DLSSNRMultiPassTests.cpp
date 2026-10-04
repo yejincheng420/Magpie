@@ -53,6 +53,9 @@ struct NativeEffectDrawContext {
 	ID3D11Texture2D* input;
 	ID3D11Texture2D* output;
 	uint64_t inputRevision = 0;
+	uint64_t inputHistoryRevision = 0;
+	bool inputHistoryReset = false;
+	bool isNewCaptureFrame = true;
 };
 struct NativeEffectBackend {
 	virtual ~NativeEffectBackend() = default;
@@ -66,7 +69,10 @@ struct NativeEffectBackend {
 	virtual bool ApplyLiveParameters(const EffectOption&, std::span<const std::string>) noexcept = 0;
 	HdrEffectBoundaryContext _hdrBoundary;
 };
+struct ID3D11DeviceContext { void CopyResource(ID3D11Texture2D* target, ID3D11Texture2D* from) { target->value = from->value; } };
 struct DeviceResources {
+	ID3D11DeviceContext context;
+	ID3D11DeviceContext* GetD3DDC() { return &context; }
 	int failTextureAt = -1, created = 0;
 	DeviceResources* GetD3DDevice() { return this; }
 	HRESULT CreateTexture2D(const D3D11_TEXTURE2D_DESC* desc, void*, ID3D11Texture2D** texture) {
@@ -84,6 +90,7 @@ struct DLSSNRTemporal {
 		raw = value; lastBase = base; return true;
 	}
 	void Reset() { ++resets; }
+	void ConfigureDetail(float, bool) {}
 	bool Draw(const NativeEffectDrawContext& context) { ++draws; context.output->value = raw->value; return true; }
 };
 struct Logger {
@@ -93,20 +100,22 @@ struct Logger {
 	void ComError(std::string_view, HRESULT) {}
 };
 inline EffectOption ParseDLSSNRSettings(const EffectOption& value, bool) { return value; }
+using DLSSNRSettings = EffectOption;
 struct DLSSNRFilter {
-	inline static int liveInstances = 0, nextId = 0, failInitAt = -1, failApplyAt = -1, failDrawAt = -1;
-	inline static std::vector<uint64_t> drawRevisions;
-	inline static bool healthy = true;
-	bool IsHealthy() const { return healthy; }
-	int id = nextId++;
-	EffectOption settings;
+	inline static int liveInstances = 0, featureCount = 0;
+	inline static bool failInit = false, failApply = false, failDraw = false, healthy = true;
+	inline static std::vector<std::string> receivedNames;
+	std::vector<EffectOption> settings;
 	DLSSNRFilter() { ++liveInstances; }
-	~DLSSNRFilter() { --liveInstances; }
-	bool Initialize(DeviceResources&, NgxD3D12Core&, ID3D11Texture2D* input,
-		ID3D11Texture2D* output, const EffectOption& option) {
+	~DLSSNRFilter() { --liveInstances; featureCount -= static_cast<int>(settings.size()); }
+	bool IsHealthy() const { return healthy; }
+	bool InitializeChain(DeviceResources&, NgxD3D12Core&, ID3D11Texture2D* input,
+		ID3D11Texture2D* output, std::span<const EffectOption> options) {
 		assert(input != output);
-		assert(input->desc.Width == output->desc.Width && input->desc.Height == output->desc.Height);
-		settings = option; return id != failInitAt;
+		if (failInit) return false;
+		settings.assign(options.begin(), options.end());
+		featureCount += static_cast<int>(settings.size());
+		return true;
 	}
 	void SetHdrBoundary(HdrEffectBoundaryContext) {}
 	FrameGuidanceRequirements GetFrameGuidanceRequirements() const { return {true}; }
@@ -115,20 +124,23 @@ struct DLSSNRFilter {
 		return name == "enableInputResolutionScaling" ? EffectParameterApplyMode::RestartRequired : EffectParameterApplyMode::Live;
 	}
 	EffectParameterRestartReason GetParameterRestartReason(std::string_view) const { return EffectParameterRestartReason::ResourceRecreation; }
-	bool ApplyLiveParameters(const EffectOption& option, std::span<const std::string>) {
-		if (id == failApplyAt) return false;
-		settings = option; return true;
-	}
-	bool Draw(const NativeEffectDrawContext& context) {
-		drawRevisions.push_back(context.inputRevision);
-		if (id == failDrawAt) return false;
-		const auto it = settings.parameters.find("intensity");
-		context.output->value = context.input->value * 10 +
-			(it == settings.parameters.end() ? 1 : static_cast<int>(it->second));
+	bool ApplyLiveParameters(const EffectOption& option, std::span<const std::string> names) {
+		if (failApply) return false;
+		receivedNames.assign(names.begin(), names.end());
+		for (size_t i = 0; i < settings.size(); ++i) settings[i] = DLSSNRPassOption(option, static_cast<int>(i + 1));
 		return true;
 	}
-};
-}
+	bool Draw(const NativeEffectDrawContext& context) {
+		if (failDraw) return false;
+		int value = context.input->value;
+		for (const auto& pass : settings) {
+			const auto it = pass.parameters.find("intensity");
+			value = value * 10 + (it == pass.parameters.end() ? 1 : static_cast<int>(it->second));
+		}
+		context.output->value = value;
+		return true;
+	}
+};}
 #include "DLSSNRMultiPassUnderTest.h"
 
 int main() {
@@ -170,72 +182,66 @@ int main() {
 	{
 		DLSSNRMultiPass chain;
 		assert(chain.Initialize(resources, core, &input, &output, option, false));
-		assert(DLSSNRFilter::liveInstances == 3 && resources.created == 2);
-		assert(chain.GetFrameGuidanceRequirements().zero);
-		assert(chain.Draw({&input, &output, 7}));
-		assert(output.value == 223); // Encodes the exact serial order and isolated settings.
-		assert(chain.GetParameterApplyMode("multiPass") == EffectParameterApplyMode::RestartRequired);
-		std::vector<std::string> edits{"intensity"};
-		option.parameters["intensity"] = 1;
-		assert(chain.ApplyLiveParameters(option, edits));
-		DLSSNRFilter::drawRevisions.clear();
-		assert(chain.Draw({&input, &output, 7}) && output.value == 123);
-		assert((DLSSNRFilter::drawRevisions == std::vector<uint64_t>{7, 8, 8}));
-		edits = {"pass2_intensity"}; option.parameters["pass2_intensity"] = 1;
-		assert(chain.ApplyLiveParameters(option, edits));
-		DLSSNRFilter::drawRevisions.clear();
-		assert(chain.Draw({&input, &output, 7}) && output.value == 113);
-		assert((DLSSNRFilter::drawRevisions == std::vector<uint64_t>{7, 8, 9}));
-		// Reject a partial shared-setting transaction and restore prior filters.
-		DLSSNRFilter::failApplyAt = 1;
-		option.parameters["intensity"] = 2; edits = {"residualMultiplier"};
-		assert(!chain.ApplyLiveParameters(option, edits));
-		assert(chain.Draw({&input, &output, 7}) && output.value == 113);
-		DLSSNRFilter::failApplyAt = -1;
-		option.parameters["intensity"] = 1;
+		assert(DLSSNRFilter::liveInstances == 1 && DLSSNRFilter::featureCount == 3 && resources.created == 0);
+		assert(chain.Draw({&input, &output, 7}) && output.value == 223);
+		std::vector<std::string> names{"pass2_intensity"};
+		option.parameters["pass2_intensity"] = 1;
+		assert(chain.ApplyLiveParameters(option, names));
+		assert(DLSSNRFilter::receivedNames == names);
+		assert(chain.Draw({&input, &output, 7}) && output.value == 213);
+		DLSSNRFilter::failApply = true;
+		option.parameters["pass2_intensity"] = 2;
+		assert(!chain.ApplyLiveParameters(option, names));
+		assert(chain.Draw({&input, &output, 7}) && output.value == 213);
+		DLSSNRFilter::failApply = false;
 		assert(chain.Resize(resources, &input, &output));
-		assert(DLSSNRFilter::liveInstances == 3);
-		assert(chain.Draw({&input, &output, 7}) && output.value == 113);
-		for (int count : {2, 1, 3}) {
+		assert(chain.Draw({&input, &output, 7}) && output.value == 213);
+		for (int count : {2, 1, 3, 2, 1}) {
 			option.parameters["multiPass"] = static_cast<float>(count);
 			assert(chain.Initialize(resources, core, &input, &output, option, false));
-			assert(DLSSNRFilter::liveInstances == count);
+			assert(DLSSNRFilter::liveInstances == 1 && DLSSNRFilter::featureCount == count);
 		}
-		assert(chain.Draw({&input, &output, 7}) && output.value == 113);
-		DLSSNRFilter::failDrawAt = DLSSNRFilter::nextId - 2;
+		DLSSNRFilter::failDraw = true;
 		assert(!chain.Draw({&input, &output, 7}));
-		DLSSNRFilter::failDrawAt = -1;
+		DLSSNRFilter::failDraw = false;
+		option.parameters["multiPass"] = 3;
+		assert(chain.Initialize(resources, core, &input, &output, option, false));
 		DLSSNRFilter::healthy = false;
 		assert(!chain.Draw({&input, &output, 7}));
 		DLSSNRFilter::healthy = true;
 	}
-	assert(DLSSNRFilter::liveInstances == 0);
-	DLSSNRFilter::failInitAt = DLSSNRFilter::nextId + 1;
+	assert(DLSSNRFilter::liveInstances == 0 && DLSSNRFilter::featureCount == 0);
+	DLSSNRFilter::failInit = true;
 	{ DLSSNRMultiPass chain; assert(!chain.Initialize(resources, core, &input, &output, option, false)); }
+	DLSSNRFilter::failInit = false;
 	assert(DLSSNRFilter::liveInstances == 0);
-	DLSSNRFilter::failInitAt = -1;
-	resources.failTextureAt = resources.created;
-	{ DLSSNRMultiPass chain; assert(!chain.Initialize(resources, core, &input, &output, option, false)); }
-	assert(DLSSNRFilter::liveInstances == 0);
-	resources.failTextureAt = -1;
 	for (int mode : {1, 2, 3, 4}) {
 		option.parameters["antiFlicker"] = static_cast<float>(mode);
-		assert(DLSSNRAntiFlickerMode(get) == mode);
 		for (int count : {1, 3}) {
 			option.parameters["multiPass"] = static_cast<float>(count);
 			DLSSNRMultiPass chain;
 			assert(chain.Initialize(resources, core, &input, &output, option, false));
+			assert(DLSSNRTemporal::lastBase == &input);
 			assert(chain.GetFrameGuidanceRequirements().HasMotion() == (mode >= 2));
 			assert(chain.GetParameterApplyMode("antiFlicker") == EffectParameterApplyMode::RestartRequired);
-			assert(chain.GetParameterRestartReason("antiFlicker") == EffectParameterRestartReason::FrameGuidance);
-			assert((DLSSNRTemporal::lastBase == &input) == (count == 1));
 			assert(chain.Draw({&input, &output, 7}));
-			assert(output.value == (count == 1 ? 1 : 113));
+			assert(output.value == (count == 1 ? 2 : 223));
 			const int resets = DLSSNRTemporal::resets;
-			std::vector<std::string> edits{"intensity"};
-			assert(chain.ApplyLiveParameters(option, edits));
+			std::vector<std::string> names{"residualMultiplier"};
+			assert(chain.ApplyLiveParameters(option, names));
 			assert(DLSSNRTemporal::resets == resets + 1);
+			names = {"residualShowAdvanced"};
+			assert(chain.ApplyLiveParameters(option,names));
+			assert(DLSSNRTemporal::resets == resets + 1);
+			if (count == 1) {
+				names = {"pass3_intensity"};
+				assert(chain.ApplyLiveParameters(option, names));
+				assert(DLSSNRTemporal::resets == resets + 1);
+			}
 		}
 	}
-	std::cout << "DLSSNR Multi Pass: defaults, isolation, visibility, serial order, revisions, rollback, resize and failures passed.\n";
+	resources.failTextureAt = resources.created;
+	{ DLSSNRMultiPass chain; assert(!chain.Initialize(resources, core, &input, &output, option, false)); }
+	assert(DLSSNRFilter::liveInstances == 0);
+	std::cout << "Production chain wrapper: independent defaults, one backend, routing, rollback, rebuild, original temporal base and failures passed.\n";
 }

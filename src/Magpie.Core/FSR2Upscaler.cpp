@@ -135,6 +135,7 @@ bool FSR2Upscaler::Resize(DeviceResources& r, ID3D11Texture2D* i, ID3D11Texture2
 }
 
 bool FSR2Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+	_resetHistory |= drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
 	ID3D11Texture2D* input = drawContext.input;
 	ID3D11Texture2D* output = drawContext.output;
 	if (!_context) return false;

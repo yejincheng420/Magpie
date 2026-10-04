@@ -11,8 +11,11 @@ import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parents[2]
 source = (root / 'src/Magpie.Core/FrameSourceBase.cpp').read_text(encoding='utf-8-sig')
-branch = source[source.index('\tconst bool newSequence ='):source.index('\nColorDescription FrameSourceBase::')]
+start = source.index('FrameSourceState FrameSourceBase::_FilterDuplicateFrame(')
+branch = source[source.index('{', start) + 1:source.index('\nColorDescription FrameSourceBase::')]
 branch = branch[:branch.rindex('\n}')]
+header = (root / 'src/Magpie.Core/FrameSourceBase.h').read_text(encoding='utf-8-sig')
+reasons = re.search(r'enum class CaptureFrameReason.*?\n};', header, re.S)[0]
 
 for family, effect in [('DLSSFG', 'DLSS_FrameGeneration'), ('XeSSFG', 'XeSS_FrameGeneration')]:
     shader = (root / f'src/Effects/{family}/{effect}.hlsl').read_text(encoding='utf-8-sig')
@@ -33,11 +36,12 @@ harness = r'''
 #include <cstdlib>
 enum class FrameSourceState { NewFrame, Waiting, Error };
 enum class DuplicateFrameDetectionMode { Always, Dynamic, Never };
+REASONS
 struct ScalingOptions {
     DuplicateFrameDetectionMode duplicateFrameDetectionMode = DuplicateFrameDetectionMode::Dynamic;
-    bool game = false;
+    bool game = false, statistics = false;
     bool Is3DGameMode() const { return game; }
-    bool IsStatisticsForDynamicDetectionEnabled() const { return false; }
+    bool IsStatisticsForDynamicDetectionEnabled() const { return statistics; }
 };
 struct ScalingWindow {
     ScalingOptions options;
@@ -64,6 +68,8 @@ struct Logger {
 };
 constexpr uint16_t INITIAL_CHECK_COUNT=16, INITIAL_SKIP_COUNT=1, MAX_SKIP_COUNT=16;
 struct Capture {
+    CaptureFrameReason _lastUpdateReason = CaptureFrameReason::Accepted;
+    bool _duplicateComparisonFailed = false, initFailed = false, mapFailed = false;
     uint64_t _duplicateCaptureSequence=0, _captureSequence=1;
     bool _isCheckingForDuplicateFrame=true;
     uint32_t _framesLeft=16, _nextSkipCount=1;
@@ -74,11 +80,13 @@ struct Capture {
     std::atomic<std::pair<uint32_t,uint32_t>> _statistics{{0,0}};
     int checks=0, initializations=0;
     bool duplicate=true;
-    bool _InitCheckingForDuplicateFrame() { ++initializations; _prevFrame.valid=true; return true; }
-    bool _IsDuplicateFrame() { ++checks; return duplicate; }
-    FrameSourceState Feed(FrameSourceState state=FrameSourceState::NewFrame) {
+    void _ResetDuplicateDetection() { _prevFrame=nullptr; _prevFrameSrv=nullptr; _isCheckingForDuplicateFrame=true; _framesLeft=16; _nextSkipCount=1; }
+    bool _InitCheckingForDuplicateFrame() { ++initializations; _prevFrame.valid=true; return !initFailed; }
+    bool _IsDuplicateFrame() { ++checks; _duplicateComparisonFailed=mapFailed; return !mapFailed && duplicate; }
+    FrameSourceState Feed(FrameSourceState state=FrameSourceState::NewFrame, bool forceAccept=false) {
 BRANCH
     }
+
 };
 static void Check(bool value, const char* message) {
     if (!value) { std::cerr << message << '\n'; std::exit(1); }
@@ -108,9 +116,45 @@ int main() {
                 "capture waiting/error state changed");
         }
     }
+    options.game=false;
+    options.duplicateFrameDetectionMode=DuplicateFrameDetectionMode::Always;
+    Capture hdr; hdr._duplicateFrameDetectionOverride=true;
+    Check(hdr.Feed(State::NewFrame,true)==State::NewFrame && hdr.initializations==1,"HDR first frame failed to establish baseline");
+    Check(hdr.Feed()==State::Waiting,"HDR duplicate after first conversion was accepted");
+    const int before=hdr.checks;
+    Check(hdr.Feed(State::NewFrame,true)==State::NewFrame && hdr.checks==before,"metadata/resource change was filtered");
+    Check(hdr.Feed()==State::Waiting,"metadata update lost duplicate baseline");
+    hdr.mapFailed=true;
+    Check(hdr.Feed()==State::NewFrame && hdr._lastUpdateReason==CaptureFrameReason::ReadbackFailed,"readback failure reused a stale duplicate flag");
+    hdr.mapFailed=false;
+    Check(hdr.Feed()==State::Waiting,"comparison did not recover after readback failure");
+    Capture unavailable; unavailable.initFailed=true;
+    Check(unavailable.Feed()==State::NewFrame && !unavailable._prevFrame,"partial initialization poisoned future comparisons");
+    unavailable.initFailed=false;
+    Check(unavailable.Feed()==State::NewFrame && unavailable.Feed()==State::Waiting,"initialization retry lost first-frame semantics");
+    options.duplicateFrameDetectionMode=DuplicateFrameDetectionMode::Dynamic;
+    for (bool stats : {false,true}) {
+        options.statistics=stats;
+        Capture dynamic; dynamic.duplicate=false;
+        Check(dynamic.Feed()==State::NewFrame,"Dynamic lost first frame");
+        int run=0, maximum=0;
+        for (int n=0;n<2000;++n) {
+            Check(dynamic.Feed()==State::NewFrame,"Dynamic rejected changed input");
+            if (dynamic._lastUpdateReason==CaptureFrameReason::DynamicSkip) { ++run; if (run>maximum) maximum=run; }
+            else run=0;
+        }
+        Check(maximum==16,"Dynamic skip bound changed");
+        dynamic.duplicate=true;
+        bool filtered=false;
+        for (int n=0;n<17;++n) if (dynamic.Feed()==State::Waiting) { filtered=true; break; }
+        Check(filtered && dynamic._isCheckingForDuplicateFrame && dynamic._nextSkipCount==1,"Dynamic duplicate failed to restore checking");
+        Check(dynamic.Feed()==State::Waiting,"Dynamic repeated duplicate advanced processing");
+        ++dynamic._captureSequence;
+        Check(dynamic.Feed()==State::NewFrame,"Dynamic recovery first frame was filtered");
+    }
     std::cout << "FG duplicate filter: on/off overrides all global modes and game mode; non-FG policy, changed pixels and capture restart passed.\n";
 }
-'''.replace('BRANCH', branch)
+'''.replace('BRANCH', branch).replace('REASONS', reasons)
 output = Path(sys.argv[1]).resolve()
 output.mkdir(parents=True, exist_ok=True)
 (output / 'fg_duplicate.cpp').write_text(harness, encoding='utf-8')

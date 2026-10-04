@@ -13,6 +13,7 @@ protected:
 	bool _Initialize(HWND hwndAttach) noexcept override;
 
 public:
+	bool PrepareFrame() noexcept override;
 	bool BeginFrame(
 		winrt::com_ptr<ID3D11Texture2D>& frameTex,
 		winrt::com_ptr<ID3D11RenderTargetView>& frameRtv,
@@ -22,6 +23,8 @@ public:
 	bool EndFrame(bool waitForGpu = false) noexcept override;
 	void SetReflexController(ReflexController* controller) noexcept override;
 	void SetReflexFrame(uint64_t frameId, uint64_t presentId, bool generated) noexcept override;
+	void BeginReflexRender() noexcept override;
+	void CancelReflexRender() noexcept override;
 	bool WaitForFrameCapacity(DWORD timeout) noexcept override;
 	bool WasFrameCapacityBusy() const noexcept override { return _frameCapacityBusy; }
 	bool SupportsDeferredPresent() const noexcept override {

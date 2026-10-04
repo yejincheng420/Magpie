@@ -6,6 +6,8 @@
 #include "ErrorService.h"
 #include "Logger.h"
 #include "ProfileService.h"
+#include "ProfileIdentity.h"
+#include "DLSSNRDetailParameters.h"
 #include "ScalingMode.h"
 #include "ScalingModesService.h"
 #include "ScalingService.h"
@@ -67,10 +69,9 @@ void ScalingService::Initialize() {
 	_toolbarShortcutsChangedRevoker = AppSettings::Get().ShortcutChanged(auto_revoke, [this](ShortcutAction) {
 		if (_scalingRuntime) _scalingRuntime->UpdateToolbarShortcutLabels(GetToolbarShortcutLabels());
 	});
-	_frameSyncChangedRevoker = AppSettings::Get().FrontEdgeSyncChanged(auto_revoke, [this] {
-		const auto& settings = AppSettings::Get();
-		if (_scalingRuntime) _scalingRuntime->UpdateFrameSyncSettings(
-			{ settings.IsFrontEdgeSyncEnabled(), settings.FrontEdgeSyncFrameRate(), settings.GetFrameSyncMode() });
+	_frameSyncChangedRevoker = ProfileService::Get().FrameRefreshChanged(auto_revoke, [this](const Profile& profile) {
+		if (_activeFrameSyncProfile.lock() != profile.runtimeIdentity) return;
+		if (_scalingRuntime) _scalingRuntime->UpdateFrameRefreshSettings(profile.frameRefresh);
 	});
 
 	// 立即检查前台窗口
@@ -358,6 +359,31 @@ void ScalingService::_StartScale(HWND hWnd, const Profile& profile, bool windowe
 	}
 }
 
+void ScalingService::_SaveToolbarDock(std::weak_ptr<const uint8_t> profileIdentity,
+	bool windowed, ToolbarDock dock, uint32_t runId) {
+	// Run and identity checks happen on the settings/UI thread. Never retain a
+	// Profile pointer or vector index across the asynchronous handoff.
+	if (!_scalingRuntime || _scalingRuntime->State() != ScalingState::Scaling ||
+		_scalingRuntime->RunId() != runId) return;
+	const auto identity = profileIdentity.lock();
+	if (!identity) return;
+	auto& settings = AppSettings::Get();
+	Profile* target = nullptr;
+	if (settings.DefaultProfile().runtimeIdentity == identity) {
+		target = &settings.DefaultProfile();
+	} else {
+		for (auto& profile : settings.Profiles()) {
+			if (profile.runtimeIdentity == identity) { target = &profile; break; }
+		}
+	}
+	if (!target) return;
+	auto& current = target->toolbarDocks.ForMode(windowed);
+	dock = SanitizeToolbarDock(uint32_t(dock));
+	if (current == dock) return;
+	current = dock;
+	settings.SaveAsync();
+}
+
 ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, bool windowedMode, bool force) {
 	// ScalingRuntime::Start 会检查是否正在缩放，这里提前检查以避免无效操作
 	if (!force && _scalingRuntime->State() == ScalingState::Scaling) {
@@ -421,9 +447,7 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 
 	options.graphicsCardId = profile.graphicsCardId;
 	options.captureMethod = profile.captureMethod;
-	if (profile.isFrameRateLimiterEnabled) {
-		options.maxFrameRate = profile.maxFrameRate;
-	}
+	ApplyFrameRefreshSettings(options, profile.frameRefresh);
 	options.multiMonitorUsage = profile.multiMonitorUsage;
 	options.preferredMonitorId = profile.preferredMonitorId;
 	options.destAlignment = profile.destAlignment;
@@ -521,22 +545,20 @@ ScalingError ScalingService::_StartScaleImpl(HWND hWnd, const Profile& profile, 
 	options.IsStatisticsForDynamicDetectionEnabled(settings.IsStatisticsForDynamicDetectionEnabled());
 	options.IsInlineParams(settings.IsInlineParams());
 	options.IsFP16Disabled(settings.IsFP16Disabled());
-	options.isFrontEdgeSyncEnabled = settings.IsFrontEdgeSyncEnabled();
-	// VRR is deferred while its settings card is hidden. Ignore an older
-	// saved true value so no session silently enables tearing.
+	options.frameSyncProfileIdentity = profile.runtimeIdentity;
+	_activeFrameSyncProfile = profile.runtimeIdentity;
+	// VRR remains deferred while its settings card is hidden.
 	options.isVRREnabled = false;
-	options.frontEdgeSyncFrameRate = settings.FrontEdgeSyncFrameRate();
-	options.frameSyncMode = settings.GetFrameSyncMode();
-
-	if (options.maxFrameRate) {
-		// 最小帧数不能大于最大帧数
-		options.minFrameRate = std::min(settings.MinFrameRate(), *options.maxFrameRate);
-	} else {
-		options.minFrameRate = settings.MinFrameRate();
-	}
 
 	options.fullscreenInitialToolbarState = settings.FullscreenInitialToolbarState();
 	options.windowedInitialToolbarState = settings.WindowedInitialToolbarState();
+	options.toolbarDocks = profile.toolbarDocks;
+	options.saveToolbarDock = [identity = std::weak_ptr<const uint8_t>(profile.runtimeIdentity)](
+		bool windowed, ToolbarDock dock, uint32_t runId) noexcept {
+		App::Get().Dispatcher().TryEnqueue([identity, windowed, dock, runId] {
+			ScalingService::Get()._SaveToolbarDock(identity, windowed, dock, runId);
+		});
+	};
 	options.screenshotsDir = settings.ScreenshotsDir();
 	if (options.screenshotsDir.empty()) {
 		// 回落到使用当前目录
@@ -725,8 +747,11 @@ void ScalingService::_HandleEffectParametersRequest(
 	}
 
 	auto& settings = AppSettings::Get();
-	FrameSyncSettings mergedFrameSync{ settings.IsFrontEdgeSyncEnabled(), settings.FrontEdgeSyncFrameRate(), settings.GetFrameSyncMode() };
-	if (!MergeFrameSyncSettings(mergedFrameSync, request.previousFrameSync, request.frameSync)) {
+	Profile* frameSyncProfile = FindProfileByIdentity(settings.DefaultProfile(), settings.Profiles(),
+		sessionOptions.frameSyncProfileIdentity);
+	if (!frameSyncProfile) { fail(EffectParametersSaveError::SessionExpired); return; }
+	FrameRefreshSettings mergedFrameRefresh = frameSyncProfile->frameRefresh;
+	if (!MergeFrameRefreshSettings(mergedFrameRefresh, request.previousFrameRefresh, request.frameRefresh)) {
 		fail(EffectParametersSaveError::Conflict);
 		return;
 	}
@@ -762,16 +787,22 @@ void ScalingService::_HandleEffectParametersRequest(
 		for (const auto& [name, value] : request.effects[i].parameters) {
 			after[StrHelper::UTF8ToUTF16(name)] = value;
 		}
+		if (destination.name == L"DLSSNR\\DLSSNR_AI_Filter") {
+			NormalizeDLSSNRDetailParameters(before);
+			NormalizeDLSSNRDetailParameters(after);
+			NormalizeDLSSNRDetailParameters(destination.parameters);
+		}
 		if (!MergeEffectParameterChanges(destination.parameters, before, after)) {
 			fail(EffectParametersSaveError::Conflict);
 			return;
 		}
 	}
 	mode.effects = std::move(merged);
-	settings.IsFrontEdgeSyncEnabled(mergedFrameSync.enabled);
-	settings.FrontEdgeSyncFrameRate(mergedFrameSync.frameRate);
-	settings.SetFrameSyncMode(mergedFrameSync.mode);
-	if (sessionOptions.parameterSession) sessionOptions.parameterSession->DesiredFrameSync(mergedFrameSync);
+	if (frameSyncProfile->frameRefresh != mergedFrameRefresh) {
+		frameSyncProfile->frameRefresh = mergedFrameRefresh;
+		ProfileService::Get().FrameRefreshChanged.Invoke(*frameSyncProfile);
+	}
+	if (sessionOptions.parameterSession) sessionOptions.parameterSession->DesiredFrameRefresh(mergedFrameRefresh);
 	for (uint32_t i = 0; i < mode.effects.size(); ++i) {
 		ScalingModesService::Get().EffectParametersChanged.Invoke(sessionOptions.scalingModeIdx, i);
 	}
@@ -791,7 +822,7 @@ void ScalingService::_HandleEffectParametersRequest(
 	std::vector<EffectOption> effects;
 	for (const EffectItem& item : mode.effects) effects.push_back(static_cast<EffectOption>(item));
 	if (!_scalingRuntime->RestartWithEffectParameters(request.hwndSource,
-		request.hwndScaling, request.scalingRunId, std::move(effects), mergedFrameSync)) {
+		request.hwndScaling, request.scalingRunId, std::move(effects), mergedFrameRefresh)) {
 		fail(EffectParametersSaveError::SessionExpired);
 	}
 }

@@ -1,9 +1,9 @@
 #Requires -Version 7.0
-param([string]$RapidJsonIncludeDirectory)
+param([string]$RapidJsonIncludeDirectory, [string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $syncRepo = Split-Path $PSScriptRoot -Parent
 $syncWorkspace = Split-Path $syncRepo -Parent
-$syncOutput = Join-Path $syncWorkspace 'release/v0.6.7-local/obj/FrameSyncModesTests'
+$syncOutput = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $env:TEMP ('Magpie-FrameSync-' + [guid]::NewGuid()) }
 New-Item -ItemType Directory -Path $syncOutput -Force | Out-Null
 $syncVswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 $syncVs = & $syncVswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath | Select-Object -First 1

@@ -14,6 +14,7 @@ public:
 		ID3D11Texture2D* base, ID3D11Texture2D* raw, ID3D11Texture2D* output,
 		int mode, bool hdr) noexcept;
 	void Reset() noexcept;
+	void ConfigureDetail(float chromaStrength, bool enforceZero) noexcept;
 	bool Draw(const NativeEffectDrawContext& context) noexcept;
 private:
 	struct Impl;

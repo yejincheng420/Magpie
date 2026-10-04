@@ -16,5 +16,6 @@ namespace Magpie {
 
 		ShortcutAction Action;
 		String Title;
+		Boolean IsClearButtonVisible;
 	}
 }

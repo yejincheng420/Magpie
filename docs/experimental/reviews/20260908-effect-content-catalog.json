@@ -12612,6 +12612,221 @@
       "confidence": "high"
     },
     {
+      "id": "xBR\\xBR_2x",
+      "sourcePath": "src/Effects/xBR/xBR_2x.hlsl",
+      "displayName": "xBR 2x",
+      "family": "xBR",
+      "category": "upscale",
+      "subcategory": "像素画",
+      "tags": ["放大与超分", "像素画", "xBR", "LV2", "2x"],
+      "purpose": "xBR LV2 固定 2× 边缘感知像素画放大。",
+      "description": "沿检测到的斜线方向平滑像素画轮廓；与 xBRZ 是不同算法入口。",
+      "variantNotes": "标准 LV2 Blend，固定 2×；可调颜色差异、边缘系数与小细节保护。",
+      "outputSize": {
+        "mode": "expression",
+        "widthExpression": "INPUT_WIDTH * 2",
+        "heightExpression": "INPUT_HEIGHT * 2",
+        "summary": "固定倍率：宽 ×2，高 ×2"
+      },
+      "pipeline": {
+        "suggestedStage": "主要像素画缩放步骤",
+        "before": ["按需添加的 CRT 风格／显示调整"],
+        "after": [],
+        "constraints": ["固定倍率，按源码尺寸表达式使用"],
+        "reason": "先完成边缘感知整数倍放大，再做显示风格处理。"
+      },
+      "recommendation": {
+        "level": "situational",
+        "reason": "适合低分辨率像素画；与同倍率 xBRZ 比较轮廓和小细节。",
+        "conditions": ["先使用默认参数", "检查像素字体、眼睛和点状高光是否被磨圆"]
+      },
+      "cost": {"qualitative": "中", "basis": "1 个 pass、21 点邻域采样；未进行目标 GPU 基准测试。"},
+      "requirements": ["Direct3D 11 效果着色器可编译", "目标输出尺寸满足固定 2× 表达式"],
+      "hdr": {
+        "status": "conditional",
+        "profile": "SDRCompatible",
+        "route": "rgba-u8",
+        "validationStatus": "not_runtime_tested",
+        "showWarning": true,
+        "warning": "HDR 会经过 SDR-compatible 边界；高光、透明边缘和颜色仍需实机检查。",
+        "evidence": "xBR 使用 RGB 阈值并保留 HDR 兼容路径中的源 alpha；尚未完成真实 HDR 画面验证。"
+      },
+      "evidence": [{"path": "src/Effects/xBR/xBR_2x.hlsl", "line": 1, "note": "Effect v4 固定 2× 入口。"}],
+      "confidence": "high"
+    },
+    {
+      "id": "xBR\\xBR_3x",
+      "sourcePath": "src/Effects/xBR/xBR_3x.hlsl",
+      "displayName": "xBR 3x",
+      "family": "xBR",
+      "category": "upscale",
+      "subcategory": "像素画",
+      "tags": ["放大与超分", "像素画", "xBR", "LV2", "3x"],
+      "purpose": "xBR LV2 固定 3× 边缘感知像素画放大。",
+      "description": "沿检测到的斜线方向平滑像素画轮廓；与 xBRZ 是不同算法入口。",
+      "variantNotes": "标准 LV2 Blend，固定 3×；可调颜色差异、边缘系数与小细节保护。",
+      "outputSize": {
+        "mode": "expression",
+        "widthExpression": "INPUT_WIDTH * 3",
+        "heightExpression": "INPUT_HEIGHT * 3",
+        "summary": "固定倍率：宽 ×3，高 ×3"
+      },
+      "pipeline": {
+        "suggestedStage": "主要像素画缩放步骤",
+        "before": ["按需添加的 CRT 风格／显示调整"],
+        "after": [],
+        "constraints": ["固定倍率，按源码尺寸表达式使用"],
+        "reason": "先完成边缘感知整数倍放大，再做显示风格处理。"
+      },
+      "recommendation": {
+        "level": "situational",
+        "reason": "适合低分辨率像素画；与同倍率 xBRZ 和 NoBlend 比较轮廓及调色板。",
+        "conditions": ["先使用默认参数", "检查像素字体、眼睛和点状高光是否被磨圆"]
+      },
+      "cost": {"qualitative": "中", "basis": "1 个 pass、21 点邻域采样；未进行目标 GPU 基准测试。"},
+      "requirements": ["Direct3D 11 效果着色器可编译", "目标输出尺寸满足固定 3× 表达式"],
+      "hdr": {
+        "status": "conditional",
+        "profile": "SDRCompatible",
+        "route": "rgba-u8",
+        "validationStatus": "not_runtime_tested",
+        "showWarning": true,
+        "warning": "HDR 会经过 SDR-compatible 边界；高光、透明边缘和颜色仍需实机检查。",
+        "evidence": "xBR 使用 RGB 阈值并保留 HDR 兼容路径中的源 alpha；尚未完成真实 HDR 画面验证。"
+      },
+      "evidence": [{"path": "src/Effects/xBR/xBR_3x.hlsl", "line": 1, "note": "Effect v4 固定 3× 入口。"}],
+      "confidence": "high"
+    },
+    {
+      "id": "xBR\\xBR_4x",
+      "sourcePath": "src/Effects/xBR/xBR_4x.hlsl",
+      "displayName": "xBR 4x",
+      "family": "xBR",
+      "category": "upscale",
+      "subcategory": "像素画",
+      "tags": ["放大与超分", "像素画", "xBR", "LV2", "4x"],
+      "purpose": "xBR LV2 固定 4× 边缘感知像素画放大。",
+      "description": "沿检测到的斜线方向平滑像素画轮廓；与 xBRZ 是不同算法入口。",
+      "variantNotes": "标准 LV2 Blend，固定 4×；可调颜色差异、边缘系数与小细节保护。",
+      "outputSize": {
+        "mode": "expression",
+        "widthExpression": "INPUT_WIDTH * 4",
+        "heightExpression": "INPUT_HEIGHT * 4",
+        "summary": "固定倍率：宽 ×4，高 ×4"
+      },
+      "pipeline": {
+        "suggestedStage": "主要像素画缩放步骤",
+        "before": ["按需添加的 CRT 风格／显示调整"],
+        "after": [],
+        "constraints": ["固定倍率，按源码尺寸表达式使用"],
+        "reason": "先完成边缘感知整数倍放大，再做显示风格处理。"
+      },
+      "recommendation": {
+        "level": "situational",
+        "reason": "适合低分辨率像素画；4× 会放大规则差异，应重点检查细线和尖角。",
+        "conditions": ["先使用默认参数", "与 xBRZ 4x 对比尖角和曲线"]
+      },
+      "cost": {"qualitative": "中到高", "basis": "1 个 pass、21 点邻域采样且输出像素数为 16 倍；未进行目标 GPU 基准测试。"},
+      "requirements": ["Direct3D 11 效果着色器可编译", "目标输出尺寸满足固定 4× 表达式"],
+      "hdr": {
+        "status": "conditional",
+        "profile": "SDRCompatible",
+        "route": "rgba-u8",
+        "validationStatus": "not_runtime_tested",
+        "showWarning": true,
+        "warning": "HDR 会经过 SDR-compatible 边界；高光、透明边缘和颜色仍需实机检查。",
+        "evidence": "xBR 使用 RGB 阈值并保留 HDR 兼容路径中的源 alpha；尚未完成真实 HDR 画面验证。"
+      },
+      "evidence": [{"path": "src/Effects/xBR/xBR_4x.hlsl", "line": 1, "note": "Effect v4 固定 4× 入口。"}],
+      "confidence": "high"
+    },
+    {
+      "id": "xBR\\xBR_NoBlend_3x",
+      "sourcePath": "src/Effects/xBR/xBR_NoBlend_3x.hlsl",
+      "displayName": "xBR NoBlend 3x",
+      "family": "xBR",
+      "category": "upscale",
+      "subcategory": "像素画",
+      "tags": ["放大与超分", "像素画", "xBR", "NoBlend", "3x", "调色板"],
+      "purpose": "固定 3× 的 xBR 调色板保持放大。",
+      "description": "只从邻域已有颜色中选择输出色，不插值新 RGB 值，适合有限调色板像素画。",
+      "variantNotes": "NoBlend 固定 3×；上游推荐奇数整数倍率，只有 Lv2 边缘系数可调。",
+      "outputSize": {
+        "mode": "expression",
+        "widthExpression": "INPUT_WIDTH * 3",
+        "heightExpression": "INPUT_HEIGHT * 3",
+        "summary": "固定倍率：宽 ×3，高 ×3"
+      },
+      "pipeline": {
+        "suggestedStage": "主要像素画缩放步骤",
+        "before": ["按需添加的 CRT 风格／显示调整"],
+        "after": [],
+        "constraints": ["固定 3×", "保持 Point 采样以避免生成新颜色"],
+        "reason": "先保持原调色板完成整数倍放大，再添加显示风格。"
+      },
+      "recommendation": {
+        "level": "situational",
+        "reason": "适合有限调色板、需要避免插值新颜色的像素画。",
+        "conditions": ["与标准 xBR 3x 对比斜线锯齿", "检查透明边缘"]
+      },
+      "cost": {"qualitative": "中", "basis": "1 个 pass、21 点邻域采样；未进行目标 GPU 基准测试。"},
+      "requirements": ["Direct3D 11 效果着色器可编译", "目标输出尺寸满足固定 3× 表达式"],
+      "hdr": {
+        "status": "conditional",
+        "profile": "SDRCompatible",
+        "route": "rgba-u8",
+        "validationStatus": "not_runtime_tested",
+        "showWarning": true,
+        "warning": "HDR 会经过 SDR-compatible 边界；调色板保持结论仅针对效果输入的 SDR RGB 值。",
+        "evidence": "输出 RGB 由邻域颜色分支直接选择；HDR 路径仍需实机验证。"
+      },
+      "evidence": [{"path": "src/Effects/xBR/xBR_NoBlend_3x.hlsl", "line": 1, "note": "Effect v4 NoBlend 固定 3× 入口。"}],
+      "confidence": "high"
+    },
+    {
+      "id": "xBR\\xBR_Hybrid_2x",
+      "sourcePath": "src/Effects/xBR/xBR_Hybrid_2x.hlsl",
+      "displayName": "xBR Hybrid 2x",
+      "family": "xBR",
+      "category": "upscale",
+      "subcategory": "像素画",
+      "tags": ["放大与超分", "像素画", "xBR", "Hybrid", "Reverse-AA", "2x"],
+      "purpose": "xBR 与 Reverse-AA 组合的固定 2× 放大。",
+      "description": "面向已带抗锯齿、渐变或较平滑的低分辨率 2D 素材；不是标准像素画调色板保持路线。",
+      "variantNotes": "固定 2×、gamma-coded SDR；HDR 兼容模式回退到 Point 2×，不执行未验证的 Gamma 运算。",
+      "outputSize": {
+        "mode": "expression",
+        "widthExpression": "INPUT_WIDTH * 2",
+        "heightExpression": "INPUT_HEIGHT * 2",
+        "summary": "固定倍率：宽 ×2，高 ×2"
+      },
+      "pipeline": {
+        "suggestedStage": "主要 2D 图像缩放步骤",
+        "before": ["按需添加的锐化或显示风格"],
+        "after": [],
+        "constraints": ["仅对 gamma-coded SDR 执行 Hybrid", "HDR 模式回退为 Point 2×"],
+        "reason": "Reverse-AA 需要在原始低分辨率边缘上工作，后续再做输出分辨率相关处理。"
+      },
+      "recommendation": {
+        "level": "advanced",
+        "reason": "用于已平滑或预抗锯齿的低分辨率 2D 素材；纯像素画先尝试标准 xBR。",
+        "conditions": ["只在 SDR 下评价 Hybrid 画质", "比较渐变、色带和半透明边缘"]
+      },
+      "cost": {"qualitative": "中到高", "basis": "1 个 pass、21 点邻域采样，并包含 Reverse-AA 与 Gamma 运算；未进行目标 GPU 基准测试。"},
+      "requirements": ["Direct3D 11 效果着色器可编译", "Hybrid 处理需要 gamma-coded SDR 输入"],
+      "hdr": {
+        "status": "conditional",
+        "profile": "SDRCompatible",
+        "route": "rgba-u8",
+        "validationStatus": "fallback_only",
+        "showWarning": true,
+        "warning": "Hybrid 尚不支持 HDR 算法处理；HDR 兼容模式只进行 Point 2× 回退。",
+        "evidence": "源码在 MP_HDR_COMPATIBILITY 下显式跳过 Gamma/Reverse-AA 并保留源 alpha。"
+      },
+      "evidence": [{"path": "src/Effects/xBR/xBR_Hybrid_2x.hlsl", "line": 1, "note": "Effect v4 Hybrid 固定 2× 入口和 HDR 回退。"}],
+      "confidence": "high"
+    },
+    {
       "id": "xBRZ\\xBRZ_2x",
       "sourcePath": "src/Effects/xBRZ/xBRZ_2x.hlsl",
       "displayName": "xBRZ 2x",

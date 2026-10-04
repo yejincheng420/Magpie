@@ -135,6 +135,11 @@
   <data name="Home_Activation_Timer_Delay.Header" xml:space="preserve">
     <value>倒计时时长（秒）</value>
   </data>
+  <data name="ShortcutDialog_Clear" xml:space="preserve"><value>清除</value></data>
+  <data name="ShortcutControl_ClearButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve"><value>清除快捷键</value></data>
+  <data name="ShortcutControl_NotSet.Text" xml:space="preserve"><value>未设置</value></data>
+  <data name="ShortcutControl_ClearAutomationName" xml:space="preserve"><value>清除：{0}</value></data>
+  <data name="Overlay_Parameters_InputHintWithoutShortcut" xml:space="preserve"><value>Ctrl+单击滑条输入数值。Esc：编辑→预览→关闭；点击预览面板继续编辑。</value></data>
   <data name="ShortcutDialog_Cancel" xml:space="preserve">
     <value>取消</value>
   </data>
@@ -241,16 +246,16 @@
     <value>启动</value>
   </data>
   <data name="ScalingModes_General_Export.Text" xml:space="preserve">
-    <value>配置导出</value>
+    <value>导出</value>
   </data>
   <data name="ScalingModes_General_Import.Text" xml:space="preserve">
-    <value>配置导入</value>
+    <value>导入</value>
   </data>
   <data name="ScalingModes_General_MoreOptions.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve">
-    <value>更多选项</value>
+    <value>其他选项</value>
   </data>
   <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
-    <value>重置配置</value>
+    <value>重置</value>
   </data>
   <data name="ScalingModes_ResetDialog_Title" xml:space="preserve">
     <value>重置效果组配置？</value>
@@ -758,7 +763,7 @@
     <value>开发者模式已启用。</value>
   </data>
   <data name="Home_Advanced_DeveloperOptions_DuplicateFrameDetection.Header" xml:space="preserve">
-    <value>检测重复帧</value>
+    <value>重复帧检测</value>
   </data>
   <data name="Home_Advanced_DeveloperOptions_DuplicateFrameDetection_Always.Content" xml:space="preserve">
     <value>总是检测</value>
@@ -899,7 +904,7 @@
     <value>仅适用于全屏模式</value>
   </data>
   <data name="Home_Toolbar.Description" xml:space="preserve">
-    <value>工具栏位于输出窗口顶部，提供帧率显示、截图等功能；窗口模式下还可拖动工具栏移动输出窗口。</value>
+    <value>按住工具栏空白或帧率区域，可移动工具栏并停靠在顶部或底部。</value>
   </data>
   <data name="Home_Toolbar.Header" xml:space="preserve">
     <value>工具栏</value>
@@ -1218,20 +1223,18 @@
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_multiplier_Label" xml:space="preserve"><value>帧数倍率</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_DLSSNR" xml:space="preserve"><value>DLSSNR</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Detail_Control" xml:space="preserve"><value>细节控制</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Label" xml:space="preserve"><value>调整输入分辨率
-（会降低 DLSSNR 质量）</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Label" xml:space="preserve"><value>调整输入分辨率</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_inputResolutionPercent_Label" xml:space="preserve"><value>输入分辨率（%）</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Label" xml:space="preserve"><value>NR 强度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Label" xml:space="preserve"><value>局部结构强度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Label" xml:space="preserve"><value>局部色调强度</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>反射／辉光控制</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>残差明度倍率</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>残差倍率</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Label" xml:space="preserve"><value>残差饱和度倍率</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Label" xml:space="preserve"><value>阴影／结构控制</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>亮部/发光强度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>明度总强度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>总强度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Label" xml:space="preserve"><value>色度强度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Label" xml:space="preserve"><value>暗部/结构强度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_skinStructureStrength_Label" xml:space="preserve"><value>皮肤结构强度</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Label" xml:space="preserve"><value>NR 风格
-（0 默认，1 自然，2 电影）</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Label" xml:space="preserve"><value>NR 风格</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_uiCorrection_Label" xml:space="preserve"><value>NR 界面修正</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_useAutoMask_Label" xml:space="preserve"><value>自动遮罩</value></data>
   <data name="EffectParam_Deband_grain_Label" xml:space="preserve"><value>颗粒强度</value></data>
@@ -1449,7 +1452,7 @@
   <data name="Home_FrameSync_VRR.Header" xml:space="preserve"><value>VRR（可变刷新率）</value></data>
   <data name="Home_FrameSync_VRR.Description" xml:space="preserve"><value>允许兼容 FreeSync / G-SYNC 的呈现。需同时在显示器和驱动中开启 VRR；未生效时可能出现撕裂。</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Label" xml:space="preserve"><value>帧率模式</value></data>
-  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>跟随帧同步目标</value></data>
+  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>跟随内容帧率目标</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_1" xml:space="preserve"><value>自定义</value></data>
   <data name="Overlay_EffectParameters_AutoRestart" xml:space="preserve"><value>自动重启</value></data>
   <data name="Overlay_EffectParameters_Reason_AutoRestart" xml:space="preserve"><value>编辑结束后自动停用效果组，等待 500 毫秒再重新启用，以重建 DLSSNR 历史。</value></data>
@@ -1563,7 +1566,7 @@
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_saturation_Label" xml:space="preserve"><value>饱和度</value></data>
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_middleGray_Label" xml:space="preserve"><value>中间灰</value></data>
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_peakNits_Label" xml:space="preserve"><value>峰值亮度（尼特）</value></data>
-  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge Sync</value></data>
+  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge</value></data>
   <data name="FrameSync_Mode_Async.Content" xml:space="preserve"><value>Async</value></data>
   <data name="FrameSync_Mode_Reflex.Content" xml:space="preserve"><value>NVIDIA Reflex</value></data>
   <data name="Home_FrameSync_Mode.Header" xml:space="preserve"><value>同步模式</value></data>
@@ -1639,19 +1642,19 @@
   <data name="Profile_Advanced_ParameterFocusSwitching.Description" xml:space="preserve"><value>参数实时调整时启用焦点切换，但在部分窗口上运行时可能不稳定。</value></data>
   <data name="Home_Advanced_StopEffectsOnTaskSwitch.Header" xml:space="preserve"><value>切屏时自动停用生效效果组</value></data>
   <data name="Home_Advanced_StopEffectsOnTaskSwitch.Description" xml:space="preserve"><value>如果在使用 DLSSNR 时进行切屏，会让你感觉像吃了毒蘑菇，你可以尝试启用它。</value></data>
-  <data name="EffectPicker_CustomSummary" xml:space="preserve"><value>自定义效果器；请参考作者说明。</value></data>
-  <data name="EffectPicker_CustomDetails" xml:space="preserve"><value>此效果器尚无用途评审。请参考作者提供的用途、参数与组合说明。HDR 兼容性待验证。</value></data>
+  <data name="EffectPicker_CustomSummary" xml:space="preserve"><value>自定义效果器；用途与参数请参考作者说明。</value></data>
+  <data name="EffectPicker_CustomDetails" xml:space="preserve"><value>请按作者说明选择参数、输出尺寸和组合位置。HDR 输入、所需运行库及显卡条件也应由作者说明确认。</value></data>
   <data name="EffectPicker_All" xml:space="preserve"><value>全部</value></data>
   <data name="EffectPicker_AllDescription" xml:space="preserve"><value>查看已安装效果器的用途、适用场景和组合建议。</value></data>
   <data name="EffectPicker_DetailScrollHint" xml:space="preserve"><value>Ctrl + 滚轮：滚动说明</value></data>
   <data name="EffectPicker_NameSeparator" xml:space="preserve"><value>，</value></data>
   <data name="EffectPicker_EffectCountSuffix" xml:space="preserve"><value> 个效果器</value></data>
   <data name="EffectPicker_GettingStarted" xml:space="preserve"><value>入门</value></data>
-  <data name="EffectPicker_GettingStartedDescription" xml:space="preserve"><value>按适用场景选择容易上手的效果器，先从一个开始比较画面。</value></data>
+  <data name="EffectPicker_GettingStartedDescription" xml:space="preserve"><value>按场景选择容易上手的方案；标签表示建议的尝试顺序，不代表实测画质排名。</value></data>
   <data name="EffectPicker_Advanced" xml:space="preserve"><value>进阶</value></data>
   <data name="EffectPicker_AdvancedDescription" xml:space="preserve"><value>视频超分、补帧、AI 画面重塑与帧率调节，按显卡条件和目标画面选择。</value></data>
   <data name="EffectPicker_CustomCategory" xml:space="preserve"><value>自定义／未归类</value></data>
-  <data name="EffectPicker_CustomCategoryDescription" xml:space="preserve"><value>已安装但尚无用途说明的效果器。请参考作者说明选择参数和组合位置。</value></data>
+  <data name="EffectPicker_CustomCategoryDescription" xml:space="preserve"><value>目录中没有收录的已安装效果器；请参考作者说明选择参数、尺寸与组合位置。</value></data>
   <data name="EffectPicker_SearchPlaceholder" xml:space="preserve"><value>搜索效果器、用途或关键词……</value></data>
   <data name="EffectPicker_SearchAutomationName" xml:space="preserve"><value>搜索全部效果器</value></data>
   <data name="EffectPicker_JumpTo" xml:space="preserve"><value>定位 </value></data>
@@ -1675,4 +1678,132 @@
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Option_4" xml:space="preserve"><value>低频时域重建</value></data>
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_duplicateFrameFiltering_Label" xml:space="preserve"><value>重复帧过滤</value></data>
   <data name="EffectParam_XeSSFG_XeSS_FrameGeneration_duplicateFrameFiltering_Label" xml:space="preserve"><value>重复帧过滤</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramXbrYWeight_Label" xml:space="preserve"><value>亮度权重</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramXbrEqThreshold_Label" xml:space="preserve"><value>相等阈值</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 边缘系数</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramPreserveSmallDetails_Label" xml:space="preserve"><value>保护小细节</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramPreserveSmallDetails_Option_0" xml:space="preserve"><value>关闭</value></data>
+  <data name="EffectParam_xBR_xBR_2x_paramPreserveSmallDetails_Option_1" xml:space="preserve"><value>开启</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramXbrYWeight_Label" xml:space="preserve"><value>亮度权重</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramXbrEqThreshold_Label" xml:space="preserve"><value>相等阈值</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 边缘系数</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramPreserveSmallDetails_Label" xml:space="preserve"><value>保护小细节</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramPreserveSmallDetails_Option_0" xml:space="preserve"><value>关闭</value></data>
+  <data name="EffectParam_xBR_xBR_3x_paramPreserveSmallDetails_Option_1" xml:space="preserve"><value>开启</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramXbrYWeight_Label" xml:space="preserve"><value>亮度权重</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramXbrEqThreshold_Label" xml:space="preserve"><value>相等阈值</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 边缘系数</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramPreserveSmallDetails_Label" xml:space="preserve"><value>保护小细节</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramPreserveSmallDetails_Option_0" xml:space="preserve"><value>关闭</value></data>
+  <data name="EffectParam_xBR_xBR_4x_paramPreserveSmallDetails_Option_1" xml:space="preserve"><value>开启</value></data>
+  <data name="EffectParam_xBR_xBR_NoBlend_3x_paramXbrLv2Coefficient_Label" xml:space="preserve"><value>LV2 边缘系数</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHueProtection_Label" xml:space="preserve"><value>色相保护</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDarkProtection_Label" xml:space="preserve"><value>暗部保护</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHighlightProtection_Label" xml:space="preserve"><value>亮部保护</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLocalCompression_Label" xml:space="preserve"><value>过度修正抑制</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualShowAdvanced_Label" xml:space="preserve"><value>进阶调整</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLowFrequencyGain_Label" xml:space="preserve"><value>低频范围强度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDetailGain_Label" xml:space="preserve"><value>高频范围强度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Label" xml:space="preserve"><value>诊断视图</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_0" xml:space="preserve"><value>最终图</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_1" xml:space="preserve"><value>原始总残差</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_2" xml:space="preserve"><value>受控总残差</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_3" xml:space="preserve"><value>明度变化</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_4" xml:space="preserve"><value>色度变化</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_5" xml:space="preserve"><value>保护权重</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_6" xml:space="preserve"><value>色域压缩比例</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_7" xml:space="preserve"><value>局部压缩比例</value></data>
+  <data name="Profile_Cursor_Refresh.Header" xml:space="preserve"><value>光标刷新</value></data>
+  <data name="Profile_Cursor_Refresh.Description" xml:space="preserve"><value>控制光标刷新，重启缩放后生效。</value></data>
+  <data name="Profile_Cursor_Refresh_Original.Header" xml:space="preserve"><value>优先随原始内容帧更新</value></data>
+  <data name="Profile_Cursor_Refresh_Original.Description" xml:space="preserve"><value>优先随内容帧刷新光标。</value></data>
+  <data name="Profile_Cursor_Refresh_Minimum.Header" xml:space="preserve"><value>保持光标最低刷新率</value></data>
+  <data name="Profile_Cursor_Refresh_Minimum.Description" xml:space="preserve"><value>内容更新较慢时，刷新变化的光标。</value></data>
+  <data name="Profile_Cursor_Refresh_Rate.Header" xml:space="preserve"><value>最低刷新率</value></data>
+  <data name="Profile_Cursor_Refresh_Rate.Description" xml:space="preserve"><value>光标的目标最低刷新率。</value></data>
+  <data name="Home_Advanced_DeveloperOptions_DuplicateFrameDetection.Description" xml:space="preserve"><value>检测并跳过相同画面，全局生效。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Description" xml:space="preserve"><value>调整送入 NR 的输入分辨率。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_inputResolutionPercent_Description" xml:space="preserve"><value>设置 NR 输入分辨率占原图的比例。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Description" xml:space="preserve"><value>调节 NR 处理效果的整体强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Description" xml:space="preserve"><value>调节 NR 带来的颜色变化强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Description" xml:space="preserve"><value>调节 NR 明暗变化的总强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Description" xml:space="preserve"><value>调节 NR 变暗修正的强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Description" xml:space="preserve"><value>调节 NR 变亮修正的强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualShowAdvanced_Description" xml:space="preserve"><value>展开进阶调整参数。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHueProtection_Description" xml:space="preserve"><value>减少 NR 对原画面的色相变化。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDarkProtection_Description" xml:space="preserve"><value>减少 NR 对原画面暗部的改动。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHighlightProtection_Description" xml:space="preserve"><value>减少 NR 对原画面亮部的改动。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLocalCompression_Description" xml:space="preserve"><value>减弱局部过强的修正。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLowFrequencyGain_Description" xml:space="preserve"><value>调节修正中平缓变化部分的强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDetailGain_Description" xml:space="preserve"><value>调节修正中细节变化部分的强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Description" xml:space="preserve"><value>查看各类修正和保护效果。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Description" xml:space="preserve"><value>选择 NR 使用的光流方法。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Description" xml:space="preserve"><value>设置 AMD 光流质量。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Description" xml:space="preserve"><value>设置 NVIDIA 光流质量。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Description" xml:space="preserve"><value>选择本层 NR 的处理风格。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Description" xml:space="preserve"><value>调节本层 NR 的处理强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Description" xml:space="preserve"><value>调节本层的局部色调处理强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Description" xml:space="preserve"><value>调节本层的局部结构处理强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_skinStructureStrength_Description" xml:space="preserve"><value>调节本层的皮肤结构处理强度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_useAutoMask_Description" xml:space="preserve"><value>启用本层 NR 的自动遮罩。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_uiCorrection_Description" xml:space="preserve"><value>改善本层 NR 处理后的界面与文字。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_multiPass_Description" xml:space="preserve"><value>设置连续执行的 NR 层数。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Description" xml:space="preserve"><value>稳定连续帧的画面。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Advanced_Adjustments" xml:space="preserve"><value>进阶调整</value></data>
+  <data name="EffectParameter_Help_Range" xml:space="preserve"><value>范围</value></data>
+  <data name="EffectParameter_Help_Default" xml:space="preserve"><value>默认</value></data>
+  <data name="EffectParameter_Help_Step" xml:space="preserve"><value>步进</value></data>
+  <data name="EffectParameter_Help_AntiFlickerRequired" xml:space="preserve"><value>开启抗闪烁后可调节此参数。</value></data>
+
+  <data name="FrameRefresh_Source.Content" xml:space="preserve"><value>跟随源</value></data>
+  <data name="FrameRefresh_Auto.Content" xml:space="preserve"><value>自动</value></data>
+  <data name="FrameRefresh_Custom.Content" xml:space="preserve"><value>自定义</value></data>
+  <data name="FrameRefresh_Off.Content" xml:space="preserve"><value>关闭</value></data>
+  <data name="FrameRefresh_Responsive.Content" xml:space="preserve"><value>响应优先</value></data>
+  <data name="FrameRefresh_OriginalOnly.Content" xml:space="preserve"><value>仅随原始内容帧</value></data>
+  <data name="FrameRefresh_Supplement.Content" xml:space="preserve"><value>原始帧优先并补充</value></data>
+  <data name="FrameRefresh_ResetButton.Content" xml:space="preserve"><value>恢复默认</value></data>
+  <data name="Home_FrameRefresh_Edit.Content" xml:space="preserve"><value>编辑默认配置</value></data>
+  <data name="Home_FrameRefresh_Summary" xml:space="preserve"><value>内容：{} · 光标：{} · 空闲重绘：{}</value></data>
+  <data name="FrameRefresh_RestartNotice" xml:space="preserve"><value>修改自动保存；重新启用缩放或使用“保存并重启”后生效。</value></data>
+  <data name="FrameRefresh_LegacyNotice" xml:space="preserve"><value>此配置使用旧版节奏与光标设置。</value></data>
+  <data name="FrameRefresh_IdleLimitNotice" xml:space="preserve"><value>空闲重绘按内容目标与原配置上限运行。</value></data>
+  <data name="FrameRefresh.Header" xml:space="preserve"><value>帧率与刷新</value></data>
+  <data name="FrameRefresh_Content.Header" xml:space="preserve"><value>内容帧率</value></data>
+  <data name="FrameRefresh_Pacing.Header" xml:space="preserve"><value>节奏控制方式</value></data>
+  <data name="FrameRefresh_ContentRate.Header" xml:space="preserve"><value>目标基础帧率</value></data>
+  <data name="FrameRefresh_Cursor.Header" xml:space="preserve"><value>光标刷新方式</value></data>
+  <data name="FrameRefresh_CursorSupplement.Header" xml:space="preserve"><value>光标补充刷新率</value></data>
+  <data name="FrameRefresh_CursorRate.Header" xml:space="preserve"><value>目标最低刷新率</value></data>
+  <data name="FrameRefresh_Advanced.Header" xml:space="preserve"><value>高级选项</value></data>
+  <data name="FrameRefresh_Idle.Header" xml:space="preserve"><value>空闲持续重绘</value></data>
+  <data name="FrameRefresh_IdleRate.Header" xml:space="preserve"><value>空闲重绘率</value></data>
+  <data name="FrameRefresh_Reset.Header" xml:space="preserve"><value>恢复刷新默认设置</value></data>
+  <data name="Home_FrameRefresh.Header" xml:space="preserve"><value>默认帧率与刷新</value></data>
+  <data name="FrameRefresh.Description" xml:space="preserve"><value>按配置保存，重新启用缩放后生效。</value></data>
+  <data name="FrameRefresh_Content.Description" xml:space="preserve"><value>控制 Magpie 的内容处理帧率；自动模式按显示刷新率和补帧倍率计算。</value></data>
+  <data name="FrameRefresh_Pacing.Description" xml:space="preserve"><value>选择内容帧的处理节奏。</value></data>
+  <data name="FrameRefresh_ContentRate.Description" xml:space="preserve"><value>设置基础内容处理的目标帧率。</value></data>
+  <data name="FrameRefresh_Cursor.Description" xml:space="preserve"><value>选择系统光标的刷新方式。</value></data>
+  <data name="FrameRefresh_CursorSupplement.Description" xml:space="preserve"><value>选择自动或自定义的光标补充刷新率。</value></data>
+  <data name="FrameRefresh_CursorRate.Description" xml:space="preserve"><value>设置光标补充刷新的目标最低帧率。</value></data>
+  <data name="FrameRefresh_Advanced.Description" xml:space="preserve"><value>重复帧检测与空闲重绘。</value></data>
+  <data name="FrameRefresh_Idle.Description" xml:space="preserve"><value>空闲时重绘当前画面。</value></data>
+  <data name="FrameRefresh_IdleRate.Description" xml:space="preserve"><value>设置空闲重绘的目标帧率。</value></data>
+  <data name="FrameRefresh_Reset.Description" xml:space="preserve"><value>恢复内容 60、光标补充 60、空闲重绘 30 FPS，节奏方式为 Front Edge。</value></data>
+  <data name="FrameRefresh_Content_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>内容帧率</value></data>
+  <data name="FrameRefresh_Pacing_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>节奏控制方式</value></data>
+  <data name="FrameRefresh_ContentRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>目标基础帧率</value></data>
+  <data name="FrameRefresh_Cursor_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>光标刷新方式</value></data>
+  <data name="FrameRefresh_CursorSupplement_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>光标补充刷新率</value></data>
+  <data name="FrameRefresh_CursorRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>目标最低刷新率</value></data>
+  <data name="FrameRefresh_Idle_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>空闲持续重绘</value></data>
+  <data name="FrameRefresh_IdleRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>空闲重绘率</value></data>
+  <data name="FrameRefresh_LegacyCapNotice" xml:space="preserve"><value>保留的旧上限：{} FPS</value></data>
+
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>配置文件夹</value>
+  </data>
+  <data name="FrameRefresh_DuplicateDetection_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>重复帧检测</value></data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>其他选项</value></data>
 </root>

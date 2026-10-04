@@ -3,6 +3,7 @@
 #include "CursorManager.h"
 #include "DeviceResources.h"
 #include "DirectXHelper.h"
+#include "FrameTrace.h"
 #include "Logger.h"
 #include "Renderer.h"
 #include "ScalingOptions.h"
@@ -47,6 +48,8 @@ struct VertexPositionTexture {
 
 bool CursorDrawer::Initialize(DeviceResources& deviceResources) noexcept {
 	_deviceResources = &deviceResources;
+	_refreshPolicy.Configure(ScalingWindow::Get().Options().cursorRefresh, 60.0);
+	_lastCursorActiveTime = std::chrono::steady_clock::now();
 
 	ID3D11Device* d3dDevice = deviceResources.GetD3DDevice();
 
@@ -86,29 +89,24 @@ bool CursorDrawer::Initialize(DeviceResources& deviceResources) noexcept {
 
 void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 	ID3D11Texture2D* sceneTexture) noexcept {
+	_drawSucceeded = _Draw(backBuffer, drawOffset, sceneTexture);
+}
+
+bool CursorDrawer::_Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
+	ID3D11Texture2D* sceneTexture) noexcept {
 	_isBackgroundDependent = false;
 	const ScalingWindow& scalingWindow = ScalingWindow::Get();
-
-	bool isCursorActive = false;
-	const auto [cursorHandle, cursorPos] = _GetCursorState(isCursorActive);
-
-	if (isCursorActive) {
-		// 启用自动隐藏时光标形状或位置变化后应记录新的形状、位置和变化时间。位置由
-		// _lastCursorPos 记录。
-		_lastRawCursorHandle = scalingWindow.CursorManager().CursorHandle();
-		_lastCursorActiveTime = std::chrono::steady_clock::now();
-	}
-
-	_lastCursorHandle = cursorHandle;
-	_lastCursorPos = cursorPos;
+	const auto state = _refreshPolicy.Prepare(_SampleCursorState(), std::chrono::steady_clock::now());
+	const HCURSOR cursorHandle = reinterpret_cast<HCURSOR>(state.handle);
+	const POINT cursorPos{ state.x, state.y };
 
 	if (!cursorHandle) {
-		return;
+		return true;
 	}
 
 	const _CursorInfo* cursorInfo = _ResolveCursor(cursorHandle);
 	if (!cursorInfo) {
-		return;
+		return false;
 	}
 
 	const ScalingOptions& options = scalingWindow.Options();
@@ -151,7 +149,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 		cursorRect.right <= viewportRect.left ||
 		cursorRect.bottom <= viewportRect.top
 	) {
-		return;
+		return true;
 	}
 
 	const SIZE viewportSize = Win32Helper::GetSizeOfRect(viewportRect);
@@ -178,7 +176,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 		HRESULT hr = d3dDC->Map(_vtxBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &ms);
 		if (FAILED(hr)) {
 			Logger::Get().ComError("Map 失败", hr);
-			return;
+			return false;
 		}
 
 		std::memcpy(ms.pData, data, sizeof(data));
@@ -211,7 +209,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 				SimplePS, sizeof(SimplePS), nullptr, _simplePS.put());
 			if (FAILED(hr)) {
 				Logger::Get().ComError("创建像素着色器失败", hr);
-				return;
+				return false;
 			}
 		}
 
@@ -230,7 +228,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 
 		// 预乘 alpha
 		if (!_SetPremultipliedAlphaBlend()) {
-			return;
+			return false;
 		}
 	} else {
 		_isBackgroundDependent = true;
@@ -255,7 +253,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 			);
 			if (!_tempCursorTexture) {
 				Logger::Get().Error("创建光标纹理失败");
-				return;
+				return false;
 			}
 
 			HRESULT hr = d3dDevice->CreateShaderResourceView(
@@ -263,7 +261,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 			if (FAILED(hr)) {
 				Logger::Get().ComError("CreateShaderResourceView 失败", hr);
 				_tempCursorTexture = nullptr;
-				return;
+				return false;
 			}
 
 			_tempCursorTextureSize = cursorSize;
@@ -273,13 +271,13 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 				_deviceResources->GetD3DDevice(), DXGI_FORMAT_R8G8B8A8_UNORM,
 				cursorSize.cx, cursorSize.cy, D3D11_BIND_SHADER_RESOURCE);
 			if (!_tempSceneTexture) {
-				return;
+				return false;
 			}
 			HRESULT hr = _deviceResources->GetD3DDevice()->CreateShaderResourceView(
 				_tempSceneTexture.get(), nullptr, _tempSceneSrv.put());
 			if (FAILED(hr)) {
 				Logger::Get().ComError("Create cursor scene SRV failed", hr);
-				return;
+				return false;
 			}
 		}
 
@@ -320,7 +318,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 					MaskedCursorPS, sizeof(MaskedCursorPS), nullptr, _maskedCursorPS.put());
 				if (FAILED(hr)) {
 					Logger::Get().ComError("创建像素着色器失败", hr);
-					return;
+					return false;
 				}
 			}
 			d3dDC->PSSetShader(_maskedCursorPS.get(), nullptr, 0);
@@ -330,7 +328,7 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 					MonochromeCursorPS, sizeof(MonochromeCursorPS), nullptr, _monochromeCursorPS.put());
 				if (FAILED(hr)) {
 					Logger::Get().ComError("创建像素着色器失败", hr);
-					return;
+					return false;
 				}
 			}
 			d3dDC->PSSetShader(_monochromeCursorPS.get(), nullptr, 0);
@@ -353,17 +351,39 @@ void CursorDrawer::Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
 	}
 
 	d3dDC->Draw(4, 0);
+	return true;
 }
 
-bool CursorDrawer::NeedRedraw() const noexcept {
-	bool isCursorActive = false;
-	const auto [cursorHandle, cursorPos] = _GetCursorState(isCursorActive);
-	// 光标形状或位置变化时需要重新绘制
-	return cursorHandle != _lastCursorHandle || (cursorHandle && cursorPos != _lastCursorPos);
+bool CursorDrawer::NeedRedraw() noexcept {
+	return _refreshPolicy.NeedsRedraw(_SampleCursorState(), std::chrono::steady_clock::now());
 }
 
-std::pair<HCURSOR, POINT> CursorDrawer::_GetCursorState(bool& isActive) const noexcept {
-	assert(!isActive);
+void CursorDrawer::OnPresent(bool success, bool independentLayer) noexcept {
+	const bool original = _refreshPolicy.HasNewOriginal();
+	if (_refreshPolicy.Presented(success && _drawSucceeded, std::chrono::steady_clock::now())) {
+		// Count changed cursor states, not every cached redraw or input sample.
+		FrameTrace::Mark(FrameTrace::Event::CursorPublish, original, independentLayer);
+	}
+	// A successful surface commit after a cursor draw/resource failure may
+	// have cleared the old cursor. Rebuild its visual snapshot on the next pass.
+	if (success && !_drawSucceeded) _refreshPolicy.ResetVisual();
+	_drawSucceeded = false;
+}
+
+bool CursorDrawer::IsMinimumRefreshDue() noexcept {
+	return _refreshPolicy.MinimumDue(_SampleCursorState(), std::chrono::steady_clock::now());
+}
+
+bool CursorDrawer::HasVisibilityTransition() noexcept {
+	return _refreshPolicy.Transition(_SampleCursorState());
+}
+
+void CursorDrawer::OnContentPresented(CursorContentIdentity identity, bool generated) noexcept {
+	_refreshPolicy.ObserveContent(identity, generated);
+	_refreshPolicy.AcknowledgeUnchangedOriginal(_SampleCursorState());
+}
+
+CursorVisualState CursorDrawer::_SampleCursorState() noexcept {
 	using namespace std::chrono;
 
 	const ScalingWindow& scalingWindow = ScalingWindow::Get();
@@ -371,29 +391,35 @@ std::pair<HCURSOR, POINT> CursorDrawer::_GetCursorState(bool& isActive) const no
 
 	const CursorManager& cursorManager = scalingWindow.CursorManager();
 	HCURSOR cursorHandle = cursorManager.CursorHandle();
+	if (cursorHandle && scalingWindow.Renderer().IsToolbarMoveCursor()) {
+		cursorHandle = LoadCursor(nullptr, IDC_SIZEALL);
+	}
 	POINT cursorPos = cursorManager.CursorPos();
 	// 转换为渲染矩形局部坐标
 	const RECT& rendererRect = scalingWindow.RendererRect();
 	cursorPos.x -= rendererRect.left;
 	cursorPos.y -= rendererRect.top;
 
-	// 检查自动隐藏光标
+	const auto now = steady_clock::now();
+	const bool captured = cursorManager.IsCursorCaptured();
+	const bool toolbarMove = scalingWindow.Renderer().IsToolbarMoveCursor();
+	const bool active = _lastRawCursorPos != cursorPos ||
+		(cursorHandle && _lastRawCursorHandle != cursorHandle) || !captured ||
+		scalingWindow.IsResizingOrMoving() || scalingWindow.SrcTracker().IsMoving() || toolbarMove;
+	if (active) _lastCursorActiveTime = now;
+	_lastRawCursorPos = cursorPos;
+	if (cursorHandle) _lastRawCursorHandle = cursorHandle;
+
+	// Activity follows real input, not the last published cursor snapshot.
 	if (options.autoHideCursorDelay.has_value()) {
 		// 光标在叠加层上或拖动窗口时禁用自动隐藏。光标处于隐藏状态视为形状不变，考虑形状
 		// 变化：箭头->隐藏->箭头，只要位置不变，自动隐藏功能应让光标始终隐藏；反之如果光
 		// 标隐藏时移动了或显示时形状变化了应正常显示。
-		if (cursorManager.IsCursorCaptured() &&
-			!scalingWindow.IsResizingOrMoving() &&
-			!scalingWindow.SrcTracker().IsMoving() &&
-			_lastCursorPos == cursorPos &&
-			(_lastRawCursorHandle == cursorHandle || !cursorHandle))
-		{
+		if (!active) {
 			const duration<float> hideDelay(*options.autoHideCursorDelay);
-			if (steady_clock::now() - _lastCursorActiveTime > hideDelay) {
+			if (now - _lastCursorActiveTime > hideDelay) {
 				cursorHandle = NULL;
 			}
-		} else {
-			isActive = true;
 		}
 	}
 
@@ -402,7 +428,8 @@ std::pair<HCURSOR, POINT> CursorDrawer::_GetCursorState(bool& isActive) const no
 		cursorHandle = NULL;
 	}
 
-	return { cursorHandle, cursorPos };
+	return { reinterpret_cast<uintptr_t>(cursorHandle), cursorPos.x, cursorPos.y,
+		captured, toolbarMove, !_isCursorVisible };
 }
 
 const CursorDrawer::_CursorInfo* CursorDrawer::_ResolveCursor(HCURSOR hCursor) noexcept {

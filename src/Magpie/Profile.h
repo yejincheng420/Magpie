@@ -92,11 +92,11 @@ struct Profile {
 		customInitialWindowedScaleFactor = other.customInitialWindowedScaleFactor;
 		cursorScaling = other.cursorScaling;
 		customCursorScaling = other.customCursorScaling;
+		frameRefresh = other.frameRefresh;
 		autoHideCursorDelay = other.autoHideCursorDelay;
 		cropping = other.cropping;
 		captureMethod = other.captureMethod;
 		graphicsCardId = other.graphicsCardId;
-		maxFrameRate = other.maxFrameRate;
 		multiMonitorUsage = other.multiMonitorUsage;
 		preferredMonitorId = other.preferredMonitorId;
 		preferredMonitorName = other.preferredMonitorName;
@@ -104,9 +104,9 @@ struct Profile {
 		launchParameters = other.launchParameters;
 		destAlignment = other.destAlignment;
 		scalingFlags = other.scalingFlags;
+		toolbarDocks = other.toolbarDocks;
 		
 		isCroppingEnabled = other.isCroppingEnabled;
-		isFrameRateLimiterEnabled = other.isFrameRateLimiterEnabled;
 		isAutoHideCursorEnabled = other.isAutoHideCursorEnabled;
 	}
 
@@ -127,6 +127,11 @@ struct Profile {
 	std::filesystem::path launcherPath;
 
 	bool isParameterFocusSwitchingEnabled = false;
+	ToolbarDockSettings toolbarDocks;
+	FrameRefreshSettings frameRefresh;
+	// Not serialized/copied by Copy(): survives vector moves and renames, but
+	// a deleted/recreated profile cannot receive an older toolbar save.
+	std::shared_ptr<const uint8_t> runtimeIdentity = std::make_shared<const uint8_t>(uint8_t{0});
 	AutoScale autoScale = AutoScale::Disabled;
 
 	InitialWindowedScaleFactor initialWindowedScaleFactor = InitialWindowedScaleFactor::Auto;
@@ -148,9 +153,6 @@ struct Profile {
 	std::wstring preferredMonitorName;
 	CursorInterpolationMode cursorInterpolationMode = CursorInterpolationMode::NearestNeighbor;
 
-	// 10~1000
-	float maxFrameRate = 60.0f;
-
 	std::wstring launchParameters;
 	DestAlignment destAlignment = DestAlignment::Center;
 
@@ -158,7 +160,6 @@ struct Profile {
 
 	bool isPackaged = false;
 	bool isCroppingEnabled = false;
-	bool isFrameRateLimiterEnabled = false;
 	bool isAutoHideCursorEnabled = false;
 };
 

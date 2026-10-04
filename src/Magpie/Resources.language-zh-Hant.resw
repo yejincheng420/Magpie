@@ -135,6 +135,11 @@
   <data name="Home_Activation_Timer_Delay.Header" xml:space="preserve">
     <value>倒數時間（秒）</value>
   </data>
+  <data name="ShortcutDialog_Clear" xml:space="preserve"><value>清除</value></data>
+  <data name="ShortcutControl_ClearButton.[using:Windows.UI.Xaml.Controls]ToolTipService.ToolTip" xml:space="preserve"><value>清除快速鍵</value></data>
+  <data name="ShortcutControl_NotSet.Text" xml:space="preserve"><value>未設定</value></data>
+  <data name="ShortcutControl_ClearAutomationName" xml:space="preserve"><value>清除：{0}</value></data>
+  <data name="Overlay_Parameters_InputHintWithoutShortcut" xml:space="preserve"><value>Ctrl+按一下滑桿輸入數值。Esc：編輯→預覽→關閉；按一下預覽面板繼續編輯。</value></data>
   <data name="ShortcutDialog_Cancel" xml:space="preserve">
     <value>取消</value>
   </data>
@@ -746,7 +751,7 @@
     <value>動態偵測</value>
   </data>
   <data name="Home_Advanced_DeveloperOptions_DuplicateFrameDetection.Header" xml:space="preserve">
-    <value>偵測重複幀</value>
+    <value>重複影格偵測</value>
   </data>
   <data name="Message_CreateFenceFailed" xml:space="preserve">
     <value>所選顯示卡未能建立同步資源。請開啟下方設定檔 → 效能 → 顯示卡，選擇另一張可用顯示卡後重試；若仍失敗，可更新對應驅動程式，並提供詳細資料與記錄。</value>
@@ -872,7 +877,7 @@
     <value>僅適用於全螢幕模式</value>
   </data>
   <data name="Home_Toolbar.Description" xml:space="preserve">
-    <value>工具列位於輸出視窗頂部，提供幀率顯示、截圖等功能；視窗模式下還可拖曳工具列移動輸出視窗。</value>
+    <value>按住工具列空白或影格率區域，可移動工具列並停靠在頂部或底部。</value>
   </data>
   <data name="Home_Toolbar.Header" xml:space="preserve">
     <value>工具列</value>
@@ -1185,20 +1190,18 @@
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_multiplier_Label" xml:space="preserve"><value>影格倍率</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_DLSSNR" xml:space="preserve"><value>DLSSNR</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Detail_Control" xml:space="preserve"><value>細節控制</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Label" xml:space="preserve"><value>調整輸入解析度
-（會降低 DLSSNR 品質）</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Label" xml:space="preserve"><value>調整輸入解析度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_inputResolutionPercent_Label" xml:space="preserve"><value>輸入解析度（%）</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Label" xml:space="preserve"><value>NR 強度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Label" xml:space="preserve"><value>局部結構強度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Label" xml:space="preserve"><value>局部色調強度</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>反射／輝光控制</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>殘差明度倍率</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>殘差倍率</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Label" xml:space="preserve"><value>殘差飽和度倍率</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Label" xml:space="preserve"><value>陰影／結構控制</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Label" xml:space="preserve"><value>亮部/發光強度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Label" xml:space="preserve"><value>明度總強度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Label" xml:space="preserve"><value>總強度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Label" xml:space="preserve"><value>色度強度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Label" xml:space="preserve"><value>暗部/結構強度</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_skinStructureStrength_Label" xml:space="preserve"><value>皮膚結構強度</value></data>
-  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Label" xml:space="preserve"><value>NR 風格
-（0 預設，1 自然，2 電影）</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Label" xml:space="preserve"><value>NR 風格</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_uiCorrection_Label" xml:space="preserve"><value>NR 介面修正</value></data>
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_useAutoMask_Label" xml:space="preserve"><value>自動遮罩</value></data>
   <data name="EffectParam_Deband_grain_Label" xml:space="preserve"><value>顆粒強度</value></data>
@@ -1416,7 +1419,7 @@
   <data name="Home_FrameSync_VRR.Header" xml:space="preserve"><value>VRR（可變更新頻率）</value></data>
   <data name="Home_FrameSync_VRR.Description" xml:space="preserve"><value>允許相容 FreeSync / G-SYNC 的呈現。需同時在顯示器和驅動程式中開啟 VRR；未生效時可能出現撕裂。</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Label" xml:space="preserve"><value>畫格速率模式</value></data>
-  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>跟隨幀同步目標</value></data>
+  <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_0" xml:space="preserve"><value>跟隨內容影格率目標</value></data>
   <data name="EffectParam_FrameRate_Filter_frameRateMode_Option_1" xml:space="preserve"><value>自訂</value></data>
   <data name="Overlay_EffectParameters_AutoRestart" xml:space="preserve"><value>自動重新啟用</value></data>
   <data name="Overlay_EffectParameters_Reason_AutoRestart" xml:space="preserve"><value>編輯結束後自動停用效果組，等待 500 毫秒再重新啟用，以重建 DLSSNR 歷史。</value></data>
@@ -1530,7 +1533,7 @@
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_saturation_Label" xml:space="preserve"><value>飽和度</value></data>
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_middleGray_Label" xml:space="preserve"><value>中間灰</value></data>
   <data name="EffectParam_RTXVideo_RTXVideo_HDR_peakNits_Label" xml:space="preserve"><value>峰值亮度（尼特）</value></data>
-  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge Sync</value></data>
+  <data name="FrameSync_Mode_FrontEdge.Content" xml:space="preserve"><value>Front Edge</value></data>
   <data name="FrameSync_Mode_Async.Content" xml:space="preserve"><value>Async</value></data>
   <data name="FrameSync_Mode_Reflex.Content" xml:space="preserve"><value>NVIDIA Reflex</value></data>
   <data name="Home_FrameSync_Mode.Header" xml:space="preserve"><value>同步模式</value></data>
@@ -1642,4 +1645,116 @@
   <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Option_4" xml:space="preserve"><value>低頻時域重建</value></data>
   <data name="EffectParam_DLSSFG_DLSS_FrameGeneration_duplicateFrameFiltering_Label" xml:space="preserve"><value>重複影格過濾</value></data>
   <data name="EffectParam_XeSSFG_XeSS_FrameGeneration_duplicateFrameFiltering_Label" xml:space="preserve"><value>重複影格過濾</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHueProtection_Label" xml:space="preserve"><value>色相保護</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDarkProtection_Label" xml:space="preserve"><value>暗部保護</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHighlightProtection_Label" xml:space="preserve"><value>亮部保護</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLocalCompression_Label" xml:space="preserve"><value>過度修正抑制</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualShowAdvanced_Label" xml:space="preserve"><value>進階調整</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLowFrequencyGain_Label" xml:space="preserve"><value>低頻範圍強度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDetailGain_Label" xml:space="preserve"><value>高頻範圍強度</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Label" xml:space="preserve"><value>診斷視圖</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_0" xml:space="preserve"><value>最終圖</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_1" xml:space="preserve"><value>原始總殘差</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_2" xml:space="preserve"><value>受控總殘差</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_3" xml:space="preserve"><value>明度變化</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_4" xml:space="preserve"><value>色度變化</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_5" xml:space="preserve"><value>保護權重</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_6" xml:space="preserve"><value>色域壓縮比例</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Option_7" xml:space="preserve"><value>局部壓縮比例</value></data>
+  <data name="Profile_Cursor_Refresh.Header" xml:space="preserve"><value>游標重新整理</value></data>
+  <data name="Profile_Cursor_Refresh.Description" xml:space="preserve"><value>控制游標更新，重新啟動縮放後生效。</value></data>
+  <data name="Profile_Cursor_Refresh_Original.Header" xml:space="preserve"><value>優先隨原始內容影格更新</value></data>
+  <data name="Profile_Cursor_Refresh_Original.Description" xml:space="preserve"><value>優先隨內容影格更新游標。</value></data>
+  <data name="Profile_Cursor_Refresh_Minimum.Header" xml:space="preserve"><value>保持游標最低重新整理率</value></data>
+  <data name="Profile_Cursor_Refresh_Minimum.Description" xml:space="preserve"><value>內容更新較慢時，更新變化的游標。</value></data>
+  <data name="Profile_Cursor_Refresh_Rate.Header" xml:space="preserve"><value>最低重新整理率</value></data>
+  <data name="Profile_Cursor_Refresh_Rate.Description" xml:space="preserve"><value>游標的目標最低更新率。</value></data>
+  <data name="Home_Advanced_DeveloperOptions_DuplicateFrameDetection.Description" xml:space="preserve"><value>偵測並跳過相同畫面，全域生效。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_enableInputResolutionScaling_Description" xml:space="preserve"><value>調整送入 NR 的輸入解析度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_inputResolutionPercent_Description" xml:space="preserve"><value>設定 NR 輸入解析度佔原圖的比例。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualMultiplier_Description" xml:space="preserve"><value>調節 NR 處理效果的整體強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualSaturation_Description" xml:space="preserve"><value>調節 NR 帶來的顏色變化強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLightness_Description" xml:space="preserve"><value>調節 NR 明暗變化的總強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_shadowStructureMultiplier_Description" xml:space="preserve"><value>調節 NR 變暗修正的強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_reflectionGlowMultiplier_Description" xml:space="preserve"><value>調節 NR 變亮修正的強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualShowAdvanced_Description" xml:space="preserve"><value>展開進階調整參數。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHueProtection_Description" xml:space="preserve"><value>減少 NR 對原畫面的色相變化。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDarkProtection_Description" xml:space="preserve"><value>減少 NR 對原畫面暗部的改動。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualHighlightProtection_Description" xml:space="preserve"><value>減少 NR 對原畫面亮部的改動。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLocalCompression_Description" xml:space="preserve"><value>減弱局部過強的修正。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualLowFrequencyGain_Description" xml:space="preserve"><value>調節修正中平緩變化部分的強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDetailGain_Description" xml:space="preserve"><value>調節修正中細節變化部分的強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_residualDebugView_Description" xml:space="preserve"><value>查看各類修正和保護效果。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_opticalFlowMethod_Description" xml:space="preserve"><value>選擇 NR 使用的光流方法。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_amdOpticalFlowMode_Description" xml:space="preserve"><value>設定 AMD 光流品質。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_nvidiaOpticalFlowQuality_Description" xml:space="preserve"><value>設定 NVIDIA 光流品質。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_style_Description" xml:space="preserve"><value>選擇本層 NR 的處理風格。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_intensity_Description" xml:space="preserve"><value>調節本層 NR 的處理強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localToneStrength_Description" xml:space="preserve"><value>調節本層的局部色調處理強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_localStructureStrength_Description" xml:space="preserve"><value>調節本層的局部結構處理強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_skinStructureStrength_Description" xml:space="preserve"><value>調節本層的皮膚結構處理強度。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_useAutoMask_Description" xml:space="preserve"><value>啟用本層 NR 的自動遮罩。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_uiCorrection_Description" xml:space="preserve"><value>改善本層 NR 處理後的介面與文字。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_multiPass_Description" xml:space="preserve"><value>設定連續執行的 NR 層數。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_antiFlicker_Description" xml:space="preserve"><value>穩定連續影格的畫面。</value></data>
+  <data name="EffectParam_DLSSNR_DLSSNR_AI_Filter_Group_Advanced_Adjustments" xml:space="preserve"><value>進階調整</value></data>
+  <data name="EffectParameter_Help_Range" xml:space="preserve"><value>範圍</value></data>
+  <data name="EffectParameter_Help_Default" xml:space="preserve"><value>預設</value></data>
+  <data name="EffectParameter_Help_Step" xml:space="preserve"><value>步進</value></data>
+  <data name="EffectParameter_Help_AntiFlickerRequired" xml:space="preserve"><value>開啟抗閃爍後可調節此參數。</value></data>
+
+  <data name="FrameRefresh_Source.Content" xml:space="preserve"><value>跟隨來源</value></data>
+  <data name="FrameRefresh_Auto.Content" xml:space="preserve"><value>自動</value></data>
+  <data name="FrameRefresh_Custom.Content" xml:space="preserve"><value>自訂</value></data>
+  <data name="FrameRefresh_Off.Content" xml:space="preserve"><value>關閉</value></data>
+  <data name="FrameRefresh_Responsive.Content" xml:space="preserve"><value>回應優先</value></data>
+  <data name="FrameRefresh_OriginalOnly.Content" xml:space="preserve"><value>僅隨原始內容影格</value></data>
+  <data name="FrameRefresh_Supplement.Content" xml:space="preserve"><value>原始影格優先並補充</value></data>
+  <data name="FrameRefresh_ResetButton.Content" xml:space="preserve"><value>還原預設值</value></data>
+  <data name="Home_FrameRefresh_Edit.Content" xml:space="preserve"><value>編輯預設設定檔</value></data>
+  <data name="Home_FrameRefresh_Summary" xml:space="preserve"><value>內容：{} · 游標：{} · 閒置重繪：{}</value></data>
+  <data name="FrameRefresh_RestartNotice" xml:space="preserve"><value>修改自動儲存；重新啟用縮放或使用「儲存並重新啟動」後生效。</value></data>
+  <data name="FrameRefresh_LegacyNotice" xml:space="preserve"><value>此設定檔使用舊版節奏與游標設定。</value></data>
+  <data name="FrameRefresh_IdleLimitNotice" xml:space="preserve"><value>閒置重繪按內容目標與原設定上限執行。</value></data>
+  <data name="FrameRefresh.Header" xml:space="preserve"><value>影格率與重新整理</value></data>
+  <data name="FrameRefresh_Content.Header" xml:space="preserve"><value>內容影格率</value></data>
+  <data name="FrameRefresh_Pacing.Header" xml:space="preserve"><value>節奏控制方式</value></data>
+  <data name="FrameRefresh_ContentRate.Header" xml:space="preserve"><value>目標基礎影格率</value></data>
+  <data name="FrameRefresh_Cursor.Header" xml:space="preserve"><value>游標重新整理方式</value></data>
+  <data name="FrameRefresh_CursorSupplement.Header" xml:space="preserve"><value>游標補充重新整理頻率</value></data>
+  <data name="FrameRefresh_CursorRate.Header" xml:space="preserve"><value>目標最低重新整理頻率</value></data>
+  <data name="FrameRefresh_Advanced.Header" xml:space="preserve"><value>進階選項</value></data>
+  <data name="FrameRefresh_Idle.Header" xml:space="preserve"><value>閒置持續重繪</value></data>
+  <data name="FrameRefresh_IdleRate.Header" xml:space="preserve"><value>閒置重繪頻率</value></data>
+  <data name="FrameRefresh_Reset.Header" xml:space="preserve"><value>還原重新整理預設設定</value></data>
+  <data name="Home_FrameRefresh.Header" xml:space="preserve"><value>預設影格率與重新整理</value></data>
+  <data name="FrameRefresh.Description" xml:space="preserve"><value>按設定檔儲存，重新啟用縮放後生效。</value></data>
+  <data name="FrameRefresh_Content.Description" xml:space="preserve"><value>控制 Magpie 的內容處理影格率；自動模式按顯示更新率和補幀倍率計算。</value></data>
+  <data name="FrameRefresh_Pacing.Description" xml:space="preserve"><value>選擇內容影格的處理節奏。</value></data>
+  <data name="FrameRefresh_ContentRate.Description" xml:space="preserve"><value>設定基礎內容處理的目標影格率。</value></data>
+  <data name="FrameRefresh_Cursor.Description" xml:space="preserve"><value>選擇系統游標的更新方式。</value></data>
+  <data name="FrameRefresh_CursorSupplement.Description" xml:space="preserve"><value>選擇自動或自訂的游標補充更新率。</value></data>
+  <data name="FrameRefresh_CursorRate.Description" xml:space="preserve"><value>設定游標補充更新的目標最低影格率。</value></data>
+  <data name="FrameRefresh_Advanced.Description" xml:space="preserve"><value>重複影格偵測與閒置重繪。</value></data>
+  <data name="FrameRefresh_Idle.Description" xml:space="preserve"><value>閒置時重繪目前畫面。</value></data>
+  <data name="FrameRefresh_IdleRate.Description" xml:space="preserve"><value>設定閒置重繪的目標影格率。</value></data>
+  <data name="FrameRefresh_Reset.Description" xml:space="preserve"><value>還原內容 60、游標補充 60、閒置重繪 30 FPS，節奏方式為 Front Edge。</value></data>
+  <data name="FrameRefresh_Content_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>內容影格率</value></data>
+  <data name="FrameRefresh_Pacing_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>節奏控制方式</value></data>
+  <data name="FrameRefresh_ContentRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>目標基礎影格率</value></data>
+  <data name="FrameRefresh_Cursor_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>游標重新整理方式</value></data>
+  <data name="FrameRefresh_CursorSupplement_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>游標補充重新整理頻率</value></data>
+  <data name="FrameRefresh_CursorRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>目標最低重新整理頻率</value></data>
+  <data name="FrameRefresh_Idle_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>閒置持續重繪</value></data>
+  <data name="FrameRefresh_IdleRate_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>閒置重繪頻率</value></data>
+  <data name="FrameRefresh_LegacyCapNotice" xml:space="preserve"><value>保留的舊上限：{} FPS</value></data>
+
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>設定資料夾</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>重設</value>
+  </data>
+  <data name="FrameRefresh_DuplicateDetection_Input.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve"><value>重複影格偵測</value></data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>更多選項</value></data>
 </root>

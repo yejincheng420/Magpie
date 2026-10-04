@@ -7,7 +7,12 @@ $r2Vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Install
 $r2Vs = & $r2Vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath | Select-Object -First 1
 Import-Module (Join-Path $r2Vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
 Enter-VsDevShell -VsInstallPath $r2Vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
-$r2Wil = Get-ChildItem (Join-Path $r2Repo 'packages') -Directory -Filter 'Microsoft.Windows.ImplementationLibrary.*' | Sort-Object Name -Descending | Select-Object -First 1
+$r2DependenciesRepo = $r2Repo
+if (!(Test-Path -LiteralPath (Join-Path $r2Repo 'packages'))) {
+    $r2CommonGit = & git -C $r2Repo rev-parse --path-format=absolute --git-common-dir
+    $r2DependenciesRepo = Split-Path $r2CommonGit -Parent
+}
+$r2Wil = Get-ChildItem (Join-Path $r2DependenciesRepo 'packages') -Directory -Filter 'Microsoft.Windows.ImplementationLibrary.*' | Sort-Object Name -Descending | Select-Object -First 1
 & python (Join-Path $PSScriptRoot 'prepare_dlss_r2_test.py') $r2Output
 if ($LASTEXITCODE) { throw 'Extract production functions failed' }
 $r2IncludePaths = @($r2Output; (Join-Path $r2Repo 'src/Magpie.Core'); (Join-Path $r2Wil.FullName 'include'); (Join-Path $r2Workspace 'release/v0.6.7-local/obj/Magpie.Core/Generated Files'))

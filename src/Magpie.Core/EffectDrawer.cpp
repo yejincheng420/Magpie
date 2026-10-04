@@ -234,10 +234,10 @@ bool EffectDrawer::Initialize(
 	return true;
 }
 
-void EffectDrawer::Draw(EffectsProfiler& profiler) const noexcept {
+bool EffectDrawer::Draw(EffectsProfiler& profiler) const noexcept {
 	if (!PrepareHdrInput()) {
 		Logger::Get().Error("准备 HDR 效果输入失败");
-		return;
+		return false;
 	}
 	_PrepareForDraw();
 
@@ -247,7 +247,19 @@ void EffectDrawer::Draw(EffectsProfiler& profiler) const noexcept {
 	}
 	if (!CompleteHdrOutput()) {
 		Logger::Get().Error("完成 HDR 效果输出失败");
+		return false;
 	}
+	return true;
+}
+
+bool EffectDrawer::ResetCaptureHistory(const EffectDesc& desc) const noexcept {
+	// Only called for the four capture-clock SMAA effects. Loaded lookup
+	// textures and current spatial intermediates must remain intact.
+	for (size_t i = 2; i < desc.textures.size(); ++i) {
+		if (desc.textures[i].name == "historyTex" &&
+			!ClearEffectTexture(_d3dDC, *_descriptorStore, _textures[i].get())) return false;
+	}
+	return true;
 }
 
 bool EffectDrawer::DrawHdrComponent(EffectsProfiler& profiler) const noexcept {

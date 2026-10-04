@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "FrameTrace.h"
 #include "FrameSourceBase.h"
+#include "ReflexController.h"
 #include "BackendDescriptorStore.h"
 #include "DeviceResources.h"
 #include "DirectXHelper.h"
@@ -75,16 +76,48 @@ bool FrameSourceBase::Initialize(DeviceResources& deviceResources, BackendDescri
 	return true;
 }
 
+void FrameSourceBase::_BeginCaptureRender() noexcept {
+	if (_reflex) _reflex->BeginCaptureRender();
+}
+
 FrameSourceState FrameSourceBase::Update() noexcept {
 	const FrameSourceState state = _Update();
-	if (state == FrameSourceState::NewFrame && _hdrEnabled) {
+	_lastUpdateReason = state == FrameSourceState::Error ? CaptureFrameReason::Error
+		: _captureInterrupted ? CaptureFrameReason::Interrupted : CaptureFrameReason::NoFrame;
+	const auto traceReason = wil::scope_exit([&] {
+		FrameTrace::Mark(FrameTrace::Event::CaptureClassification,
+			static_cast<int64_t>(_lastUpdateReason), _captureSequence);
+	});
+	if (state != FrameSourceState::NewFrame) return state;
+
+	D3D11_TEXTURE2D_DESC sourceDesc{};
+	_output->GetDesc(&sourceDesc);
+	if (_prevFrame) {
+		D3D11_TEXTURE2D_DESC previousDesc{};
+		_prevFrame->GetDesc(&previousDesc);
+		if (_duplicateSourceTexture != _output.get() || previousDesc.Width != sourceDesc.Width ||
+			previousDesc.Height != sourceDesc.Height || previousDesc.Format != sourceDesc.Format) {
+			_ResetDuplicateDetection();
+		}
+	}
+	ColorDescription sourceColor = _hdrEnabled ? _GetSourceColorDescription() : ColorDescription{};
+	const bool colorChanged = _hdrEnabled && _duplicateSourceColorValid &&
+		!(sourceColor == _duplicateSourceColor);
+	// Compare the raw capture before conversion. A duplicate can reuse canonical
+	// output only while its color semantics and resource generation remain valid.
+	const bool forceAccept = _hdrEnabled && (!_hdrFrameReady || colorChanged);
+	const FrameSourceState filtered = _FilterDuplicateFrame(state, forceAccept);
+	if (filtered != FrameSourceState::NewFrame) return filtered;
+	if (colorChanged) {
+		++_resourceGeneration;
+		_lastUpdateReason = CaptureFrameReason::MetadataChanged;
+	}
+	if (_hdrEnabled) {
+		FrameTrace::Scope traceHdr(FrameTrace::Event::HdrCapture);
 		if (_hdrFrameSequence != _captureSequence) {
 			++_resourceGeneration;
 			_hdrFrameSequence = _captureSequence;
 		}
-		D3D11_TEXTURE2D_DESC sourceDesc{};
-		_output->GetDesc(&sourceDesc);
-		ColorDescription sourceColor = _GetSourceColorDescription();
 		if (!_hdrProcessor.Process(_output.get(), HdrFrameMetadata{
 				.frameId = _captureSequence,
 				.captureSequence = _captureSequence,
@@ -98,6 +131,7 @@ FrameSourceState FrameSourceBase::Update() noexcept {
 				.valid = true
 		})) {
 			_hdrFrameReady = false;
+			_lastUpdateReason = CaptureFrameReason::Error;
 			Logger::Get().Error("HDR 捕获帧处理失败");
 			return FrameSourceState::Error;
 		} else {
@@ -116,12 +150,19 @@ FrameSourceState FrameSourceBase::Update() noexcept {
 			}
 		}
 	}
-	if (_hdrEnabled && state == FrameSourceState::NewFrame && !_hdrFrameReady) {
-		return FrameSourceState::Error;
+	if (_hdrEnabled) {
+		_duplicateSourceColor = sourceColor;
+		_duplicateSourceColorValid = true;
 	}
+	return FrameSourceState::NewFrame;
+}
+
+FrameSourceState FrameSourceBase::_FilterDuplicateFrame(FrameSourceState state, bool forceAccept) noexcept {
+	_lastUpdateReason = CaptureFrameReason::Accepted;
 	const bool newSequence = state == FrameSourceState::NewFrame &&
 		_duplicateCaptureSequence != _captureSequence;
 	if (newSequence) {
+		_lastUpdateReason = CaptureFrameReason::NewSequence;
 		_duplicateCaptureSequence = _captureSequence;
 		_isCheckingForDuplicateFrame = true;
 		_framesLeft = INITIAL_CHECK_COUNT;
@@ -135,9 +176,26 @@ FrameSourceState FrameSourceBase::Update() noexcept {
 	const auto duplicateFrameDetectionMode = _duplicateFrameDetectionOverride.has_value()
 		? (*_duplicateFrameDetectionOverride ? DuplicateFrameDetectionMode::Always : DuplicateFrameDetectionMode::Never)
 		: options.duplicateFrameDetectionMode;
-	if (state != FrameSourceState::NewFrame || (newSequence && _prevFrame) ||
+	if (state != FrameSourceState::NewFrame || (newSequence && _prevFrame) || forceAccept ||
 		duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Never ||
 		(!_duplicateFrameDetectionOverride.has_value() && options.Is3DGameMode())) {
+		if (forceAccept && _prevFrame && !newSequence) {
+			_deviceResources->GetD3DDC()->CopyResource(_prevFrame.get(), _output.get());
+			_isCheckingForDuplicateFrame = true;
+			_framesLeft = INITIAL_CHECK_COUNT;
+			_nextSkipCount = INITIAL_SKIP_COUNT;
+		}
+		if (forceAccept && !_prevFrame && duplicateFrameDetectionMode != DuplicateFrameDetectionMode::Never &&
+			(_duplicateFrameDetectionOverride.has_value() || !options.Is3DGameMode())) {
+			if (_InitCheckingForDuplicateFrame()) {
+				_deviceResources->GetD3DDC()->CopyResource(_prevFrame.get(), _output.get());
+			} else {
+				_ResetDuplicateDetection();
+				_lastUpdateReason = CaptureFrameReason::DetectionUnavailable;
+			}
+		}
+		if (!newSequence && !forceAccept && state == FrameSourceState::NewFrame)
+			_lastUpdateReason = CaptureFrameReason::Unfiltered;
 		return state;
 	}
 
@@ -148,8 +206,8 @@ FrameSourceState FrameSourceBase::Update() noexcept {
 			d3dDC->CopyResource(_prevFrame.get(), _output.get());
 		} else {
 			Logger::Get().Error("_InitCheckingForDuplicateFrame 失败");
-			_prevFrame = nullptr;
-			_prevFrameSrv = nullptr;
+			_ResetDuplicateDetection();
+			_lastUpdateReason = CaptureFrameReason::DetectionUnavailable;
 		}
 
 		return FrameSourceState::NewFrame;
@@ -158,8 +216,10 @@ FrameSourceState FrameSourceBase::Update() noexcept {
 	if (duplicateFrameDetectionMode == DuplicateFrameDetectionMode::Always) {
 		// 总是检查重复帧
 		if (_IsDuplicateFrame()) {
+			_lastUpdateReason = CaptureFrameReason::PixelDuplicate;
 			return FrameSourceState::Waiting;
 		} else {
+			if (_duplicateComparisonFailed) _lastUpdateReason = CaptureFrameReason::ReadbackFailed;
 			d3dDC->CopyResource(_prevFrame.get(), _output.get());
 			return FrameSourceState::NewFrame;
 		}
@@ -184,17 +244,20 @@ FrameSourceState FrameSourceBase::Update() noexcept {
 		}
 
 		if (_IsDuplicateFrame()) {
+			_lastUpdateReason = CaptureFrameReason::PixelDuplicate;
 			_isCheckingForDuplicateFrame = true;
 			_framesLeft = INITIAL_CHECK_COUNT;
 			_nextSkipCount = INITIAL_SKIP_COUNT;
 			return FrameSourceState::Waiting;
 		} else {
+			if (_duplicateComparisonFailed) _lastUpdateReason = CaptureFrameReason::ReadbackFailed;
 			if (_isCheckingForDuplicateFrame || isStatisticsEnabled) {
 				d3dDC->CopyResource(_prevFrame.get(), _output.get());
 			}
 			return FrameSourceState::NewFrame;
 		}
 	} else {
+		_lastUpdateReason = CaptureFrameReason::DynamicSkip;
 		if (--_framesLeft == 0) {
 			_isCheckingForDuplicateFrame = true;
 			// 第 2 次连续检查 10 帧，之后逐渐减少，从第 16 次开始只连续检查 2 帧
@@ -316,10 +379,23 @@ bool FrameSourceBase::PrepareHdrOutputForResize() noexcept {
 	if (!_hdrEnabled || !_output) return true;
 	D3D11_TEXTURE2D_DESC sourceDesc{};
 	_output->GetDesc(&sourceDesc);
+	const bool hadFrame = _hdrFrameReady;
+	HdrFrameMetadata metadata = _hdrProcessor.GetFrameMetadata();
 	_hdrFrameReady = false;
 	++_resourceGeneration;
 	_hdrFrameSequence = 0;
-	return _hdrProcessor.Prepare(_output.get(), sourceDesc.Format, _GetSourceColorDescription());
+	if (!_hdrProcessor.Prepare(_output.get(), sourceDesc.Format, _GetSourceColorDescription())) return false;
+	if (!hadFrame) return true;
+	// Prepare clears canonical storage. Rebuild the last accepted capture before
+	// Renderer's same-frame resize redraw, without inventing a capture timestamp.
+	metadata.resourceGeneration = _resourceGeneration;
+	metadata.width = sourceDesc.Width;
+	metadata.height = sourceDesc.Height;
+	metadata.sourceFormat = sourceDesc.Format;
+	metadata.stage = HdrFrameStage::RawCapture;
+	_hdrFrameReady = _hdrProcessor.Process(_output.get(), metadata);
+	if (_hdrFrameReady) _hdrFrameSequence = _captureSequence;
+	return _hdrFrameReady;
 }
 
 std::pair<uint32_t, uint32_t> FrameSourceBase::GetStatisticsForDynamicDetection() const noexcept {
@@ -416,8 +492,25 @@ bool FrameSourceBase::_GetMapToOriginDPI(HWND hWnd, double& a, double& bx, doubl
 	return true;
 }
 
+void FrameSourceBase::_ResetDuplicateDetection() noexcept {
+	_prevFrameSrv = nullptr;
+	_prevFrame = nullptr;
+	if (_resultBuffer && _descriptorStore) _descriptorStore->RemoveCache(_resultBuffer.get());
+	_resultBufferUav = nullptr;
+	_resultBuffer = nullptr;
+	_readBackBuffer = nullptr;
+	_dupFrameCS = nullptr;
+	_duplicateConstants = nullptr;
+	_duplicateSourceTexture = nullptr;
+	_isCheckingForDuplicateFrame = true;
+	_framesLeft = INITIAL_CHECK_COUNT;
+	_nextSkipCount = INITIAL_SKIP_COUNT;
+}
+
 bool FrameSourceBase::_InitCheckingForDuplicateFrame() {
 	ID3D11Device5* d3dDevice = _deviceResources->GetD3DDevice();
+	_outputSrv = _descriptorStore->GetShaderResourceView(_output.get());
+	if (!_outputSrv) return false;
 
 	D3D11_TEXTURE2D_DESC td;
 	_output->GetDesc(&td);
@@ -468,6 +561,17 @@ bool FrameSourceBase::_InitCheckingForDuplicateFrame() {
 		Logger::Get().ComError("CreateComputeShader 失败", hr);
 		return false;
 	}
+	// HDR conversion preserves alpha. Keep SDR's historical RGB-only policy
+	// until each capture source's alpha semantics have been validated.
+	const uint32_t constants[4]{ _hdrEnabled ? 1u : 0u, 0, 0, 0 };
+	const D3D11_BUFFER_DESC constantDesc{
+		.ByteWidth = sizeof(constants), .Usage = D3D11_USAGE_IMMUTABLE,
+		.BindFlags = D3D11_BIND_CONSTANT_BUFFER
+	};
+	const D3D11_SUBRESOURCE_DATA initialData{ .pSysMem = constants };
+	hr = d3dDevice->CreateBuffer(&constantDesc, &initialData, _duplicateConstants.put());
+	if (FAILED(hr)) return false;
+	_duplicateSourceTexture = _output.get();
 
 	static constexpr std::pair<uint32_t, uint32_t> BLOCK_SIZE{ 16, 16 };
 	_dispatchCount.first = (td.Width + BLOCK_SIZE.first - 1) / BLOCK_SIZE.first;
@@ -477,6 +581,7 @@ bool FrameSourceBase::_InitCheckingForDuplicateFrame() {
 }
 
 bool FrameSourceBase::_IsDuplicateFrame() {
+	_duplicateComparisonFailed = false;
 	FrameTrace::Scope traceDuplicate(FrameTrace::Event::DuplicateCheck);
 	// 检查是否和前一帧相同
 	ID3D11DeviceContext4* d3dDC = _deviceResources->GetD3DDC();
@@ -494,8 +599,18 @@ bool FrameSourceBase::_IsDuplicateFrame() {
 	d3dDC->CSSetUnorderedAccessViews(0, 1, &_resultBufferUav, nullptr);
 
 	d3dDC->CSSetShader(_dupFrameCS.get(), nullptr, 0);
+	ID3D11Buffer* constants = _duplicateConstants.get();
+	d3dDC->CSSetConstantBuffers(0, 1, &constants);
 
 	d3dDC->Dispatch(_dispatchCount.first, _dispatchCount.second, 1);
+	// Baseline copies and the HDR conversion must not see comparison resources
+	// still bound as SRVs/UAVs (including the previous-frame copy destination).
+	ID3D11ShaderResourceView* nullSrvs[2]{};
+	ID3D11UnorderedAccessView* nullUav = nullptr;
+	ID3D11Buffer* nullConstants = nullptr;
+	d3dDC->CSSetShaderResources(0, 2, nullSrvs);
+	d3dDC->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	d3dDC->CSSetConstantBuffers(0, 1, &nullConstants);
 
 	// 取回结果
 	d3dDC->CopyResource(_readBackBuffer.get(), _resultBuffer.get());
@@ -508,6 +623,12 @@ bool FrameSourceBase::_IsDuplicateFrame() {
 	if (SUCCEEDED(hr)) {
 		result = *(uint32_t*)ms.pData;
 		d3dDC->Unmap(_readBackBuffer.get(), 0);
+	} else {
+		_duplicateComparisonFailed = true;
+		if (!_duplicateReadbackFailureLogged) {
+			_duplicateReadbackFailureLogged = true;
+			Logger::Get().ComError("Capture duplicate readback failed; accepting input", hr);
+		}
 	}
 	traceReadback.Data(hr, result == 0);
 	traceReadback.End();
@@ -516,10 +637,10 @@ bool FrameSourceBase::_IsDuplicateFrame() {
 		std::chrono::steady_clock::now() - readbackStart).count();
 	_duplicateReadbackTotalMs += readbackMs;
 	_duplicateReadbackMaxMs = std::max(_duplicateReadbackMaxMs, readbackMs);
-	if (++_duplicateReadbackSamples == 120) {
+	if (++_duplicateReadbackSamples == 1200) {
 		Logger::Get().Info(fmt::format(
-			"Capture duplicate readback CPU wait: samples=120 avgMs={:.3f} maxMs={:.3f}",
-			_duplicateReadbackTotalMs / 120, _duplicateReadbackMaxMs));
+			"Capture duplicate readback CPU wait: samples=1200 avgMs={:.3f} maxMs={:.3f}",
+			_duplicateReadbackTotalMs / 1200, _duplicateReadbackMaxMs));
 		_duplicateReadbackSamples = 0;
 		_duplicateReadbackTotalMs = _duplicateReadbackMaxMs = 0;
 	}

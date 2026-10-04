@@ -6,6 +6,7 @@ namespace Magpie {
 
 class DeviceResources;
 class BackendDescriptorStore;
+class ReflexController;
 
 enum class FrameSourceWaitType {
 	NoWait,
@@ -18,6 +19,11 @@ enum class FrameSourceState {
 	NewFrame,
 	Waiting,
 	Error
+};
+
+enum class CaptureFrameReason : uint8_t {
+	Accepted, NoFrame, Interrupted, PixelDuplicate, DynamicSkip, Unfiltered,
+	NewSequence, MetadataChanged, DetectionUnavailable, ReadbackFailed, Error
 };
 
 class FrameSourceBase {
@@ -35,6 +41,8 @@ public:
 	virtual bool Start() noexcept { return true; }
 
 	FrameSourceState Update() noexcept;
+	void SetReflexController(ReflexController* controller) noexcept { _reflex = controller; }
+	CaptureFrameReason LastUpdateReason() const noexcept { return _lastUpdateReason; }
 
 	// Backend-thread state. A sequence changes only on a real capture discontinuity;
 	// the first valid frame must reach temporal consumers even if its pixels match.
@@ -92,6 +100,9 @@ public:
 	virtual void OnCursorVisibilityChanged(bool /*isVisible*/, bool /*onDestory*/) noexcept {};
 
 protected:
+	// Capture acquisition/readiness checks happen before this hook. Call it
+	// before the first GPU operation on the candidate texture.
+	void _BeginCaptureRender() noexcept;
 	virtual ColorDescription _GetSourceColorDescription() const noexcept;
 	uint64_t _captureSequence = 0;
 	bool _captureInterrupted = false;
@@ -132,6 +143,16 @@ protected:
 	std::pair<uint32_t, uint32_t> _dispatchCount;
 
 private:
+	ReflexController* _reflex = nullptr;
+	CaptureFrameReason _lastUpdateReason = CaptureFrameReason::NoFrame;
+	bool _duplicateComparisonFailed = false;
+	bool _duplicateReadbackFailureLogged = false;
+	winrt::com_ptr<ID3D11Buffer> _duplicateConstants;
+	ID3D11Texture2D* _duplicateSourceTexture = nullptr;
+	ColorDescription _duplicateSourceColor{};
+	bool _duplicateSourceColorValid = false;
+	FrameSourceState _FilterDuplicateFrame(FrameSourceState state, bool forceAccept) noexcept;
+	void _ResetDuplicateDetection() noexcept;
 	uint64_t _duplicateCaptureSequence = 0;
 	uint32_t _duplicateReadbackSamples = 0;
 	double _duplicateReadbackTotalMs = 0;
@@ -142,7 +163,7 @@ private:
 	bool _IsDuplicateFrame();
 
 	// (预测错误帧数, 总计跳过帧数)
-	std::atomic<std::pair<uint32_t, uint32_t>> _statistics;
+	std::atomic<std::pair<uint32_t, uint32_t>> _statistics{ std::pair{ 0u, 0u } };
 
 	// 用于检查重复帧
 	winrt::com_ptr<ID3D11Texture2D> _prevFrame;

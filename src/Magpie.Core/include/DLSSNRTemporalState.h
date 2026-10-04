@@ -11,6 +11,10 @@ struct DLSSNRTemporalState {
 	bool Duplicate(uint64_t nextFrame, uint64_t nextRevision) const noexcept {
 		return valid && frame == nextFrame && revision == nextRevision;
 	}
+	bool MotionPairMatches(uint64_t nextFrame, uint64_t previousCaptureFrame) const noexcept {
+		return !valid || nextFrame == frame || (previousCaptureFrame
+			? previousCaptureFrame == frame : nextFrame == frame + 1);
+	}
 	float Weight(uint64_t nextFrame, uint64_t nextRevision, uint64_t nextGeneration,
 		int64_t nextTimestamp, bool reset) const noexcept {
 		if (!valid || reset || nextFrame <= frame || nextRevision != revision ||

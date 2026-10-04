@@ -25,7 +25,7 @@ struct FrameSyncSettings {
 };
 
 // Merge only fields edited by this view. A stale panel must not overwrite a
-// concurrent Home edit, and a conflict must leave both fields untouched.
+// concurrent profile edit, and a conflict must leave both fields untouched.
 inline bool MergeFrameSyncSettings(FrameSyncSettings& current,
 	const FrameSyncSettings& before, const FrameSyncSettings& after) noexcept {
 	if (!std::isfinite(after.frameRate) || after.frameRate != SanitizePresentationFrameRate(after.frameRate) ||

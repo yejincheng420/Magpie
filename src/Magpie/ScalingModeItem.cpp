@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "DLSSNRDetailParameters.h"
 #include "ScalingModeItem.h"
 #if __has_include("ScalingModeItem.g.cpp")
 #include "ScalingModeItem.g.cpp"
@@ -208,6 +209,8 @@ void ScalingModeItem::AddEffect(const hstring& fullName) {
 	if (!effectInfo) return;
 	EffectItem& effect = _Data().effects.emplace_back();
 	effect.name = fullName;
+	if (fullName == L"DLSSNR\\DLSSNR_AI_Filter")
+		NormalizeDLSSNRDetailParameters(effect.parameters);
 	if (effectInfo->CanScale()) {
 		// 支持缩放的效果默认等比缩放到充满屏幕
 		effect.scalingType = ::Magpie::ScalingType::Fit;

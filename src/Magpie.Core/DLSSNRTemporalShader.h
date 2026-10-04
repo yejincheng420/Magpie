@@ -1,8 +1,10 @@
 #pragma once
 #include <string_view>
+#include <string>
+#include "DLSSNRColorShader.h"
 
 namespace Magpie {
-inline constexpr std::string_view DLSSNR_TEMPORAL_SHADER = R"hlsl(
+inline const std::string DLSSNR_TEMPORAL_SHADER = std::string(DLSSNR_COLOR_HLSL) + R"hlsl(
 Texture2D<float4> Input : register(t0);
 Texture2D<float4> Base : register(t1);
 Texture2D<float4> Raw : register(t2);
@@ -19,6 +21,7 @@ cbuffer Settings : register(b0) {
     uint2 Size; uint UseMotion; uint Hdr;
     float HistoryWeight; uint Route; uint2 LowSize;
     uint4 Region; // x, y, exclusive right, exclusive bottom
+    float ChromaStrength; uint EnforceZero; uint2 DetailPadding;
 };
 float3 Guide(float3 c) { return Hdr ? c / (1 + abs(c)) : c; }
 bool Inside(int2 p) { return all(p >= int2(Region.xy)) && all(p < int2(Region.zw)); }
@@ -101,6 +104,13 @@ void main(uint3 id : SV_DispatchThreadID) {
         return;
     }
     float3 current = raw.rgb - base.rgb;
+    // New SDR detail mode has an exact zero-current contract. Do not retain a
+    // prior correction at pixels where the total correction has vanished.
+    if (EnforceZero && all(current == 0)) {
+        NextHistory[p] = 0;
+        Output[p] = raw;
+        return;
+    }
     float3 detail = 0;
     if (Route == 4) {
         float3 low;
@@ -173,6 +183,19 @@ void main(uint3 id : SV_DispatchThreadID) {
                         result = lerp(safe, current, update);
                     }
                 } else result = lerp(current, safe, HistoryWeight*q);
+                if (!Hdr && ChromaStrength > 0) {
+                    // Reuse the same validated history, footprint and confidence.
+                    // Existing luma result is retained; additional memory only
+                    // affects Lab chroma. Signed RGB history remains the storage.
+                    float3 nowLab = RGBToLab(base.rgb+detail+(Route == 3 ? support*result : result));
+                    float3 oldLab = RGBToLab(base.rgb+detail+safe);
+                    float extra = ChromaStrength*HistoryWeight*q*(Route == 3 ? min(observed,support) : 1);
+                    nowLab.yz = lerp(nowLab.yz,oldLab.yz,extra);
+                    float gamutScale;
+                    float3 extraResidual = MapLab(nowLab,gamutScale)-base.rgb-detail;
+                    if (Route == 3 && support > 1e-6) result = extraResidual/support;
+                    else if (Route != 3) result = extraResidual;
+                }
             }
         }
     }
@@ -195,6 +218,7 @@ cbuffer Settings : register(b0) {
     uint2 Size; uint UseMotion; uint Hdr;
     float HistoryWeight; uint Route; uint2 LowSize;
     uint4 Region;
+    float ChromaStrength; uint EnforceZero; uint2 DetailPadding;
 };
 [numthreads(8,8,1)]
 void main(uint3 id : SV_DispatchThreadID) {

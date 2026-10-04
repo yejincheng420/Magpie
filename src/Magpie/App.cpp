@@ -35,6 +35,7 @@
 #include "SettingsExpander.h"
 #include "SettingsGroup.h"
 #include "ShortcutService.h"
+#include "StrHelper.h"
 #include "TextBlockHelper.h"
 #include "ToastService.h"
 #include "UpdateService.h"
@@ -104,6 +105,12 @@ App& App::Get() {
 App::App() {
 	UnhandledException([](IInspectable const&, UnhandledExceptionEventArgs const& e) {
 		Logger::Get().ComCritical("未处理的异常", e.Exception().value);
+		try {
+			Logger::Get().Critical(fmt::format("异常详情: {}",
+				StrHelper::UTF16ToUTF8(e.Message())));
+		} catch (...) {
+			// Keep the original HRESULT if retrieving diagnostic text also fails.
+		}
 
 		if (IsDebuggerPresent()) {
 			hstring errorMessage = e.Message();
@@ -309,6 +316,18 @@ INumberFormatter2 App::DoubleFormatter() {
 		return result;
 	}();
 
+	return numberFormatter;
+}
+
+INumberFormatter2 App::IntegerFormatter() {
+	static DecimalFormatter numberFormatter = []() {
+		DecimalFormatter result;
+		IncrementNumberRounder rounder;
+		rounder.Increment(1);
+		result.NumberRounder(rounder);
+		result.FractionDigits(0);
+		return result;
+	}();
 	return numberFormatter;
 }
 

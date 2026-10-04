@@ -1,4 +1,5 @@
 #pragma once
+#include "CursorRefreshPolicy.h"
 #include <parallel_hashmap/phmap.h>
 
 namespace Magpie {
@@ -12,6 +13,19 @@ public:
 	CursorDrawer(CursorDrawer&&) = delete;
 
 	bool Initialize(DeviceResources& deviceResources) noexcept;
+	void SetDisplayRate(double value) noexcept { _refreshPolicy.SetDisplayRate(value); }
+	void ResetVisual() noexcept { _refreshPolicy.ResetVisual(); }
+	std::chrono::nanoseconds PollInterval() const noexcept {
+		return _refreshPolicy.PollInterval(std::chrono::steady_clock::now());
+	}
+	void ObserveContent(CursorContentIdentity identity, bool generated) noexcept {
+		_refreshPolicy.ObserveContent(identity, generated);
+	}
+	void OnContentPresented(CursorContentIdentity identity, bool generated) noexcept;
+	void OnPresent(bool success, bool independentLayer = false) noexcept;
+	bool IsMinimumRefreshDue() noexcept;
+	bool HasVisibilityTransition() noexcept;
+	bool HasOriginalRefreshPending() noexcept { return _refreshPolicy.HasNewOriginal() && NeedRedraw(); }
 
 	// sceneTexture is the destination-sized scene underneath an independent UI surface.
 	void Draw(ID3D11Texture2D* backBuffer, POINT drawOffset,
@@ -27,10 +41,13 @@ public:
 		return _isCursorVisible;
 	}
 
-	bool NeedRedraw() const noexcept;
+	bool NeedRedraw() noexcept;
 
 private:
-	std::pair<HCURSOR, POINT> _GetCursorState(bool& isActive) const noexcept;
+	CursorVisualState _SampleCursorState() noexcept;
+	bool _Draw(ID3D11Texture2D* backBuffer, POINT drawOffset, ID3D11Texture2D* sceneTexture) noexcept;
+	CursorRefreshPolicy _refreshPolicy;
+	bool _drawSucceeded = false;
 
 	enum class _CursorType {
 		// 彩色光标：RGB 已预乘 A，A 为标准覆盖率（0 透明，1 不透明），支持双线性插值。
@@ -82,9 +99,8 @@ private:
 	// 这两个成员用于检查自动隐藏光标
 	HCURSOR _lastRawCursorHandle = NULL;
 	std::chrono::steady_clock::time_point _lastCursorActiveTime;
-	// 上次绘制的光标形状和位置
-	HCURSOR _lastCursorHandle = NULL;
-	POINT _lastCursorPos{ std::numeric_limits<LONG>::max(), std::numeric_limits<LONG>::max() };
+	// Input activity is sampled even when its visual snapshot is held back.
+	POINT _lastRawCursorPos{ std::numeric_limits<LONG>::max(), std::numeric_limits<LONG>::max() };
 
 	bool _isCursorVisible = true;
 };

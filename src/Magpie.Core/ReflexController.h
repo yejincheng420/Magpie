@@ -90,8 +90,9 @@ public:
 	}
 	bool CanResume() const noexcept { return _driver && !_stopped.load(); }
 
-	// Backend only. A Waiting/duplicate capture keeps this candidate open;
-	// polling, staged FG input and generated frames must not call Sleep again.
+	// Backend only. Polls with no GPU work retain the slept candidate. A pixel
+	// comparison that rejects an input finishes its own render attempt instead
+	// of leaving a render marker open across the next content wait.
 	uint64_t BeginCapture(uint64_t minimumFrameId = 1) noexcept {
 		const auto revision = _configurationRevision.load();
 		if (_captureFrameId && _captureRevision != revision) CompleteCapture();
@@ -105,21 +106,31 @@ public:
 		_captureRevision = revision;
 		_nextFrameId = std::max(_nextFrameId + 1, minimumFrameId);
 		_captureFrameId = _nextFrameId;
+		_renderStarted = false;
 		_renderEnded = false;
 		_Marker(ReflexMarker::SimulationStart);
 		// Magpie has no access to the source application's simulation or input.
 		// This is its own capture/processing cycle; do not invent INPUT_SAMPLE.
+		return _captureFrameId;
+	}
+	// Called immediately before capture starts submitting GPU work, or before
+	// a forced effects redraw when capture supplied no new texture.
+	void BeginCaptureRender() noexcept {
+		if (!_captureFrameId || _renderStarted || _renderEnded) return;
+		_renderStarted = true;
 		_Marker(ReflexMarker::SimulationEnd);
 		_Marker(ReflexMarker::RenderStart);
-		return _captureFrameId;
 	}
 	uint64_t CaptureFrameId() const noexcept { return _captureFrameId; }
 	uint64_t NextPresentId() noexcept { return _captureFrameId ? ++_nextPresentId : 0; }
 	void EndCaptureRender() noexcept {
 		if (_captureFrameId && !_renderEnded) {
-			_Marker(ReflexMarker::RenderEnd);
+			_Marker(_renderStarted ? ReflexMarker::RenderEnd : ReflexMarker::SimulationEnd);
 			_renderEnded = true;
 		}
+	}
+	void DiscardCaptureRender() noexcept {
+		if (_renderStarted) CompleteCapture();
 	}
 	void CompleteCapture() noexcept {
 		EndCaptureRender();
@@ -217,6 +228,7 @@ private:
 	uint64_t _nextFrameId = 0;
 	uint64_t _nextPresentId = 0;
 	uint64_t _captureFrameId = 0;
+	bool _renderStarted = false;
 	bool _renderEnded = false;
 };
 

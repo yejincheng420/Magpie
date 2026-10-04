@@ -504,7 +504,7 @@ bool XeSSUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
 	Impl& impl = *_impl;
 	const bool guidanceReset = drawContext.frameGuidance.requiresHistoryReset &&
 		impl.lastGuidanceResetFrameId != drawContext.frameId;
-	impl.resetHistory |= guidanceReset;
+	impl.resetHistory |= guidanceReset || drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
 	// A command allocator cannot be reset while its previous D3D12 submission
 	// is still executing. Usually the D3D11 consumer has already waited for it.
 	if (!WaitForFenceValue(impl, impl.lastSubmittedValue)) return false;

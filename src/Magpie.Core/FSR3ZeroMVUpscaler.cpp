@@ -502,6 +502,9 @@ bool FSR3ZeroMVUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexce
 	ID3D11Texture2D* output = drawContext.output;
 	if (!_impl || !_impl->context) return false;
 	Impl& impl = *_impl;
+	const bool resetInput = drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
+	impl.resetHistory |= resetInput;
+	if (resetInput && impl.opticalFlow) impl.opticalFlow->ResetHistory();
 	if (!WaitForFence(impl, impl.lastSubmittedValue)) return false;
 	impl.context11->CopyResource(impl.sharedInput11.get(), input);
 	if (impl.enableOpticalFlow) {
@@ -548,7 +551,8 @@ bool FSR3ZeroMVUpscaler::Draw(const NativeEffectDrawContext& drawContext) noexce
 	desc.output = ffxApiGetResourceDX12(impl.sharedOutput12.get(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
 	if (impl.enableJitter) {
 		// Metadata-only jitter: the captured source frame itself is not projection-jittered.
-		const uint32_t sample = (impl.frameIndex++ & 7u) + 1u;
+		const uint32_t phase = drawContext.isNewCaptureFrame ? impl.frameIndex++ : (impl.frameIndex ? impl.frameIndex - 1 : 0);
+		const uint32_t sample = (phase & 7u) + 1u;
 		desc.jitterOffset = { Halton(sample, 2) - 0.5f, Halton(sample, 3) - 0.5f };
 	} else {
 		desc.jitterOffset = { 0.0f, 0.0f };

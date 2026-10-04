@@ -11,6 +11,9 @@ public:
 	virtual ~PresenterBase() noexcept {}
 
 	bool Initialize(HWND hwndAttach, const DeviceResources& deviceResources) noexcept;
+	// Reserve DXGI capacity before shared-texture GPU work. Other presenters
+	// keep their existing BeginFrame admission path.
+	virtual bool PrepareFrame() noexcept { return true; }
 
 	virtual bool BeginFrame(
 		winrt::com_ptr<ID3D11Texture2D>& frameTex,
@@ -28,6 +31,8 @@ public:
 	virtual bool SetBaseFrameRateLimit(double) noexcept { return true; }
 	virtual void SetReflexController(ReflexController*) noexcept {}
 	virtual void SetReflexFrame(uint64_t, uint64_t, bool) noexcept {}
+	virtual void BeginReflexRender() noexcept {}
+	virtual void CancelReflexRender() noexcept {}
 	// Called only from the outer message pump, after BeginFrame found no capacity.
 	virtual bool WaitForFrameCapacity(DWORD) noexcept { return false; }
 	virtual bool WasFrameCapacityBusy() const noexcept { return false; }

@@ -10,6 +10,10 @@ struct ShortcutControl : ShortcutControlT<ShortcutControl>, wil::notify_property
 	ShortcutControl();
 
 	fire_and_forget EditButton_Click(IInspectable const&, RoutedEventArgs const&);
+	void ClearButton_Click(IInspectable const&, RoutedEventArgs const&);
+
+	bool IsClearButtonVisible() const { return _isClearButtonVisible; }
+	void IsClearButtonVisible(bool value);
 
 	ShortcutAction Action() const { return _action; }
 	void Action(ShortcutAction value);
@@ -18,6 +22,9 @@ struct ShortcutControl : ShortcutControlT<ShortcutControl>, wil::notify_property
 	void Title(hstring value);
 
 private:
+	void _StopEditing();
+	void _ClearShortcut();
+	void _UpdateAutomationNames();
 	void _ShortcutDialog_Closing(ContentDialog const&, ContentDialogClosingEventArgs const& args);
 
 	static LRESULT CALLBACK _LowLevelKeyboardProc(
@@ -49,6 +56,7 @@ private:
 	::Magpie::Shortcut _pressedKeys;
 
 	bool _isError = false;
+	bool _isClearButtonVisible = false;
 };
 
 }

@@ -264,6 +264,18 @@ Magpie ships with a handful of effects that can be used in combinations. Most of
   * Parameter
     * Oversharp: The larger the value, the sharper the image.
 
+* xBR 2x, xBR 3x, and xBR 4x: Fixed-integer xBR LV2 scaling for pixel art. xBR is a separate rule set from xBRZ and may produce different contours.
+  * Output size: fixed at 2x, 3x, or 4x, depending on the variant.
+  * Parameters: Y Weight, Eq Threshold, LV2 Coefficient, and Preserve Small Details.
+
+* xBR NoBlend 3x: Fixed 3x xBR scaling that selects colors from the sampled neighborhood instead of interpolating new RGB values.
+  * Output size: fixed at 3x.
+  * Parameter: LV2 Coefficient.
+
+* xBR Hybrid 2x: Fixed 2x combination of xBR and Reverse-AA for low-resolution SDR material that already contains antialiasing or smooth gradients.
+  * Output size: fixed at 2x.
+  * Note: HDR compatibility mode uses a point-sampled 2x fallback until the gamma-domain path is validated for HDR.
+
 * xBRZ_2x, xBRZ_3x, xBRZ_4x, xBRZ_5x, and xBRZ_6x: Scale with the xBRZ algorithm. Suitable for upscaling pixel arts.
   * Output size: determined by the variant.
 

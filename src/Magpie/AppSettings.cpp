@@ -14,6 +14,8 @@
 #include "Logger.h"
 #include "MainWindow.h"
 #include "Profile.h"
+#include "ProfileFrameSync.h"
+#include "ProfileFrameRefresh.h"
 #include "resource.h"
 #include "ScalingMode.h"
 #include "ScalingModesService.h"
@@ -88,8 +90,13 @@ static void WriteProfile(rapidjson::PrettyWriter<rapidjson::StringBuffer>& write
 		writer.String(StrHelper::UTF16ToUTF8(profile.launchParameters).c_str());
 	}
 
+	WriteProfileFrameRefresh(writer, profile.frameRefresh);
 	writer.Key("parameterFocusSwitching");
 	writer.Bool(profile.isParameterFocusSwitchingEnabled);
+	writer.Key("fullscreenToolbarDock");
+	writer.Uint(uint32_t(profile.toolbarDocks.fullscreen));
+	writer.Key("windowedToolbarDock");
+	writer.Uint(uint32_t(profile.toolbarDocks.windowed));
 	writer.Key("scalingMode");
 	writer.Int(profile.scalingMode);
 	writer.Key("captureMethod");
@@ -117,10 +124,6 @@ static void WriteProfile(rapidjson::PrettyWriter<rapidjson::StringBuffer>& write
 	writer.Key("deviceId");
 	writer.Uint(profile.graphicsCardId.deviceId);
 	writer.EndObject();
-	writer.Key("frameRateLimiterEnabled");
-	writer.Bool(profile.isFrameRateLimiterEnabled);
-	writer.Key("maxFrameRate");
-	writer.Double(profile.maxFrameRate);
 
 	writer.Key("3DGameMode");
 	writer.Bool(profile.Is3DGameMode());
@@ -344,6 +347,7 @@ bool AppSettings::Initialize() noexcept {
 			}
 		}
 		if (plan.defaultModes) _SetDefaultScalingModes();
+		const bool shortcutsChanged = _LoadShortcuts(static_cast<const rapidjson::Document&>(plan.document).GetObj());
 		_LoadSettings(static_cast<const rapidjson::Document&>(plan.document).GetObj());
 		_isConfigMigrationNeeded |= ApplyOpticalFlowDefaultsMigration(
 			_scalingModes, _experimentalOpticalFlowDefaultsVersion);
@@ -358,7 +362,6 @@ bool AppSettings::Initialize() noexcept {
 		disableHdr(_defaultProfile);
 		for (Profile& profile : _profiles) disableHdr(profile);
 		if (hdrSettingsChanged) logger.Info("HDR compatibility temporarily disabled in saved profiles");
-		const bool shortcutsChanged = _SetDefaultShortcuts();
 		// Existing versioned migrations also preserve the input before their first write.
 		if (_isConfigMigrationNeeded && !recovered) {
 			if (!ConfigRecovery::Preserve(existingConfigPath, configText, files))
@@ -553,7 +556,6 @@ void AppSettings::IsDeveloperMode(bool value) noexcept {
 		_isFontCacheDisabled = false;
 		_isSaveEffectSources = false;
 		_isWarningsAreErrors = false;
-		_duplicateFrameDetectionMode = DuplicateFrameDetectionMode::Dynamic;
 		_isStatisticsForDynamicDetectionEnabled = false;
 		_isFP16Disabled = false;
 	}
@@ -815,18 +817,12 @@ std::string AppSettings::_Serialize(const _AppSettingsData& data) {
 	writer.Uint((uint32_t)data._duplicateFrameDetectionMode);
 	writer.Key("enableStatisticsForDynamicDetection");
 	writer.Bool(data._isStatisticsForDynamicDetectionEnabled);
-	writer.Key("frontEdgeSync");
-	writer.Bool(data._isFrontEdgeSyncEnabled);
 	writer.Key("stopEffectsOnTaskSwitch");
 	writer.Bool(data._isStopEffectsOnTaskSwitchEnabled);
 	writer.Key("vrr");
 	writer.Bool(data._isVRREnabled);
-	writer.Key("frontEdgeSyncFrameRate");
-	writer.Double(data._frontEdgeSyncFrameRate);
-	writer.Key("frameSyncMode");
-	writer.Uint(static_cast<uint32_t>(data._frameSyncMode));
-	writer.Key("minFrameRate");
-	writer.Double(data._minFrameRate);
+	writer.Key("experimentalFrameRefreshVersion");
+	writer.Uint(1);
 	writer.Key("disableFP16");
 	writer.Bool(data._isFP16Disabled);
 	writer.Key("experimentalDlssnrSettingsVersion");
@@ -842,6 +838,8 @@ std::string AppSettings::_Serialize(const _AppSettingsData& data) {
 
 	ScalingModesService::Export(writer, data._scalingModes);
 
+	writer.Key("experimentalProfileFrameSyncVersion");
+	writer.Uint(1);
 	writer.Key("profiles");
 	writer.StartArray();
 	WriteProfile(writer, data._defaultProfile);
@@ -981,56 +979,6 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 		JsonHelper::ReadBool(windowPosObj, "maximized", _isMainWindowMaximized);
 	}
 
-	auto shortcutsNode = root.FindMember("shortcuts");
-	if (shortcutsNode == root.MemberEnd()) {
-		// v0.10.0-preview1 使用 hotkeys
-		shortcutsNode= root.FindMember("hotkeys");
-	}
-	if (shortcutsNode != root.MemberEnd() && shortcutsNode->value.IsObject()) {
-		auto shortcutsObj = shortcutsNode->value.GetObj();
-
-		if (auto node = shortcutsObj.FindMember("profiler");
-			node != shortcutsObj.MemberEnd() && node->value.IsUint()) {
-			DecodeShortcut(node->value.GetUint(), _shortcuts[(size_t)ShortcutAction::Profiler]);
-		}
-		if (auto node = shortcutsObj.FindMember("effectParameters");
-			node != shortcutsObj.MemberEnd() && node->value.IsUint()) {
-			DecodeShortcut(node->value.GetUint(), _shortcuts[(size_t)ShortcutAction::EffectParameters]);
-		}
-		if (auto node = shortcutsObj.FindMember("screenshot");
-			node != shortcutsObj.MemberEnd() && node->value.IsUint()) {
-			DecodeShortcut(node->value.GetUint(), _shortcuts[(size_t)ShortcutAction::Screenshot]);
-		}
-		if (auto node = shortcutsObj.FindMember("toolbarPin");
-			node != shortcutsObj.MemberEnd() && node->value.IsUint()) {
-			DecodeShortcut(node->value.GetUint(), _shortcuts[(size_t)ShortcutAction::ToolbarPin]);
-		}
-		if (auto node = shortcutsObj.FindMember("comparison");
-			node != shortcutsObj.MemberEnd() && node->value.IsUint()) {
-			DecodeShortcut(node->value.GetUint(), _shortcuts[(size_t)ShortcutAction::Comparison]);
-		}
-
-		auto scaleNode = shortcutsObj.FindMember("scale");
-		if (scaleNode != shortcutsObj.MemberEnd() && scaleNode->value.IsUint()) {
-			DecodeShortcut(scaleNode->value.GetUint(), _shortcuts[(size_t)ShortcutAction::Scale]);
-		}
-
-		auto windowedModeScaleNode = shortcutsObj.FindMember("windowedModeScale");
-		if (windowedModeScaleNode != shortcutsObj.MemberEnd() && windowedModeScaleNode->value.IsUint()) {
-			DecodeShortcut(windowedModeScaleNode->value.GetUint(), _shortcuts[(size_t)ShortcutAction::WindowedModeScale]);
-		}
-
-		auto toolbarNode = shortcutsObj.FindMember("toolbar");
-		if (toolbarNode == shortcutsObj.MemberEnd()) {
-			// v0.12 前使用 overlay
-			toolbarNode = shortcutsObj.FindMember("overlay");
-		}
-		
-		if (toolbarNode != shortcutsObj.MemberEnd() && toolbarNode->value.IsUint()) {
-			DecodeShortcut(toolbarNode->value.GetUint(), _shortcuts[(size_t)ShortcutAction::Toolbar]);
-		}
-	}
-
 	if (!JsonHelper::ReadUInt(root, "countdownSeconds", _countdownSeconds, true)) {
 		// v0.10.0-preview1 使用 downCount
 		JsonHelper::ReadUInt(root, "downCount", _countdownSeconds);
@@ -1076,8 +1024,22 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 		_duplicateFrameDetectionMode = (::Magpie::DuplicateFrameDetectionMode)duplicateFrameDetectionMode;
 	}
 	JsonHelper::ReadBool(root, "enableStatisticsForDynamicDetection", _isStatisticsForDynamicDetectionEnabled);
-	JsonHelper::ReadFloat(root, "minFrameRate", _minFrameRate);
-	JsonHelper::ReadBool(root, "frontEdgeSync", _isFrontEdgeSyncEnabled);
+	float legacyIdle = 10.0f;
+	JsonHelper::ReadFloat(root, "minFrameRate", legacyIdle);
+	if (!std::isfinite(legacyIdle) || legacyIdle < 0 || legacyIdle > 1000) legacyIdle = 10.0f;
+	const FrameSyncSettings legacyFrameSync = ReadProfileFrameSync(root);
+	uint32_t refreshVersion = 0;
+	JsonHelper::ReadUInt(root, "experimentalFrameRefreshVersion", refreshVersion);
+	const bool migrateLegacyRefresh = refreshVersion < 1;
+	if (migrateLegacyRefresh) _isConfigMigrationNeeded = true;
+	_defaultProfile.frameRefresh = ReadProfileFrameRefresh(root, legacyFrameSync, legacyIdle, migrateLegacyRefresh);
+	uint32_t profileFrameSyncVersion = 0;
+	JsonHelper::ReadUInt(root, "experimentalProfileFrameSyncVersion", profileFrameSyncVersion);
+	if (profileFrameSyncVersion < 1 || root.HasMember("frontEdgeSync") ||
+		root.HasMember("frontEdgeSyncFrameRate") || root.HasMember("frameSyncMode")) {
+		_isConfigMigrationNeeded = true;
+		Logger::Get().Info("Migrating frame sync settings to independent profiles (version 1)");
+	}
 	// Migrate the former global choice only while loading existing profiles.
 	bool legacyParameterFocusSwitching = false;
 	JsonHelper::ReadBool(root, "parameterFocusSwitching", legacyParameterFocusSwitching);
@@ -1086,12 +1048,6 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 	_isStopEffectsOnTaskSwitchEnabled = false;
 	JsonHelper::ReadBool(root, "stopEffectsOnTaskSwitch", _isStopEffectsOnTaskSwitchEnabled);
 	JsonHelper::ReadBool(root, "vrr", _isVRREnabled);
-	JsonHelper::ReadFloat(root, "frontEdgeSyncFrameRate", _frontEdgeSyncFrameRate);
-	_frontEdgeSyncFrameRate = SanitizePresentationFrameRate(_frontEdgeSyncFrameRate);
-	uint32_t frameSyncMode = 0;
-	JsonHelper::ReadUInt(root, "frameSyncMode", frameSyncMode);
-	_frameSyncMode = IsValidFrameSyncMode(static_cast<FrameSyncMode>(frameSyncMode))
-		? static_cast<FrameSyncMode>(frameSyncMode) : FrameSyncMode::FrontEdge;
 	JsonHelper::ReadBool(root, "disableFP16", _isFP16Disabled);
 
 	[[maybe_unused]] bool result = ScalingModesService::Get().Import(root, true);
@@ -1157,7 +1113,7 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 		if (size > 0) {
 			if (scaleProfilesArray[0].IsObject()) {
 				// 解析默认缩放配置不会失败
-				_LoadProfile(scaleProfilesArray[0].GetObj(), _defaultProfile, true, legacyParameterFocusSwitching);
+				_LoadProfile(scaleProfilesArray[0].GetObj(), _defaultProfile, true, legacyParameterFocusSwitching, legacyFrameSync, legacyIdle, migrateLegacyRefresh);
 			}
 
 			if (size > 1) {
@@ -1168,7 +1124,7 @@ void AppSettings::_LoadSettings(const rapidjson::GenericObject<true, rapidjson::
 					}
 
 					Profile& rule = _profiles.emplace_back();
-					if (!_LoadProfile(scaleProfilesArray[i].GetObj(), rule, false, legacyParameterFocusSwitching)) {
+					if (!_LoadProfile(scaleProfilesArray[i].GetObj(), rule, false, legacyParameterFocusSwitching, legacyFrameSync, legacyIdle, migrateLegacyRefresh)) {
 						_profiles.pop_back();
 						continue;
 					}
@@ -1243,10 +1199,20 @@ bool AppSettings::_LoadProfile(
 	const rapidjson::GenericObject<true, rapidjson::Value>& profileObj,
 	Profile& profile,
 	bool isDefault,
-	bool legacyParameterFocusSwitching
+	bool legacyParameterFocusSwitching,
+	const FrameSyncSettings& legacyFrameSync,
+	float legacyIdle,
+	bool migrateLegacyRefresh
 ) const noexcept {
+	profile.frameRefresh = ReadProfileFrameRefresh(profileObj, legacyFrameSync, legacyIdle, migrateLegacyRefresh);
 	profile.isParameterFocusSwitchingEnabled = legacyParameterFocusSwitching;
 	JsonHelper::ReadBool(profileObj, "parameterFocusSwitching", profile.isParameterFocusSwitchingEnabled);
+	{
+		uint32_t fullscreen = 0, windowed = 0;
+		JsonHelper::ReadUInt(profileObj, "fullscreenToolbarDock", fullscreen, true);
+		JsonHelper::ReadUInt(profileObj, "windowedToolbarDock", windowed, true);
+		profile.toolbarDocks = { SanitizeToolbarDock(fullscreen), SanitizeToolbarDock(windowed) };
+	}
 	if (!isDefault) {
 		if (!JsonHelper::ReadString(profileObj, "name", profile.name, true)) {
 			return false;
@@ -1389,13 +1355,6 @@ bool AppSettings::_LoadProfile(
 		}
 	}
 
-	JsonHelper::ReadBool(profileObj, "frameRateLimiterEnabled", profile.isFrameRateLimiterEnabled);
-	JsonHelper::ReadFloat(profileObj, "maxFrameRate", profile.maxFrameRate);
-	if (profile.maxFrameRate <= 10.0f - FLOAT_EPSILON<float> ||
-		profile.maxFrameRate >= 1000.0f + FLOAT_EPSILON<float>)
-	{
-		profile.maxFrameRate = 60.0f;
-	}
 
 	JsonHelper::ReadBoolFlag(profileObj, "3DGameMode", ScalingFlags::Is3DGameMode, profile.scalingFlags);
 	if (!JsonHelper::ReadBoolFlag(profileObj, "captureTitleBar", ScalingFlags::CaptureTitleBar, profile.scalingFlags, true)) {
@@ -1468,67 +1427,49 @@ bool AppSettings::_LoadProfile(
 	return true;
 }
 
-bool AppSettings::_SetDefaultShortcuts() noexcept {
+bool AppSettings::_LoadShortcuts(const rapidjson::GenericObject<true, rapidjson::Value>& root) noexcept {
+	// Missing fields inherit defaults; present zero values explicitly remove them.
+	_SetDefaultShortcuts();
+	auto node = root.FindMember("shortcuts");
+	if (node == root.MemberEnd()) node = root.FindMember("hotkeys");
+	if (node == root.MemberEnd() || !node->value.IsObject()) return true;
+
+	const auto shortcuts = static_cast<const rapidjson::Value&>(node->value).GetObj();
 	bool changed = false;
-
-	Shortcut& scaleShortcut = _shortcuts[(size_t)ShortcutAction::Scale];
-	if (scaleShortcut.IsEmpty()) {
-		scaleShortcut.alt = true;
-		scaleShortcut.shift = true;
-		scaleShortcut.code = 'A';
-
-		changed = true;
-	}
-
-	Shortcut& windowedModeScaleShortcut = _shortcuts[(size_t)ShortcutAction::WindowedModeScale];
-	if (windowedModeScaleShortcut.IsEmpty()) {
-		windowedModeScaleShortcut.alt = true;
-		windowedModeScaleShortcut.shift = true;
-		windowedModeScaleShortcut.code = 'Q';
-
-		changed = true;
-	}
-
-	Shortcut& overlayShortcut = _shortcuts[(size_t)ShortcutAction::Toolbar];
-	if (overlayShortcut.IsEmpty()) {
-		overlayShortcut.alt = true;
-		overlayShortcut.shift = true;
-		overlayShortcut.code = 'D';
-
-		changed = true;
-	}
-
-    if (Shortcut& shortcut = _shortcuts[(size_t)ShortcutAction::Profiler]; shortcut.IsEmpty()) {
-        shortcut.alt = true;
-        shortcut.shift = true;
-        shortcut.code = 'P';
-        changed = true;
-    }
-    if (Shortcut& shortcut = _shortcuts[(size_t)ShortcutAction::EffectParameters]; shortcut.IsEmpty()) {
-        shortcut.alt = true;
-        shortcut.shift = true;
-        shortcut.code = 'E';
-        changed = true;
-    }
-    if (Shortcut& shortcut = _shortcuts[(size_t)ShortcutAction::Screenshot]; shortcut.IsEmpty()) {
-        shortcut.alt = true;
-        shortcut.shift = true;
-        shortcut.code = 'S';
-        changed = true;
-    }
-    if (Shortcut& shortcut = _shortcuts[(size_t)ShortcutAction::ToolbarPin]; shortcut.IsEmpty()) {
-        shortcut.alt = true;
-        shortcut.shift = true;
-        shortcut.code = 'F';
-        changed = true;
-    }
-    if (Shortcut& shortcut = _shortcuts[(size_t)ShortcutAction::Comparison]; shortcut.IsEmpty()) {
-        shortcut.alt = true;
-        shortcut.shift = true;
-        shortcut.code = 'C';
-        changed = true;
-    }
+	auto read = [&](const char* key, ShortcutAction action, const char* legacyKey = nullptr) {
+		auto field = shortcuts.FindMember(key);
+		if (field == shortcuts.MemberEnd() && legacyKey) field = shortcuts.FindMember(legacyKey);
+		if (field == shortcuts.MemberEnd() || !field->value.IsUint() || field->value.GetUint() > 0xfff) {
+			changed = true;
+			return;
+		}
+		DecodeShortcut(field->value.GetUint(), _shortcuts[(size_t)action]);
+	};
+	read("scale", ShortcutAction::Scale);
+	read("windowedModeScale", ShortcutAction::WindowedModeScale);
+	read("toolbar", ShortcutAction::Toolbar, "overlay");
+	read("profiler", ShortcutAction::Profiler);
+	read("effectParameters", ShortcutAction::EffectParameters);
+	read("screenshot", ShortcutAction::Screenshot);
+	read("toolbarPin", ShortcutAction::ToolbarPin);
+	read("comparison", ShortcutAction::Comparison);
 	return changed;
+}
+
+void AppSettings::_SetDefaultShortcuts() noexcept {
+	constexpr std::pair<ShortcutAction, uint8_t> defaults[] = {
+		{ ShortcutAction::Scale, 'A' },
+		{ ShortcutAction::WindowedModeScale, 'Q' },
+		{ ShortcutAction::Toolbar, 'D' },
+		{ ShortcutAction::Profiler, 'P' },
+		{ ShortcutAction::EffectParameters, 'E' },
+		{ ShortcutAction::Screenshot, 'S' },
+		{ ShortcutAction::ToolbarPin, 'F' },
+		{ ShortcutAction::Comparison, 'C' }
+	};
+	for (const auto& [action, code] : defaults) {
+		_shortcuts[(size_t)action] = { .code = code, .alt = true, .shift = true };
+	}
 }
 
 void AppSettings::_SetDefaultScalingModes() noexcept {

@@ -727,4 +727,11 @@
   <data name="About_Version_CommitId" xml:space="preserve">
     <value>Номер коміту</value>
   </data>
+  <data name="ScalingModes_General_ConfigFolder.Text" xml:space="preserve">
+    <value>Тека налаштувань</value>
+  </data>
+  <data name="ScalingModes_General_Reset.Text" xml:space="preserve">
+    <value>Скинути</value>
+  </data>
+  <data name="ScalingModes_General_MoreOptions.Content" xml:space="preserve"><value>Додаткові параметри</value></data>
 </root>

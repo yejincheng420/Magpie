@@ -38,13 +38,10 @@ namespace Magpie {
 		Boolean IsAllowScalingMaximized;
 		Boolean IsSimulateExclusiveFullscreen;
 		Boolean IsInlineParams;
-		Boolean IsFrontEdgeSyncEnabled;
 		Boolean IsStopEffectsOnTaskSwitchEnabled;
 		Boolean IsVRREnabled;
-		Double FrontEdgeSyncFrameRate;
-		Int32 FrameSyncModeIndex;
-		static IVector<IInspectable> MinFrameRateOptions { get; };
-		Int32 MinFrameRateIndex;
+		String DefaultFrameRefreshSummary { get; };
+		void EditDefaultFrameRefresh();
 
 		Boolean IsDeveloperMode;
 		void LocateMagpieLogs();

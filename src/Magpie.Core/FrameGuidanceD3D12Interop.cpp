@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "FrameGuidanceD3D12Interop.h"
 #include "Logger.h"
+#include <array>
 
 namespace Magpie {
 
@@ -14,6 +15,7 @@ bool FrameGuidanceD3D12Interop::Initialize(
 }
 
 bool FrameGuidanceD3D12Interop::_WaitForConsumer() noexcept {
+	if (_consumerFence->GetCompletedValue() == UINT64_MAX) return false;
 	if (!_lastConsumerFenceValue ||
 		_consumerFence->GetCompletedValue() >= _lastConsumerFenceValue) {
 		return true;
@@ -24,7 +26,7 @@ bool FrameGuidanceD3D12Interop::_WaitForConsumer() noexcept {
 		return false;
 	}
 	event.wait();
-	return true;
+	return _consumerFence->GetCompletedValue() != UINT64_MAX;
 }
 
 bool FrameGuidanceD3D12Interop::_OpenShared(
@@ -74,15 +76,24 @@ bool FrameGuidanceD3D12Interop::Update(
 
 bool FrameGuidanceD3D12Interop::WaitForProducer(
 	ID3D11DeviceContext4* context,
-	const FrameGuidanceView& view
+	const FrameGuidanceView& view,
+	bool includeConfidence
 ) noexcept {
-	for (const FrameGuidanceResource* resource : { &view.motion, &view.depth }) {
-		if (resource->metadata.sync.fence && resource->metadata.sync.value &&
-			FAILED(context->Wait(
-				resource->metadata.sync.fence, resource->metadata.sync.value))) {
-			return false;
-		}
+	// Downsampling also consumes confidence. Merge equal producer fences and
+	// wait on the highest value once, preserving every resource dependency.
+	std::array<FrameGuidanceSyncPoint, 3> waits{};
+	size_t count = 0;
+	for (const FrameGuidanceResource* resource : { &view.motion, &view.depth, &view.confidence }) {
+		if (resource == &view.confidence && !includeConfidence) continue;
+		const auto sync = resource->metadata.sync;
+		if (!sync.fence || !sync.value) continue;
+		size_t i = 0;
+		while (i < count && waits[i].fence != sync.fence) ++i;
+		if (i == count) waits[count++] = sync;
+		else waits[i].value = std::max(waits[i].value, sync.value);
 	}
+	for (size_t i = 0; i < count; ++i)
+		if (FAILED(context->Wait(waits[i].fence, waits[i].value))) return false;
 	return true;
 }
 
