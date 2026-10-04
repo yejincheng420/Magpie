@@ -2872,7 +2872,6 @@ bool DLSSNRFilter::ApplyLiveParameters(
 		for (size_t j = i; j < _passSettings.size(); ++j)
 			(j ? *_impl->laterPasses[j - 1] : *_impl).resetHistory = true;
 	}
-	}
 	_passSettings = std::move(candidates);
 	_settings = _passSettings.front();
 	_impl->residualParametersDirty |= residualChanged;
@@ -3487,7 +3486,10 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	};
 	// A live upstream edit can change this input even for the same capture ID.
 	// Re-evaluate with fresh history instead of mixing it with the old image.
-	if (impl.lastEvaluatedInputRevision != context.inputRevision) {
+	// 上游 0.6.9 用 DLSSNRChainCache 承担同帧去重；这里用 cache.inputRevision
+	// 与 context.inputRevision 的差异检测本 pass 的"输入已变"（等效于旧
+	// lastEvaluatedInputRevision 成员，但该成员在多 pass 化后已移除）。
+	if (impl.cache.inputRevision != context.inputRevision) {
 		impl.resetHistory = true;
 	}
 	// 源供给速率估计：相邻两次 Draw 的捕获时间戳差（EMA）。奇偶帧各自消费了
@@ -3540,12 +3542,9 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 		}
 		if (!impl.transferBypassed && TransferResidualToOddFrame(
 			impl, context, _settings, context.input, context.output)) {
-			impl.lastEvaluatedFrameId = context.frameId;
-			impl.lastEvaluatedParameterRevision = impl.evaluateParameterRevision;
-			impl.lastEvaluatedInputRevision = context.inputRevision;
-			impl.resetHistory = false;
-			impl.nextFrameIsReuse = false;
-			impl.lastDrawParity = 1;
+		impl.resetHistory = false;
+		impl.nextFrameIsReuse = false;
+		impl.lastDrawParity = 1;
 			// 与上游链缓存对齐：奇数转移帧同样视为本捕获已产出，避免同一
 			// frameId 的重绘再走完整 NGX 路径。
 			std::array<uint64_t, 3> transferRevisions{};
@@ -3787,9 +3786,6 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 			FormatTimingSummary("submit", impl.submitTimings.Summarize()),
 			FormatTimingSummary("evaluateGPU", impl.evaluateGpuTimings.Summarize())));
 	}
-	impl.lastEvaluatedFrameId = context.frameId;
-	impl.lastEvaluatedParameterRevision = impl.evaluateParameterRevision;
-	impl.lastEvaluatedInputRevision = context.inputRevision;
 	// 偶数帧完成：保存低分辨率降噪成品（sharedOutput11 = impl.width x height），
 	// 供下一奇数帧做残差转移，并翻转奇偶状态。资源缺失/禁用时保持偶数帧连跑。
 	// 旁路状态下不翻转（本帧虽走完整 NGX 但奇偶角色仍是「奇」,持续重估旁路

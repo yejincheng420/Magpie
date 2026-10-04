@@ -3825,11 +3825,11 @@ void Renderer::_BackendRender(
 				.frameId = _capturedFrameId,
 				.previousCaptureFrameId = _previousCapturedFrameId,
 				.inputRevision = key.inputRevision,
+				// 残差转移用捕获时间戳估计源供给速率（与后端节奏无关的无污染度量）。
+				.captureTimestamp100ns = _frameSource->CaptureTimestamp100ns(),
 				.inputHistoryRevision = key.inputHistoryRevision,
 				.inputHistoryReset = historyReset,
 				.isNewCaptureFrame = isNewCaptureFrame,
-				// 残差转移用捕获时间戳估计源供给速率（与后端节奏无关的无污染度量）。
-				.captureTimestamp100ns = _frameSource->CaptureTimestamp100ns(),
 				.frameGuidance = !isNewCaptureFrame && !diagnostic && !nr ? guidance.zero : guidance.produced,
 				.zeroFrameGuidance = guidance.zero
 			};
