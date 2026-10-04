@@ -67,6 +67,12 @@ public:
 		return result;
 	}
 	bool Drain() noexcept override { return !_filter || _filter->Drain(); }
+	// 残差转移（隔帧 NGX）的奇帧/偶帧标记必须穿透本壳类：Renderer 按 effect
+	// 槽位调用的是 wrapper 的 LastDrawReuseParity，不转发会让前端 pair 节奏化
+	// 恒 -1，奇帧立即 present（配对半周期 hold 失效 → 组合场景节奏闪烁）。
+	int32_t LastDrawReuseParity() const noexcept override {
+		return _filter ? _filter->LastDrawReuseParity() : -1;
+	}
 	bool Resize(DeviceResources& resources, ID3D11Texture2D* input,
 		ID3D11Texture2D* output) noexcept override {
 		const EffectOption option = _option;

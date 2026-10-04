@@ -3484,14 +3484,12 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 			impl.disabled ? impl.sharedInput11.get() : final.sharedOutput11.get());
 		return true;
 	};
-	// A live upstream edit can change this input even for the same capture ID.
-	// Re-evaluate with fresh history instead of mixing it with the old image.
-	// 上游 0.6.9 用 DLSSNRChainCache 承担同帧去重；这里用 cache.inputRevision
-	// 与 context.inputRevision 的差异检测本 pass 的"输入已变"（等效于旧
-	// lastEvaluatedInputRevision 成员，但该成员在多 pass 化后已移除）。
-	if (impl.cache.inputRevision != context.inputRevision) {
-		impl.resetHistory = true;
-	}
+	// 注：输入变化检测已由上游 0.6.9 的 DLSSNRChainCache 承担——
+	// FirstDirty() 对同帧 inputRevision/参数/引导任一变化都会返回 dirty 起点，
+	// resetHistory 置位条件也收敛在 cache 命中失败的分支里。此处不再额外
+	// 触发 resetHistory（旧 lastEvaluatedInputRevision 检查若按 inputRevision
+	// 逐帧比较会在新捕获帧恒真，导致 NGX PARAM_RESET 每帧置 1、时域历史
+	// 永不累积 → 画面间歇性发白闪烁）。本行为合并期误加的死检查，已移除。
 	// 源供给速率估计：相邻两次 Draw 的捕获时间戳差（EMA）。奇偶帧各自消费了
 	// 相邻的捕获帧,时间戳差即源节奏,与后端处理速度无关（无污染度量）。
 	if (_settings.enableFrameReuse &&
