@@ -35,13 +35,16 @@ struct DLSSNRSettings {
 	float skinStructureStrength = 0.0f;
 	bool useAutoMask = false;
 	bool uiCorrection = false;
-	// 残差转移：奇数帧跳过 NGX，把偶数帧的（运动补偿后的）残差贴到奇数帧的
+	// 残差转移：奇数帧跳过 NGX，把偶数帧的（运动补偿后的）修正贴到奇数帧的
 	// 新捕获上。奇数帧是真实的新画面（可与帧生成叠加），NGX 开销减半。
 	// 残差与噪点独立随机，转移后奇帧噪点幅度约 √2 倍（比无 DLSSNR 干净一半）。
-	// residualTransferMode: 0 = Copy(残差不挪,最稳) 1 = OF(逐像素 NVOF MV 挪)
-	//                       2 = Global MV(全帧单一向量挪)
+	// residualTransferMode: 0 = Copy(不挪) 1 = Global MV(全帧单向量挪)
+	// residualTransferDomain: 0 = Residual(P0-1 残差域，转移 evenDenoised−
+	//   evenInput 的有符号残差场，底图恒为当帧原图) 1 = Legacy Denoised
+	//   (旧「整张降噪图重放」实现，仅作 A/B 对照；残影 ∝ 帧间整幅变化)。
 	bool enableFrameReuse = false;
 	uint32_t residualTransferMode = 0;
+	uint32_t residualTransferDomain = 0;
 	// 上游 0.6.7 统一的光流请求（取代旧 motionVectorQuality NVIDIA 单选）：
 	// 支持 AMD OF / NVIDIA OF 双通道，含旧键迁移（useMotionVectors/motionVectorQuality）。
 	MotionVectorRequest motionRequest{};

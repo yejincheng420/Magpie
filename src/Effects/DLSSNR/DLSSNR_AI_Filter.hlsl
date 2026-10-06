@@ -23,6 +23,14 @@ int enableFrameReuse;
 int residualTransferMode;
 
 //!PARAMETER
+//!GROUP Frame Reuse
+//!LABEL Transfer Domain
+//!DEFAULT 0
+//!OPTION 0 Residual (new)
+//!OPTION 1 Legacy Denoised (A/B)
+int residualTransferDomain;
+
+//!PARAMETER
 //!GROUP Detail Control
 //!LABEL Adjust Input Resolution
 //!DEFAULT 0

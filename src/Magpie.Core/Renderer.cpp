@@ -1224,8 +1224,10 @@ bool Renderer::_FrontendOverlayRender(bool contentChanged) noexcept {
 // 稍后再试（非阻塞）。半周期估计来自奇帧到期消费的奇→奇间隔 EMA。偶帧与
 // 超时（800ms 防冻结）恒 false。
 bool Renderer::ShouldDeferOddPresentation() noexcept {
-	// XeSSFG 激活时输入节奏已由 _pendingReuseOdd hold 机制在后端输入层管理,
-	// 前端再叠加半周期延迟会造成双重延迟,跳过。
+	// XeSSFG 激活时奇帧呈现节奏已由 XeSSFGPresenter::EndFrame 的 parity 驱动
+	// hold 管理（XeSSFGPresenter.cpp，奇帧 hold 到上次 present+P/2）；前端再
+	// 叠加半周期延迟会造成双重延迟,跳过。（历史注释提到的 _pendingReuseOdd
+	// 后端 hold 机制已删除，实际实现为 presenter 侧 hold。）
 	if (_isXeSSFrameGenerationActive) {
 		return false;
 	}
