@@ -20,6 +20,7 @@ int enableFrameReuse;
 //!DEFAULT 0
 //!OPTION 0 Copy
 //!OPTION 1 Global MV
+//!OPTION 2 Per-pixel Reproject
 int residualTransferMode;
 
 //!PARAMETER
@@ -29,6 +30,33 @@ int residualTransferMode;
 //!OPTION 0 Residual (new)
 //!OPTION 1 Legacy Denoised (A/B)
 int residualTransferDomain;
+
+//!PARAMETER
+//!GROUP Frame Reuse
+//!LABEL Fill Dropped Detail
+//!DEFAULT 0
+//!MIN 0
+//!MAX 1
+//!STEP 0.1
+float residualFillStrength;
+
+//!PARAMETER
+//!GROUP Frame Reuse
+//!LABEL Pause Below FPS
+//!DEFAULT 0
+//!MIN 0
+//!MAX 120
+//!STEP 1
+int residualMinFps;
+
+//!PARAMETER
+//!GROUP Frame Reuse
+//!LABEL Pause Above New Pixels %
+//!DEFAULT 0
+//!MIN 0
+//!MAX 50
+//!STEP 1
+float residualMaxDropped;
 
 //!PARAMETER
 //!GROUP Detail Control

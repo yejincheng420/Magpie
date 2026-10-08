@@ -66,10 +66,13 @@ DLSSNRSettings ParseDLSSNRSettings(const EffectOption& option, bool hdrEnabled) 
 		.enableFrameReuse = getParameter("enableFrameReuse", 0.0f) >= 0.5f,
 		.residualTransferMode = static_cast<uint32_t>(std::clamp(
 			static_cast<int>(std::lround(
-				getParameter("residualTransferMode", 0.0f))), 0, 1)),
+				getParameter("residualTransferMode", 0.0f))), 0, 2)),
 		.residualTransferDomain = static_cast<uint32_t>(std::clamp(
 			static_cast<int>(std::lround(
 				getParameter("residualTransferDomain", 0.0f))), 0, 1)),
+		.residualFillStrength = getClamped("residualFillStrength", 0.0f, 0.0f, 1.0f),
+		.residualMinFps = getClamped("residualMinFps", 0.0f, 0.0f, 240.0f),
+		.residualMaxDropped = getClamped("residualMaxDropped", 0.0f, 0.0f, 50.0f),
 		.motionRequest = ParseDlssOpticalFlowRequest(option),
 		.experimentalHdr = DlssnrExperimentProtocol{ .enabled = hdrEnabled, .scale = 1.0f }
 	};
@@ -779,6 +782,7 @@ constexpr char SAVE_EVEN_RESIDUAL_HLSL[] = R"(
 Texture2D<float4> EvenDenoised : register(t0);   // sharedOutput（偶帧降噪图）
 Texture2D<float4> EvenInput : register(t1);      // sharedInput（偶帧降采样原图）
 RWTexture2D<float4> EvenResidual : register(u0);
+RWTexture2D<float4> EvenInputHistory : register(u1);   // P2：存档输入色
 
 cbuffer TransferParams : register(b0) {
     uint2 ReducedExtent;
@@ -797,30 +801,160 @@ void SaveEvenResidual(uint3 tid : SV_DispatchThreadID) {
     if (!all(isfinite(denoised))) denoised = 0;
     if (!all(isfinite(input))) input = 0;
     EvenResidual[tid.xy] = float4(denoised - input, 0.0);
+    // 存档输入色：奇数帧重投影后，用「存档色 vs 当帧 3x3 方差盒」判断挪过来的
+    // 残差是否属于这个表面（P2 色彩方差盒）。
+    EvenInputHistory[tid.xy] = float4(input, 1.0);
 }
 )";
 
 // 残差运动转移：warped = oddReduced + warp(evenResidual)（P0-1）。
-// mode 0(Copy)：残差不挪。mode 1(GME)：全局单 MV（原值 2，重编号为 1 保持
-// choice 值连续——{0,2} 空洞触发 UI 弹回 bug）。逐像素 OF warp 已移除。
-// t0 有符号 RGBA16F（UNORM 截断负残差）；t1 当帧降采样图作伪降噪图基底。
-// P0-2 前保持现状：GME 置信度 weight 仍乘在 gmv 上缩放位移，不改。
+// mode 0(Copy)：残差不挪。mode 1(GME)：全局单 MV，conf 控制 copy/shift 混合。
+// mode 2(Reproject)：逐像素 MV 反向重投影——Catmull-Rom 采样并 clamp 到重投影点
+// 所在 2x2 footprint 的残差范围内（照 OptiScaler dlssnr_detail_reuse.hlsl 的
+// MovedFrom：sharp 且无 ringing）。这是相对全局单 MV 的关键升级：全局 MV 只能
+// 表达平移，旋转/视差/局部运动全都挪不到位（= 全屏半对齐糊）。
+// t0 有符号 RGBA16F（UNORM 截断负残差）；t1 当帧降采样图作伪降噪图基底；
+// t2 逐像素 MV（源分辨率，SourcePixels，当前→上一帧）；t3 全局 MV（1x1）。
 constexpr char RESIDUAL_TRANSFER_WARP_HLSL[] = R"(
 Texture2D<float4> EvenResidual : register(t0);   // 偶帧残差场（有符号）
 Texture2D<float4> OddReduced : register(t1);      // 奇帧降采样图（伪降噪图基底）
 Texture2D<float2> DenseMotion : register(t2);     // NVOF 源分辨率 MV
 Texture2D<float4> GmeResult : register(t3);       // 全局 MV（1x1）
+Texture2D<float4> EvenInputHistory : register(t4); // 偶帧降采样输入色（P2 色彩判定）
 RWTexture2D<float4> Transferred : register(u0);
+RWTexture2D<float4> Estimate : register(u1);      // 模式 2 写：moved detail(rgb) + trust(a)
 SamplerState LinearClamp : register(s0);
 
 cbuffer TransferParams : register(b0) {
     uint2 ReducedExtent;    // 低分辨率（impl.width x impl.height）
     uint2 MotionExtent;     // 源分辨率（MV 纹理）
-    float TransferMode;     // 0=Copy 1=GME
-    float MotionScale;      // 源像素 -> 低分辨率像素的缩放
-    float Padding0;
-    float Padding1;
+    float TransferMode;     // 0=Copy 1=GME 2=Reproject
+    float MotionScale;      // 源像素 -> 低分辨率像素的缩放（当前未用）
+    float ClipGamma;        // 色彩方差盒半宽（标准差倍数）
+    float ClipFalloff;      // 超出方盒后多远信任衰减到 0（标准差倍数）
+    float SigmaFloor;       // 标准差下限（防止平坦区被噪声拒绝）
+    float MotionReject;     // 运动一致性容差；0 = 关闭该项
+    float FillRadius;       // 由 Fill shader 使用（此处占位以保持偏移一致）
+    float FillStrength;
 };
+
+float3 ToYCoCg(float3 c) {
+    return float3(dot(c, float3(0.25, 0.5, 0.25)),
+                  dot(c, float3(0.5, 0.0, -0.5)),
+                  dot(c, float3(-0.25, 0.5, -0.25)));
+}
+
+// 当帧输入的 3x3 邻域在 YCoCg 下的均值与标准差（下限 sigmaFloor）。方差盒用
+// 标准差度量，所以噪声不会误拒、真实变化会拒绝（照 OptiScaler ColourBox）。
+void ColourBox(uint2 p, out float3 mean, out float3 sigma) {
+    const int2 last = int2(ReducedExtent) - 1;
+    float3 sum = 0.0;
+    float3 sumSquares = 0.0;
+    [unroll] for (int cy = -1; cy <= 1; ++cy) {
+        [unroll] for (int cx = -1; cx <= 1; ++cx) {
+            const int2 texel = clamp(int2(p) + int2(cx, cy), int2(0, 0), last);
+            const float3 c = ToYCoCg(OddReduced.Load(int3(texel, 0)).rgb);
+            sum += c;
+            sumSquares += c * c;
+        }
+    }
+    mean = sum / 9.0;
+    sigma = max(sqrt(max(sumSquares / 9.0 - mean * mean, 0.0)),
+                max(SigmaFloor, 1e-5));
+}
+
+// 存档色 vs 当帧方差盒：落在 mean ± ClipGamma*sigma 内完全信任，超出的部分在
+// ClipFalloff 倍标准差内衰减到 0。
+float ColourTrust(float2 previousUv, float3 mean, float3 sigma) {
+    const float3 saved = ToYCoCg(
+        EvenInputHistory.SampleLevel(LinearClamp, previousUv, 0.0).rgb);
+    const float3 excess = max(abs(saved - mean) - ClipGamma * sigma, 0.0) / sigma;
+    return 1.0 - saturate(max(excess.x, max(excess.y, excess.z))
+        / max(ClipFalloff, 1e-3));
+}
+
+// 本像素的 MV 与重投影点处的 MV 是否一致：那里现在动的东西和这里不是同一个
+// （边缘穿过、原来是背景）时，存档的残差不属于本像素。差异以「矢量长度 + 1」
+// 归一，快移和它自带的小误差不会误拒；在 0.5~1.0 倍 MotionReject 之间淡出。
+float MotionTrust(float2 previousUv, float2 raw) {
+    if (MotionReject <= 0.0) return 1.0;
+    const float2 motionSize = float2(MotionExtent);
+    const float2 workSize = float2(ReducedExtent);
+    const int2 therePos = clamp(int2(previousUv * motionSize),
+        int2(0, 0), int2(motionSize) - 1);
+    const float2 there = DenseMotion.Load(int3(therePos, 0)).rg;
+    if (!all(isfinite(there))) return 1.0;   // 无效向量说明不了来源
+    const float2 here = raw / motionSize * workSize;
+    const float2 came = there / motionSize * workSize;
+    const float difference = length(here - came);
+    return 1.0 - smoothstep(0.5, 1.0,
+        difference / (MotionReject * (length(here) + 1.0)));
+}
+
+// Catmull-Rom，5 次双线性 tap（4 个角不取）。照 OptiScaler SampleCatmullRom。
+float3 SampleCatmullRom(Texture2D<float4> tex, float2 uv, float2 size) {
+    const float2 position = uv * size;
+    const float2 centre = floor(position - 0.5) + 0.5;
+    const float2 f = position - centre;
+    const float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    const float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    const float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    const float2 w3 = f * f * (-0.5 + 0.5 * f);
+    const float2 w12 = w1 + w2;
+    const float2 texel = 1.0 / size;
+    const float2 uv0 = (centre - 1.0) * texel;
+    const float2 uv3 = (centre + 2.0) * texel;
+    const float2 uv12 = (centre + w2 / w12) * texel;
+
+    float4 result = tex.SampleLevel(LinearClamp, float2(uv12.x, uv0.y), 0) * (w12.x * w0.y);
+    result += tex.SampleLevel(LinearClamp, float2(uv0.x, uv12.y), 0) * (w0.x * w12.y);
+    result += tex.SampleLevel(LinearClamp, uv12, 0) * (w12.x * w12.y);
+    result += tex.SampleLevel(LinearClamp, float2(uv3.x, uv12.y), 0) * (w3.x * w12.y);
+    result += tex.SampleLevel(LinearClamp, float2(uv12.x, uv3.y), 0) * (w12.x * w3.y);
+    const float weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    return (result / max(weight, 1e-4)).rgb;
+}
+
+// 重投影点所在 2x2 footprint 的残差范围。只统计双线性权重非零的 texel：落在
+// 纹素中心时就是一个 texel，权重为 0 的邻居（可能是另一个表面）不得撑宽范围。
+// 任一 texel 非有限则整个样本不可信（返回 false）。
+bool FootprintRange(float2 previousUv, out float3 lo, out float3 hi) {
+    const float2 work = float2(ReducedExtent);
+    const float2 position = previousUv * work - 0.5;
+    const int2 base = int2(floor(position));
+    const float2 f = position - float2(base);
+    float3 rangeLo = 65504.0;
+    float3 rangeHi = -65504.0;
+    [unroll] for (int i = 0; i < 4; ++i) {
+        const int2 corner = int2(i & 1, i >> 1);
+        const float2 axis = float2(corner.x != 0 ? f.x : 1.0 - f.x,
+                                   corner.y != 0 ? f.y : 1.0 - f.y);
+        if (axis.x * axis.y < 1e-3) continue;
+        const int2 texel = clamp(base + corner, int2(0, 0), int2(work) - 1);
+        const float3 d = EvenResidual.Load(int3(texel, 0)).rgb;
+        if (!all(isfinite(d))) return false;
+        rangeLo = min(rangeLo, d);
+        rangeHi = max(rangeHi, d);
+    }
+    lo = rangeLo;
+    hi = rangeHi;
+    return true;
+}
+
+// 逐像素 MV（源像素单位，当前→上一帧）-> reduced 图 uv 位移；raw 回传给运动
+// 一致性判定用。usable=false 表示该像素的向量不可用（非有限，或重投影点出
+// 画面），调用方按 conf=0 处理（不挪，用未平移的残差）。
+float2 ReprojectedUv(float2 uv, out float2 raw, out bool usable) {
+    const int2 motionPos = clamp(int2(uv * float2(MotionExtent)),
+        int2(0, 0), int2(MotionExtent) - 1);
+    raw = DenseMotion.Load(int3(motionPos, 0)).rg;
+    usable = all(isfinite(raw));
+    if (!usable) return uv;
+    const float2 previousUv = uv + raw / float2(MotionExtent);
+    usable = all(isfinite(previousUv)) &&
+        all(previousUv >= 0.0) && all(previousUv <= 1.0);
+    return previousUv;
+}
 
 [numthreads(8, 8, 1)]
 void TransferWarp(uint3 tid : SV_DispatchThreadID) {
@@ -828,29 +962,328 @@ void TransferWarp(uint3 tid : SV_DispatchThreadID) {
     float2 reducedPos = float2(tid.xy) + 0.5;
     float2 uv = reducedPos / float2(ReducedExtent);
 
-    float2 offset = 0.0;
+    // conf 只决定「挪/不挪」的混合比，不缩放位移本身。conf=0 → 纯 copy（残差在
+    // 纹素中心，无插值损失）；conf=1 → 全幅度挪。
+    float conf = 0.0;
+    float3 rShift = float3(0.0, 0.0, 0.0);
+
     if (TransferMode == 1.0) {
+        // GME 门控：幅度 < 1px 或峰值占比 < 0.5 → 不可信（conf=0，纯 copy）。
+        // 占比 0.5→0.7 渐入、幅度 1→3px 渐入（静止附近不挪，避免分数采样模糊）。
         float4 gme = GmeResult.Load(int3(0, 0, 0));
         float2 gmv = gme.xy;
-        // GME 门控（瞬降 Copy）：幅度 < 1px 或峰值占比 < 0.5 → 零位移。
-        // 占比 0.5→0.7 渐入。峰值占比低 = 运动分裂/视角剧变 = GME 不可信，
-        // 本帧立即退化为 Copy（无跨帧状态，无延迟）。
         float mag = length(gmv);
         float peak = gme.w;
-        float weight = saturate((mag - 1.0) / 2.0) * smoothstep(0.5, 0.7, peak);
-        float2 scaled = gmv * weight;
-        offset = scaled / float2(MotionExtent);
+        conf = saturate((mag - 1.0) / 2.0) * smoothstep(0.5, 0.7, peak);
+        float2 shiftedUv = clamp(uv + gmv / float2(MotionExtent),
+            float2(0.0, 0.0), float2(1.0, 1.0));
+        rShift = EvenResidual.SampleLevel(LinearClamp, shiftedUv, 0.0).rgb;
+    } else if (TransferMode == 2.0) {
+        bool usable = false;
+        float2 raw = float2(0.0, 0.0);
+        const float2 previousUv = ReprojectedUv(uv, raw, usable);
+        if (usable) {
+            float3 lo, hi;
+            if (FootprintRange(previousUv, lo, hi)) {
+                const float3 moved = SampleCatmullRom(
+                    EvenResidual, previousUv, float2(ReducedExtent));
+                if (all(isfinite(moved))) {
+                    // P2 逐像素信任：色彩方差盒（存档色 vs 当帧 3x3）乘以运动
+                    // 一致性（本像素 MV vs 重投影点处 MV）。信任低的地方不挪，
+                    // 用本像素自己的残差——宁可欠修正，也不把别的表面的残差
+                    // 拖过来（残影）。
+                    float3 mean, sigma;
+                    ColourBox(tid.xy, mean, sigma);
+                    conf = ColourTrust(previousUv, mean, sigma) *
+                        MotionTrust(previousUv, raw);
+                    rShift = clamp(moved, lo, hi);
+                }
+            }
+        }
     }
 
-    float2 shiftedUv = clamp(uv + offset,
-        float2(0.0, 0.0), float2(1.0, 1.0));
+    // 模式 2 留下 estimate 供模式 4（Fill）读取：moved detail + 信任。FillStrength=0
+    // 时模式 4 不跑，这张纹理只是白写一次。
+    if (TransferMode == 2.0) {
+        Estimate[tid.xy] = float4(rShift, conf);
+    }
+
     // 伪降噪图 = 当帧原图 + 挪过来的偶帧残差。CompositeResidual 随后算
     // (伪降噪 − 当帧原图) = 残差，底图不参与跨帧内容。
     float3 base = OddReduced.Load(int3(tid.xy, 0)).rgb;
-    float3 residual = EvenResidual.SampleLevel(LinearClamp, shiftedUv, 0.0).rgb;
+    float3 rCopy = EvenResidual.SampleLevel(LinearClamp, uv, 0.0).rgb;
+    float3 residual = lerp(rCopy, (conf > 0.0 ? rShift : rCopy), conf);
     if (!all(isfinite(base))) base = 0;
     if (!all(isfinite(residual))) residual = 0;
     Transferred[tid.xy] = float4(base + residual, 0.0);
+}
+)";
+
+// P3 Fill：被信任判据拒掉的像素在模式 2 里只能拿到「本像素自己的旧残差」（lerp
+// 回退），而那份残差在前一帧属于别的物体——快移与遮挡处会留下陈旧残差块。这里从
+// 同表面邻居借已信任的 moved detail 补上：16 个黄金角螺旋 tap，权重 = 邻居自己的
+// 信任 × 与当帧色彩方差盒的相似度（无 depth，用色彩代替上游的同表面判定）。平均
+// 本身是平滑的——给到的主要是 NR 的色调而非细节，这正是「丢区闪回未降噪画面」的
+// 解药。own 与模式 2 逐位一致，所以 FillStrength=0 时画面与 P2 完全相同。
+// 独立 shader（而非复用 TransferWarp 加 mode）是为了不在同一次 dispatch 序列里改写
+// 同一个常量缓冲。
+constexpr char RESIDUAL_FILL_HLSL[] = R"(
+Texture2D<float4> EvenResidual : register(t0);    // 偶帧残差场（own 的 copy 分支用）
+Texture2D<float4> OddReduced : register(t1);       // 当帧降采样图（底图 + 方差盒）
+Texture2D<float4> EstimateRead : register(t2);     // 模式 2 写的 moved detail + 信任
+RWTexture2D<float4> Transferred : register(u0);
+SamplerState LinearClamp : register(s0);
+
+// 与 TransferWarp 的 cbuffer 同布局（共用 transferParams11）。
+cbuffer FillParams : register(b0) {
+    uint2 ReducedExtent;
+    uint2 MotionExtent;
+    float TransferMode;
+    float MotionScale;
+    float ClipGamma;
+    float ClipFalloff;
+    float SigmaFloor;
+    float MotionReject;
+    float FillRadius;
+    float FillStrength;
+};
+
+float3 ToYCoCg(float3 c) {
+    return float3(dot(c, float3(0.25, 0.5, 0.25)),
+                  dot(c, float3(0.5, 0.0, -0.5)),
+                  dot(c, float3(-0.25, 0.5, -0.25)));
+}
+
+void ColourBox(uint2 p, out float3 mean, out float3 sigma) {
+    const int2 last = int2(ReducedExtent) - 1;
+    float3 sum = 0.0;
+    float3 sumSquares = 0.0;
+    [unroll] for (int cy = -1; cy <= 1; ++cy) {
+        [unroll] for (int cx = -1; cx <= 1; ++cx) {
+            const int2 texel = clamp(int2(p) + int2(cx, cy), int2(0, 0), last);
+            const float3 c = ToYCoCg(OddReduced.Load(int3(texel, 0)).rgb);
+            sum += c;
+            sumSquares += c * c;
+        }
+    }
+    mean = sum / 9.0;
+    sigma = max(sqrt(max(sumSquares / 9.0 - mean * mean, 0.0)),
+                max(SigmaFloor, 1e-5));
+}
+
+[numthreads(8, 8, 1)]
+void FillDropped(uint3 tid : SV_DispatchThreadID) {
+    if (any(tid.xy >= ReducedExtent)) return;
+    const uint2 p = tid.xy;
+
+    const float4 estimate = EstimateRead.Load(int3(p, 0));
+    const bool estimateOk = all(isfinite(estimate.rgb)) && isfinite(estimate.a);
+    const float trust = estimateOk ? saturate(estimate.a) : 0.0;
+
+    float3 filled = float3(0.0, 0.0, 0.0);
+    float fillAmount = 0.0;
+    if (trust < 0.999 && FillStrength > 0.0) {
+        float3 mean, sigma;
+        ColourBox(p, mean, sigma);
+        const float2 work = float2(ReducedExtent);
+        float3 sum = float3(0.0, 0.0, 0.0);
+        float weightSum = 0.0;
+        [unroll] for (int k = 0; k < 16; ++k) {
+            const float radius = lerp(2.0, max(FillRadius, 2.0),
+                sqrt((k + 0.5) / 16.0));
+            const float angle = 2.39996323 * k;
+            const int2 texel = clamp(
+                int2(p) + int2(round(radius * float2(cos(angle), sin(angle)))),
+                int2(0, 0), int2(work) - 1);
+            const float4 tap = EstimateRead.Load(int3(texel, 0));
+            if (!all(isfinite(tap.rgb)) || !isfinite(tap.a) || tap.a <= 0.0) continue;
+            const float3 tapColour = ToYCoCg(OddReduced.Load(int3(texel, 0)).rgb);
+            const float3 excess = max(abs(tapColour - mean) - ClipGamma * sigma, 0.0) / sigma;
+            const float similar = 1.0 - saturate(
+                max(excess.x, max(excess.y, excess.z)) / max(ClipFalloff, 1e-3));
+            const float weight = saturate(tap.a) * similar;
+            sum += tap.rgb * weight;
+            weightSum += weight;
+        }
+        if (weightSum > 1e-3) {
+            filled = sum / weightSum;
+            // 两个可信邻居就补满；更少则渐入（照上游 saturate(weightSum/2)）。
+            fillAmount = (1.0 - trust) * saturate(FillStrength) *
+                saturate(weightSum / 2.0);
+        }
+    }
+
+    float3 base = OddReduced.Load(int3(p, 0)).rgb;
+    const float3 rCopy = EvenResidual.SampleLevel(LinearClamp,
+        (float2(p) + 0.5) / float2(ReducedExtent), 0.0).rgb;
+    float3 residual = lerp(rCopy, estimate.rgb, trust) + filled * fillAmount;
+    if (!all(isfinite(base))) base = 0;
+    if (!all(isfinite(residual))) residual = 0;
+    Transferred[p] = float4(base + residual, 0.0);
+}
+)";
+
+// P2 逐像素信任的默认值，取自 OptiScaler DlssNr_DetailReuseConstants.h（上游同样是
+// 「出厂值、未逐游戏实测」）。它们同时决定 reuse 帧的画面与将来 Fill 的邻域窗口，
+// 要调就一次只动一个。
+constexpr float kTransferClipGamma = 1.25f;   // 色彩方差盒半宽（标准差倍数）
+constexpr float kTransferClipFalloff = 1.0f;  // 超出方盒后多远信任衰减到 0
+constexpr float kTransferSigmaFloor = 0.01f;  // 标准差下限：平坦区不因噪声被拒
+constexpr float kTransferMotionReject = 0.5f; // 运动一致性容差；0 = 关闭该项
+// Fill 的邻居搜索外半径，按 1080p 基准给、随 working size 缩放（上游同法）。
+constexpr float kTransferFillRadius1080p = 24.0f;
+
+// TransferWarp（模式 0/1/2）与 SaveEvenResidual 共用的 b0 布局。
+// 注意：UpdateSubresource 对 buffer 按 ByteWidth 整块拷贝，C++ 结构体必须与常量
+// 缓冲一样大，否则运行时会把结构体后面的栈内存一起读进去（CB 上半区变成垃圾）。
+// 两个 shader 各自声明的 cbuffer 可以比它小，只读自己用到的前几个字段。
+// 成员撑满 64 字节（16 × 4）：UpdateSubresource 对 buffer 按 ByteWidth 整块拷贝，
+// 结构体必须和缓冲一样大，靠对齐补齐不算数（那会让尾部是未初始化的填充）。
+// alignas(16) 给源数据对齐用，尺寸已是 16 的倍数，不会引入填充。
+struct alignas(16) ResidualTransferParams {
+	uint32_t reducedWidth;
+	uint32_t reducedHeight;
+	uint32_t motionWidth;
+	uint32_t motionHeight;
+	float transferMode;
+	float motionScale;
+	float clipGamma;
+	float clipFalloff;
+	float sigmaFloor;
+	float motionReject;
+	float fillRadius;
+	float fillStrength;
+	float padding0;
+	float padding1;
+	float padding2;
+	float padding3;
+};
+static_assert(sizeof(ResidualTransferParams) == 64);
+
+// P4 帧率门：渲染帧率低于阈值时暂停复用。帧间位移随帧率下降而变大，挪过去的残差
+// 偏差随之变大（拖尾）。速率按 ~0.5s 平滑；低于阈值立即停用，恢复要回升到阈值的
+// 1.15 倍——停用本身会把帧率进一步压低，没有滞回会抖。0 = 不设最低帧率。
+class TransferFrameRateGate {
+	double interval = 0.0; // 平滑后的每渲染帧秒数；0 = 还没有读数
+	bool allowed = true;
+
+public:
+	static constexpr double kResumeFactor = 1.15;
+
+	bool Update(double seconds, double minimumFps) noexcept {
+		// 超过一秒的不是帧间隔，是暂停（加载、菜单）。
+		if (seconds > 0.0 && seconds < 1.0) {
+			const double alpha = interval > 0.0 ? 1.0 - std::exp(-seconds / 0.5) : 1.0;
+			interval += (seconds - interval) * alpha;
+		}
+		if (!(minimumFps > 0.0) || interval <= 0.0) allowed = true;
+		else if (allowed && Fps() < minimumFps) allowed = false;
+		else if (!allowed && Fps() >= minimumFps * kResumeFactor) allowed = true;
+		return allowed;
+	}
+
+	double Fps() const noexcept { return interval > 0.0 ? 1.0 / interval : 0.0; }
+};
+
+// P4 运动门：「本帧有多少比例的像素没有 detail 可搬」超阈值时暂停复用。那部分是
+// 屏外新涌进来的、以及被遮挡后露出的内容——搬不过去，只能拿当帧自己的旧残差，与
+// 旁边的完整帧不一致（半帧率边缘闪烁）。读数来自 GPU 回读，有一两帧延迟；一次超
+// 阈值就挂起（单帧闪烁肉眼可见），要连续平静 kResumeAfter 秒才恢复。
+// 阈值只有一个（不像帧率门那样有恢复带）：卡在带内的占比既不足以挂起也不足以
+// 恢复，会永久锁住——而稳定中等运动恰好就在带内。
+class TransferMotionGuard {
+	bool holding = false;
+	double calm = 0.0;        // 读数保持在阈值以内的累计秒数
+	double sinceSample = 0.0; // 距上一次读数的秒数
+
+public:
+	static constexpr double kResumeAfter = 0.3;
+	static constexpr double kStale = 1.0; // 这么久没有读数：测量本身没在送达
+
+	// share: 上一帧测得的「无 detail 可搬」占比（0..1），负值 = 本帧没有新读数。
+	// maxDropped: 仍允许复用占比上限（0..1）；0 = 从不挂起。seconds: 距上次调用。
+	bool Update(float share, float maxDropped, double seconds) noexcept {
+		if (!(maxDropped > 0.0f)) {
+			holding = false;
+			calm = sinceSample = 0.0;
+			return false;
+		}
+		// 超过一帧的不是「平静」，是暂停，不能计入恢复时间（帧率门同样处理）。
+		const double step = seconds > 0.0 && seconds < 1.0 ? seconds : 0.0;
+		if (share >= 0.0f) {
+			sinceSample = 0.0;
+			if (share > maxDropped) {
+				holding = true;
+				calm = 0.0;
+			} else {
+				calm += step;
+				if (calm >= kResumeAfter) holding = false;
+			}
+		} else {
+			// 没有读数的帧保持状态；读数彻底不再送达时不永久挂着。
+			sinceSample += step;
+			if (sinceSample > kStale) {
+				holding = false;
+				calm = 0.0;
+			}
+		}
+		return holding;
+	}
+
+	bool Holding() const noexcept { return holding; }
+};
+
+// P4 运动门的覆盖率测量：一个 8x8 线程组归约一个 tile 的 (1 - trust) 之和与像素数，
+// 写进 32x32 纹理（一纹素一 tile），CPU 回读后求和。tile 恰好铺满整帧——不重不漏；
+// 帧比栅格窄时末尾 tile 为空（x0 == x1），而不是让邻居重叠（那会把某些列算两次）。
+constexpr uint32_t kTransferCoverageTiles = 32;
+constexpr char TRANSFER_COVERAGE_HLSL[] = R"(
+Texture2D<float4> EstimateRead : register(t0);
+RWTexture2D<float4> Coverage : register(u0);
+
+// 与 TransferWarp 同布局（共用 transferParams11），只用到 ReducedExtent。
+cbuffer CoverageParams : register(b0) {
+    uint2 ReducedExtent;
+    uint2 MotionExtent;
+    float TransferMode;
+    float MotionScale;
+    float ClipGamma;
+    float ClipFalloff;
+    float SigmaFloor;
+    float MotionReject;
+    float FillRadius;
+    float FillStrength;
+};
+
+groupshared float2 gCoverage[64];
+
+[numthreads(8, 8, 1)]
+void CoverageMeasure(uint3 groupId : SV_GroupID, uint3 lane : SV_GroupThreadID) {
+    const uint laneIndex = lane.y * 8u + lane.x;
+    const uint x0 = min((groupId.x * ReducedExtent.x) / 32u, ReducedExtent.x);
+    const uint x1 = min(((groupId.x + 1u) * ReducedExtent.x) / 32u, ReducedExtent.x);
+    const uint y0 = min((groupId.y * ReducedExtent.y) / 32u, ReducedExtent.y);
+    const uint y1 = min(((groupId.y + 1u) * ReducedExtent.y) / 32u, ReducedExtent.y);
+
+    float2 sum = 0.0; // (丢掉的占比之和, 测量到的像素数)
+    [loop] for (uint y = y0 + lane.y * 2u; y < y1; y += 16u) {
+        [loop] for (uint x = x0 + lane.x * 2u; x < x1; x += 16u) {
+            const float4 estimate = EstimateRead.Load(int3(x, y, 0));
+            const float trust = all(isfinite(estimate.rgb)) && isfinite(estimate.a)
+                ? saturate(estimate.a) : 0.0;
+            sum += float2(1.0 - trust, 1.0);
+        }
+    }
+
+    gCoverage[laneIndex] = sum;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll] for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (laneIndex < stride)
+            gCoverage[laneIndex] += gCoverage[laneIndex + stride];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (laneIndex == 0u)
+        Coverage[int2(groupId.xy)] = float4(gCoverage[0].x, gCoverage[0].y, 0.0, 0.0);
 }
 )";
 
@@ -1206,6 +1639,15 @@ struct DLSSNRFilter::Impl {
 	winrt::com_ptr<ID3D11Texture2D> evenResidual11;
 	winrt::com_ptr<ID3D11ShaderResourceView> evenResidualSrv11;
 	winrt::com_ptr<ID3D11UnorderedAccessView> evenResidualUav11;
+	// P2：偶帧低分辨率输入色存档（RGBA16F），奇数帧重投影时用作色彩方差盒的
+	// 「存档色」，判断挪过来的残差是否属于当前像素所在的表面。
+	winrt::com_ptr<ID3D11Texture2D> evenInput11;
+	winrt::com_ptr<ID3D11ShaderResourceView> evenInputSrv11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> evenInputUav11;
+	// P3：模式 2 写、Fill 读的 moved detail（rgb）+ 信任（a），低分辨率 RGBA16F。
+	winrt::com_ptr<ID3D11Texture2D> movedEstimate11;
+	winrt::com_ptr<ID3D11ShaderResourceView> movedEstimateSrv11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> movedEstimateUav11;
 	// Legacy 对照（residualTransferDomain=1）：旧整张降噪图 UNORM 存档。
 	winrt::com_ptr<ID3D11Texture2D> evenDenoised11;
 	winrt::com_ptr<ID3D11ShaderResourceView> evenDenoisedSrv11;
@@ -1217,6 +1659,7 @@ struct DLSSNRFilter::Impl {
 	winrt::com_ptr<ID3D11ComputeShader> transferWarpShader11;
 	winrt::com_ptr<ID3D11ComputeShader> legacyTransferWarpShader11;
 	winrt::com_ptr<ID3D11ComputeShader> saveEvenResidualShader11;
+	winrt::com_ptr<ID3D11ComputeShader> fillDroppedShader11;
 	winrt::com_ptr<ID3D11Buffer> transferParams11;
 	// GME（模式 1）：直方图 + 1x1 结果 + 两 pass。
 	winrt::com_ptr<ID3D11Buffer> gmeHistogram11;
@@ -1235,6 +1678,21 @@ struct DLSSNRFilter::Impl {
 	winrt::com_ptr<ID3D11ComputeShader> accumulateMotionShader11;
 	winrt::com_ptr<ID3D11Buffer> accumulateParams11;
 	bool motionHistoryValid = false;
+	// ---- P4 保护阀 ----
+	// 两个门都只做「整体挂起」：挂起期间本帧跑完整 NGX（与 transferBypassed 同一条
+	// 路径），于是 parity 发 -1、下一帧重新锚定配对——绝不做逐帧跳过复用的决定，
+	// 那会打乱前端 FG 的配对节奏（见下方 parity 发布处的说明）。
+	TransferFrameRateGate rateGate;
+	TransferMotionGuard motionGuard;
+	std::chrono::steady_clock::time_point lastDrawTime {};
+	float pendingDroppedShare = -1.0f; // 最近一次回读到的占比；负值 = 本帧无新读数
+	bool lastMotionHolding = false;
+	float lastDroppedShare = -1.0f;
+	// 覆盖率测量（MotionGuard 的 GPU 端）与回读暂存。
+	winrt::com_ptr<ID3D11Texture2D> coverage11;
+	winrt::com_ptr<ID3D11UnorderedAccessView> coverageUav11;
+	winrt::com_ptr<ID3D11Texture2D> coverageStaging11;
+	winrt::com_ptr<ID3D11ComputeShader> coverageShader11;
 	// 奇偶状态：true = 下一帧走转移（奇），false = 走完整 NGX（偶）。
 	bool nextFrameIsReuse = false;
 	// 最近完成帧的奇偶（0=偶,1=奇,-1=未启用/未知），供前端呈现节奏查询。
@@ -2245,7 +2703,10 @@ static bool TransferResidualToOddFrame(
 ) noexcept {
 	if ((!(settings.residualTransferDomain == 1 ?
 			impl.evenDenoised11 && impl.evenDenoisedSrv11 :
-			impl.evenResidual11 && impl.evenResidualSrv11)) ||
+			impl.evenResidual11 && impl.evenResidualSrv11 &&
+				(settings.residualTransferMode != 2 ||
+					(impl.evenInputSrv11 && impl.movedEstimateUav11 &&
+						impl.movedEstimateSrv11)))) ||
 		!impl.transferredDenoised11 || !impl.transferredDenoisedUav11 ||
 		!impl.transferredDenoisedSrv11 || !impl.linearClampSampler11 ||
 		!impl.transferWarpShader11 ||
@@ -2338,27 +2799,53 @@ static bool TransferResidualToOddFrame(
 		}
 	}
 
+	// 2b) 模式 2（逐像素重投影）准备源分辨率逐像素 MV。判据与
+	// DLSSNRTemporal::Draw 一致：格式/尺寸有效、非零、方向为「当前→上一帧」、
+	// 单位是源像素。不可用时本帧把 TransferMode 降为 0（纯 copy）——残差仍是
+	// 最新偶帧的，不因此退回完整 NGX（退回会白烧一次推理）。
+	float transferMode = float(settings.residualTransferMode);
+	winrt::com_ptr<ID3D11ShaderResourceView> denseMotionSrv;
+	if (settings.residualTransferMode == 2) {
+		const auto& motion = context.frameGuidance.motion;
+		const bool motionUsable =
+			motion.IsValid(DXGI_FORMAT_R16G16_FLOAT, context.frameId,
+				{ impl.sourceWidth, impl.sourceHeight }) &&
+			!motion.metadata.isZero &&
+			context.frameGuidance.motionDirection == FrameGuidanceMotionDirection::CurrentToPrevious &&
+			context.frameGuidance.motionUnit == FrameGuidanceMotionUnit::SourcePixels;
+		if (motionUsable) {
+			const auto sync = motion.metadata.sync;
+			if (sync.fence && sync.value && FAILED(
+				impl.context11->Wait(sync.fence, sync.value))) {
+				return false;
+			}
+			if (FAILED(impl.device11->CreateShaderResourceView(
+				motion.texture, nullptr, denseMotionSrv.put()))) {
+				return false;
+			}
+		} else {
+			transferMode = 0.0f;
+		}
+	}
+
 	// 3) 转移 warp：按 domain 二选一——
 	//   residual（默认）：evenResidual 按 MV 挪 + 当帧降采样图 → 伪降噪图（P0-1）；
 	//   legacy（对照）：evenDenoised 整张按 MV 平移重放（旧实现原样，仅 A/B）。
-	// 模式 1（逐像素 OF warp）已从 UI 移除并被 Global MV 取代；此处仅剩 GME 的
-	// 全局 MV（gmeResultSrv），模式 0 无附加输入。GME 门控 / weight 缩放保持现状。
+	// 3) 转移 warp。residual 域：mode 0 Copy / mode 1 GME 全局 MV / mode 2 逐像素
+	// 重投影；legacy 域走旧 shader（仅 A/B）。
 	{
-		struct alignas(16) TransferParams {
-			uint32_t reducedWidth;
-			uint32_t reducedHeight;
-			uint32_t motionWidth;
-			uint32_t motionHeight;
-			float transferMode;
-			float motionScale;
-			float padding0;
-			float padding1;
-		};
-		const TransferParams params{
+		// Fill 的半径随 working size 缩放：同样的屏幕尺度在任何模型分辨率下一致。
+		const float fillRadius = kTransferFillRadius1080p * std::clamp(
+			std::sqrt(float(impl.width) * float(impl.height) / (1920.0f * 1080.0f)),
+			0.5f, 2.0f);
+		const ResidualTransferParams params{
 			impl.width, impl.height,
 			impl.sourceWidth, impl.sourceHeight,
-			float(settings.residualTransferMode),
+			transferMode,
 			float(impl.width) / float(impl.sourceWidth),
+			kTransferClipGamma, kTransferClipFalloff,
+			kTransferSigmaFloor, kTransferMotionReject,
+			fillRadius, settings.residualFillStrength,
 			0.0f, 0.0f
 		};
 		impl.context11->UpdateSubresource(
@@ -2367,10 +2854,15 @@ static bool TransferResidualToOddFrame(
 			settings.residualTransferDomain == 1 ? impl.evenDenoisedSrv11.get()
 				: impl.evenResidualSrv11.get(),	// t0 存档（legacy 降噪图 / residual 残差场）
 			impl.sharedInputSrv11.get(),	// t1 当帧降采样图（residual 域伪降噪图基底）
-			nullptr,	// t2 DenseMotion：仅模式 1 使用（已移除）
-			gmeResultSrv.get()
+			denseMotionSrv.get(),	// t2 逐像素 MV（仅模式 2）
+			gmeResultSrv.get(),		// t3 全局 MV（仅模式 1）
+			impl.evenInputSrv11.get()	// t4 偶帧输入色存档（仅模式 2 色彩判定）
 		};
-		ID3D11UnorderedAccessView* uav = impl.transferredDenoisedUav11.get();
+		// u1 = estimate：模式 2 写、Fill 读；其余模式不写，一并绑上只是为了让
+		// 每个槽位都有资源（空指针绑定在部分驱动上会告警）。
+		ID3D11UnorderedAccessView* uavs[2]{
+			impl.transferredDenoisedUav11.get(), impl.movedEstimateUav11.get()
+		};
 		ID3D11Buffer* cb = impl.transferParams11.get();
 		ID3D11SamplerState* sampler = impl.linearClampSampler11.get();
 		impl.context11->CSSetShader(
@@ -2379,19 +2871,92 @@ static bool TransferResidualToOddFrame(
 				: impl.transferWarpShader11.get(), nullptr, 0);
 		impl.context11->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 		impl.context11->CSSetSamplers(0, 1, &sampler);
-		impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		impl.context11->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 		impl.context11->CSSetConstantBuffers(0, 1, &cb);
 		impl.context11->Dispatch(
 			(impl.width + 7) / 8, (impl.height + 7) / 8, 1);
+
+		// 3b) P3 Fill：读回 estimate，把信任低、只能拿到本像素旧残差的像素从同
+		// 表面邻居补上。只在 residual 域 + 真的跑了模式 2（MV 有效）+ FillStrength>0
+		// 时执行；否则画面与 P2 逐位一致。
+		if (settings.residualTransferDomain != 1 && transferMode == 2.0f &&
+			settings.residualFillStrength > 0.0f &&
+			impl.fillDroppedShader11 && impl.movedEstimateSrv11) {
+			ID3D11ShaderResourceView* fillSrvs[]{
+				impl.evenResidualSrv11.get(),	// t0 own 的 copy 分支
+				impl.sharedInputSrv11.get(),	// t1 底图 + 色彩方差盒
+				impl.movedEstimateSrv11.get()	// t2 estimate
+			};
+			// 必须把 u1 也设为 nullptr：estimate 此刻作为 SRV 绑定，同一个资源
+			// 不能同时挂在 UAV 槽上。
+			ID3D11UnorderedAccessView* fillUavs[2]{
+				impl.transferredDenoisedUav11.get(), nullptr
+			};
+			impl.context11->CSSetShader(impl.fillDroppedShader11.get(), nullptr, 0);
+			impl.context11->CSSetShaderResources(0, ARRAYSIZE(fillSrvs), fillSrvs);
+			impl.context11->CSSetUnorderedAccessViews(
+				0, ARRAYSIZE(fillUavs), fillUavs, nullptr);
+			impl.context11->Dispatch(
+				(impl.width + 7) / 8, (impl.height + 7) / 8, 1);
+		}
+
 		ID3D11ShaderResourceView* nullSrvs[ARRAYSIZE(srvs)]{};
 		ID3D11SamplerState* nullSampler = nullptr;
-		ID3D11UnorderedAccessView* nullUav = nullptr;
+		ID3D11UnorderedAccessView* nullUavs[ARRAYSIZE(uavs)]{};
 		ID3D11Buffer* nullBuffer = nullptr;
 		impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 		impl.context11->CSSetSamplers(0, 1, &nullSampler);
-		impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		impl.context11->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
 		impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
 		impl.context11->CSSetShader(nullptr, nullptr, 0);
+
+		// P4 MotionGuard：测量「本帧有多少比例的像素没有 detail 可搬」，回读给运动门。
+		// 只在模式 2 真的跑过（estimate 是新的）且门开着时做。
+		if (transferMode == 2.0f && settings.residualMaxDropped > 0.0f &&
+			impl.coverageShader11 && impl.coverage11 && impl.coverageUav11 &&
+			impl.coverageStaging11 && impl.movedEstimateSrv11) {
+			ID3D11ShaderResourceView* covSrvs[]{ impl.movedEstimateSrv11.get() };
+			// u1 必须显式解绑：estimate 此刻挂在 t0 上，同一资源不能再留在 UAV 槽。
+			ID3D11UnorderedAccessView* covUavs[2]{ impl.coverageUav11.get(), nullptr };
+			impl.context11->CSSetShader(impl.coverageShader11.get(), nullptr, 0);
+			impl.context11->CSSetShaderResources(0, ARRAYSIZE(covSrvs), covSrvs);
+			impl.context11->CSSetUnorderedAccessViews(
+				0, ARRAYSIZE(covUavs), covUavs, nullptr);
+			impl.context11->Dispatch(
+				kTransferCoverageTiles, kTransferCoverageTiles, 1);
+			impl.context11->CopyResource(
+				impl.coverageStaging11.get(), impl.coverage11.get());
+			ID3D11ShaderResourceView* nullCovSrvs[ARRAYSIZE(covSrvs)]{};
+			ID3D11UnorderedAccessView* nullCovUavs[ARRAYSIZE(covUavs)]{};
+			impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullCovSrvs), nullCovSrvs);
+			impl.context11->CSSetUnorderedAccessViews(
+				0, ARRAYSIZE(nullCovUavs), nullCovUavs, nullptr);
+			impl.context11->CSSetShader(nullptr, nullptr, 0);
+
+			// 回读不等待 GPU：拿到的可能是上一两帧的读数，对占比这种慢变量足够，
+			// 而且绝不阻塞渲染线程。
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (SUCCEEDED(impl.context11->Map(impl.coverageStaging11.get(), 0,
+				D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)) && mapped.pData) {
+				const float* row = static_cast<const float*>(mapped.pData);
+				double dropped = 0.0;
+				double measured = 0.0;
+				for (uint32_t y = 0; y < kTransferCoverageTiles; ++y) {
+					const float* texel = row;
+					for (uint32_t x = 0; x < kTransferCoverageTiles; ++x, texel += 4) {
+						dropped += texel[0];
+						measured += texel[1];
+					}
+					row += mapped.RowPitch / sizeof(float);
+				}
+				impl.context11->Unmap(impl.coverageStaging11.get(), 0);
+				if (measured > 0.0) {
+					const float share = static_cast<float>(dropped / measured);
+					impl.pendingDroppedShare = share;
+					impl.lastDroppedShare = share;
+				}
+			}
+		}
 	}
 
 	// 4) 复用现有残差合成：PrepareResidual(当帧降采样, 转移结果) 计算
@@ -2794,8 +3359,14 @@ EffectParameterApplyMode DLSSNRFilter::GetParameterApplyMode(
 	// 复位），domain 切换改变存档纹理格式与整个奇帧合成语义；且 Live 路径与
 	// 参数会话的 APPLIED 快照交互会在桌面 UI 上把旧值弹回（实测选 Global MV
 	// 立即回退 Copy）。重启路径资源全量重建，语义干净。
+	// residualMinFps / residualMaxDropped（P4 两个保护阀）走同一条路：它们本是
+	// Live，但实测同样存不住——config.json 里键在、值却一直是默认 0，且日志里
+	// 既无 Live 更新被拒也无冲突记录，症状与上面两个参数当年一致，故同样改为
+	// 重启生效（改动后需点悬浮层的「应用并重启」）。
 	if (parameterName == "residualTransferMode" ||
-		parameterName == "residualTransferDomain") {
+		parameterName == "residualTransferDomain" ||
+		parameterName == "residualMinFps" ||
+		parameterName == "residualMaxDropped") {
 		return EffectParameterApplyMode::RestartRequired;
 	}
 	// 其余残差参数（基础 + 上游 Oklab 保护/增益/debug）走统一判定表。
@@ -3257,7 +3828,7 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
 		"reflectionGlowMultiplier={} preset=fixed-0 "
 		"style={} intensity={} localTone={} localStructure={} skinStructure={} "
 		"opticalFlowMethod={} opticalFlowQuality={} autoMask={} uiCorrection={} depth=zero-contract "
-		"residualTransfer={} transferMode={} transferDomain={} disabled=false "
+		"residualTransfer={} transferMode={} transferDomain={} {} disabled=false "
 		"experimentalHdrPath={} experimentalHdrScale={}",
 		ENABLE_CORE_FEATURE18_DIAGNOSTIC ? "core-diagnostic" : "signed-snippet",
 		impl->sourceWidth, impl->sourceHeight, static_cast<uint32_t>(inputDesc.Format),
@@ -3278,8 +3849,10 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
 		static_cast<uint32_t>(_settings.motionRequest.quality),
 		_settings.useAutoMask, _settings.uiCorrection,
 		_settings.enableFrameReuse,
-		_settings.residualTransferMode == 0 ? "copy" : "global-mv",
+		_settings.residualTransferMode == 0 ? "copy"
+			: _settings.residualTransferMode == 1 ? "global-mv" : "reproject",
 		_settings.residualTransferDomain == 1 ? "legacy-denoised" : "residual",
+		fmt::format("fill={:.2f}", _settings.residualFillStrength),
 		impl->experimentalHdrPath, impl->experimentalHdrScale));
 
 	// 残差转移资源。任何一步失败仅禁用该功能（退回纯 NGX），不炸初始化。
@@ -3313,6 +3886,24 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
 			impl->evenResidual11 = nullptr;
 			impl->evenResidualSrv11 = nullptr;
 			impl->evenResidualUav11 = nullptr;
+			impl->evenInput11 = nullptr;
+			impl->evenInputSrv11 = nullptr;
+			impl->evenInputUav11 = nullptr;
+			impl->movedEstimate11 = nullptr;
+			impl->movedEstimateSrv11 = nullptr;
+			impl->movedEstimateUav11 = nullptr;
+			impl->fillDroppedShader11 = nullptr;
+			impl->coverage11 = nullptr;
+			impl->coverageUav11 = nullptr;
+			impl->coverageStaging11 = nullptr;
+			impl->coverageShader11 = nullptr;
+			impl->pendingDroppedShare = -1.0f;
+			impl->lastDroppedShare = -1.0f;
+			impl->lastMotionHolding = false;
+			impl->lastDrawTime = {};
+			// 门的状态跨重建无意义：新的尺寸/资源下重新开始测。
+			impl->rateGate = TransferFrameRateGate{};
+			impl->motionGuard = TransferMotionGuard{};
 			impl->evenDenoised11 = nullptr;
 			impl->evenDenoisedSrv11 = nullptr;
 			impl->transferredDenoised11 = nullptr;
@@ -3368,6 +3959,64 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
 			}
 		}
 		if (SUCCEEDED(localHr)) {
+			impl->evenInput11 = DirectXHelper::CreateTexture2D(
+				impl->device11, DXGI_FORMAT_R16G16B16A16_FLOAT,
+				impl->width, impl->height, rtBind);
+			if (impl->evenInput11) {
+				localHr = impl->device11->CreateShaderResourceView(
+					impl->evenInput11.get(), nullptr,
+					impl->evenInputSrv11.put());
+				if (SUCCEEDED(localHr)) {
+					localHr = impl->device11->CreateUnorderedAccessView(
+						impl->evenInput11.get(), nullptr,
+						impl->evenInputUav11.put());
+				}
+			} else {
+				localHr = E_FAIL;
+			}
+		}
+		if (SUCCEEDED(localHr)) {
+			impl->movedEstimate11 = DirectXHelper::CreateTexture2D(
+				impl->device11, DXGI_FORMAT_R16G16B16A16_FLOAT,
+				impl->width, impl->height, rtBind);
+			if (impl->movedEstimate11) {
+				localHr = impl->device11->CreateShaderResourceView(
+					impl->movedEstimate11.get(), nullptr,
+					impl->movedEstimateSrv11.put());
+				if (SUCCEEDED(localHr)) {
+					localHr = impl->device11->CreateUnorderedAccessView(
+						impl->movedEstimate11.get(), nullptr,
+						impl->movedEstimateUav11.put());
+				}
+			} else {
+				localHr = E_FAIL;
+			}
+		}
+		if (SUCCEEDED(localHr)) {
+			D3D11_TEXTURE2D_DESC coverageDesc{};
+			coverageDesc.Width = kTransferCoverageTiles;
+			coverageDesc.Height = kTransferCoverageTiles;
+			coverageDesc.MipLevels = 1;
+			coverageDesc.ArraySize = 1;
+			coverageDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+			coverageDesc.SampleDesc.Count = 1;
+			coverageDesc.Usage = D3D11_USAGE_DEFAULT;
+			coverageDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+			localHr = impl->device11->CreateTexture2D(
+				&coverageDesc, nullptr, impl->coverage11.put());
+			if (SUCCEEDED(localHr)) {
+				localHr = impl->device11->CreateUnorderedAccessView(
+					impl->coverage11.get(), nullptr, impl->coverageUav11.put());
+			}
+			coverageDesc.Usage = D3D11_USAGE_STAGING;
+			coverageDesc.BindFlags = 0;
+			coverageDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			if (SUCCEEDED(localHr)) {
+				localHr = impl->device11->CreateTexture2D(
+					&coverageDesc, nullptr, impl->coverageStaging11.put());
+			}
+		}
+		if (SUCCEEDED(localHr)) {
 			impl->transferredDenoised11 = DirectXHelper::CreateTexture2D(
 				impl->device11, DXGI_FORMAT_R16G16B16A16_FLOAT,
 				impl->width, impl->height, rtBind);
@@ -3392,12 +4041,18 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
 				"DLSSNRTransferWarpLegacy", impl->legacyTransferWarpShader11) ||
 			!CreateComputeShader(
 				*impl, SAVE_EVEN_RESIDUAL_HLSL, "SaveEvenResidual",
-				"DLSSNREvenResidual", impl->saveEvenResidualShader11))) {
+				"DLSSNREvenResidual", impl->saveEvenResidualShader11) ||
+			!CreateComputeShader(
+				*impl, RESIDUAL_FILL_HLSL, "FillDropped",
+				"DLSSNRFillDropped", impl->fillDroppedShader11) ||
+			!CreateComputeShader(
+				*impl, TRANSFER_COVERAGE_HLSL, "CoverageMeasure",
+				"DLSSNRCoverage", impl->coverageShader11))) {
 			localHr = E_FAIL;
 		}
 		if (SUCCEEDED(localHr)) {
 			D3D11_BUFFER_DESC transferParamsDesc{};
-			transferParamsDesc.ByteWidth = 32;
+			transferParamsDesc.ByteWidth = 64;
 			transferParamsDesc.Usage = D3D11_USAGE_DEFAULT;
 			transferParamsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			localHr = impl->device11->CreateBuffer(
@@ -3498,8 +4153,12 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
 			failTransfer("Create DLSSNR residual transfer resources failed");
 		} else {
 			Logger::Get().Info(fmt::format(
-				"DLSSNR residual transfer enabled: mode={} domain={} (0=copy 1=gme, domain 0=residual 1=legacy)",
-				_settings.residualTransferMode, _settings.residualTransferDomain));
+				"DLSSNR residual transfer enabled: mode={} domain={} fill={:.2f} "
+				"minFps={:.0f} maxDropped={:.0f}% "
+				"(0=copy 1=gme 2=reproject, domain 0=residual 1=legacy, gates 0=off)",
+				_settings.residualTransferMode, _settings.residualTransferDomain,
+				_settings.residualFillStrength, _settings.residualMinFps,
+				_settings.residualMaxDropped));
 		}
 	}
 	_impl = std::move(impl);
@@ -3602,6 +4261,37 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	if (context.captureTimestamp100ns > 0) {
 		impl.lastCaptureTimestamp100ns = context.captureTimestamp100ns;
 	}
+
+	// P4 保护阀：每个渲染帧推进一次（不是每对帧，否则测到的是配对周期而非帧
+	// 周期），两帧共用一个「是否挂起」的结论。挂起 = 本帧跑完整 NGX，与
+	// transferBypassed 走同一条路，parity 会按既有逻辑发 -1 并重新锚定配对。
+	bool reuseSuspended = impl.transferBypassed;
+	if (_settings.enableFrameReuse && count == 1 && impl.useResolutionScaling) {
+		const auto gateNow = std::chrono::steady_clock::now();
+		double sinceLastDraw = 0.0;
+		if (impl.lastDrawTime.time_since_epoch().count() != 0) {
+			sinceLastDraw = std::chrono::duration<double>(
+				gateNow - impl.lastDrawTime).count();
+		}
+		impl.lastDrawTime = gateNow;
+		const bool rateAllowed =
+			impl.rateGate.Update(sinceLastDraw, _settings.residualMinFps);
+		const float maxDropped = std::clamp(
+			_settings.residualMaxDropped, 0.0f, 50.0f) / 100.0f;
+		const float share = impl.pendingDroppedShare;
+		impl.pendingDroppedShare = -1.0f;
+		const bool motionHolding = impl.motionGuard.Update(share, maxDropped, sinceLastDraw);
+		reuseSuspended = reuseSuspended || !rateAllowed || motionHolding;
+		if (motionHolding != impl.lastMotionHolding) {
+			impl.lastMotionHolding = motionHolding;
+			Logger::Get().Info(fmt::format(
+				"Residual transfer motion gate: {} (last measured {:.1f}% of the "
+				"picture had no detail to move, threshold {:.1f}%)",
+				motionHolding ? "paused" : "resumed",
+				100.0f * std::max(impl.lastDroppedShare, 0.0f),
+				100.0f * maxDropped));
+		}
+	}
 	// 残差转移（Frame Reuse）：奇数帧跳过 NGX，把偶帧残差（运动补偿后）贴到
 	// 奇帧新画面上。任何一步失败退回完整 NGX 路径（下一帧仍当偶数帧）。
 	// 自适应旁路：NGX 赶得上源节奏（源跑得动,如 30fps 视频）时跳过转移,
@@ -3633,7 +4323,7 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 					ngxMs, sourceMs * 0.95));
 			}
 		}
-		if (!impl.transferBypassed && TransferResidualToOddFrame(
+		if (!reuseSuspended && TransferResidualToOddFrame(
 			impl, context, _settings, context.input, context.output)) {
 		impl.resetHistory = false;
 		impl.nextFrameIsReuse = false;
@@ -3890,61 +4580,56 @@ bool DLSSNRFilter::Draw(const NativeEffectDrawContext& context) noexcept {
 	// 边界检查（奇帧 warp 会再次覆盖同一 buffer）。
 	if (_settings.enableFrameReuse && count == 1 && impl.useResolutionScaling &&
 		!impl.disabled &&
-		(_settings.residualTransferDomain == 1 ?
-			bool(impl.evenDenoised11) :
-			bool(impl.evenResidual11 && impl.evenResidualUav11 &&
-				impl.saveEvenResidualShader11 && impl.transferParams11))) {
+			(_settings.residualTransferDomain == 1 ?
+				bool(impl.evenDenoised11) :
+				bool(impl.evenResidual11 && impl.evenResidualUav11 &&
+					impl.evenInputUav11 &&
+					impl.saveEvenResidualShader11 && impl.transferParams11))) {
 		if (_settings.residualTransferDomain == 1) {
 			// Legacy 对照：整张降噪图直接 Copy（旧实现）。
 			impl.context11->CopyResource(
 				impl.evenDenoised11.get(), impl.sharedOutput11.get());
 		} else {
-		struct alignas(16) SaveParams {
-			uint32_t reducedWidth;
-			uint32_t reducedHeight;
-			uint32_t motionWidth;
-			uint32_t motionHeight;
-			float transferMode;
-			float motionScale;
-			float padding0;
-			float padding1;
-		};
-		const SaveParams params{
+		const ResidualTransferParams params{
 			impl.width, impl.height,
 			impl.sourceWidth, impl.sourceHeight,
 			float(_settings.residualTransferMode),
 			float(impl.width) / float(impl.sourceWidth),
-			0.0f, 0.0f
+			kTransferClipGamma, kTransferClipFalloff,
+			kTransferSigmaFloor, kTransferMotionReject,
+			0.0f, 0.0f, 0.0f, 0.0f
 		};
 		impl.context11->UpdateSubresource(
 			impl.transferParams11.get(), 0, nullptr, &params, 0, 0);
 		ID3D11ShaderResourceView* srvs[]{
 			impl.sharedOutputSrv11.get(), impl.sharedInputSrv11.get()
 		};
-		ID3D11UnorderedAccessView* uav = impl.evenResidualUav11.get();
+		ID3D11UnorderedAccessView* uavs[]{
+			impl.evenResidualUav11.get(), impl.evenInputUav11.get()
+		};
 		ID3D11Buffer* cb = impl.transferParams11.get();
 		impl.context11->CSSetShader(impl.saveEvenResidualShader11.get(), nullptr, 0);
 		impl.context11->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-		impl.context11->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		impl.context11->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 		impl.context11->CSSetConstantBuffers(0, 1, &cb);
 		impl.context11->Dispatch(
 			(impl.width + 7) / 8, (impl.height + 7) / 8, 1);
 		ID3D11ShaderResourceView* nullSrvs[ARRAYSIZE(srvs)]{};
-		ID3D11UnorderedAccessView* nullUav = nullptr;
+		ID3D11UnorderedAccessView* nullUavs[ARRAYSIZE(uavs)]{};
 		ID3D11Buffer* nullBuffer = nullptr;
 		impl.context11->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
-		impl.context11->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		impl.context11->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
 		impl.context11->CSSetConstantBuffers(0, 1, &nullBuffer);
 		impl.context11->CSSetShader(nullptr, nullptr, 0);
 		}
 		// parity 语义：0=复用配对的偶帧（FG pair 节奏化按 2M 铺帧）；-1=不参与
-		// 复用。旁路（transferBypassed）期间本帧虽跑完整 NGX，但下一帧仍完整
-		// 跑 NGX（nextFrameIsReuse 保持 false），不构成配对——此时发 0 会让 FG
-		// 把每个呈现间隔都当「锚定组」前半挤 2 帧、后半空 0.5T，交替 stutter。
-		// 发 -1 则 FG 全旁路（pair/hold 均不触发），由后端自节奏消化；恢复
-		// 转移后的第一个偶帧 parity=0 重新锚定配对周期。
-		impl.lastDrawParity = impl.transferBypassed ? -1 : 0;
-		if (!impl.transferBypassed) {
+		// 复用。挂起期间（transferBypassed，或 P4 的帧率门/运动门）本帧虽跑完整
+		// NGX，但下一帧仍完整跑 NGX（nextFrameIsReuse 保持 false），不构成配对
+		// ——此时发 0 会让 FG 把每个呈现间隔都当「锚定组」前半挤 2 帧、后半空
+		// 0.5T，交替 stutter。发 -1 则 FG 全旁路（pair/hold 均不触发），由后端
+		// 自节奏消化；恢复转移后的第一个偶帧 parity=0 重新锚定配对周期。
+		impl.lastDrawParity = reuseSuspended ? -1 : 0;
+		if (!reuseSuspended) {
 			impl.nextFrameIsReuse = true;
 		}
 	} else {

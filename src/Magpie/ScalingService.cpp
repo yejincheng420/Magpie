@@ -793,8 +793,41 @@ void ScalingService::_HandleEffectParametersRequest(
 			NormalizeDLSSNRDetailParameters(destination.parameters);
 		}
 		if (!MergeEffectParameterChanges(destination.parameters, before, after)) {
+			// 诊断：三方合并的冲突条件是「本批改动的键」在 before 与磁盘两侧的
+			// 存在性/值不一致。逐键打出来，一眼能看出是哪个参数把整批拖下水
+			//（合并是原子的，一个冲突整批拒绝）。
+			for (const auto& [name, value] : after) {
+				const auto old = before.find(name);
+				if (old != before.end() && old->second == value) continue;
+				const auto existing = destination.parameters.find(name);
+				const std::string beforeText = old == before.end()
+					? std::string("absent") : fmt::format("{:.6g}", old->second);
+				const std::string currentText = existing == destination.parameters.end()
+					? std::string("absent") : fmt::format("{:.6g}", existing->second);
+				Logger::Get().Warn(fmt::format(
+					"Effect parameter merge rejected: effect={} param={} before={} "
+					"current={} new={:.6g}",
+					StrHelper::UTF16ToUTF8(destination.name),
+					StrHelper::UTF16ToUTF8(name), beforeText, currentText, value));
+			}
 			fail(EffectParametersSaveError::Conflict);
 			return;
+		}
+		// 诊断：确认「UI 编辑 → 配置文件」这条路真的走通了。
+		{
+			std::string written;
+			for (const auto& [name, value] : after) {
+				const auto old = before.find(name);
+				if (old != before.end() && old->second == value) continue;
+				const auto existing = destination.parameters.find(name);
+				if (existing != destination.parameters.end() && existing->second == value) continue;
+				if (!written.empty()) written += ", ";
+				written += fmt::format("{}={:.6g}", StrHelper::UTF16ToUTF8(name), value);
+			}
+			if (!written.empty()) {
+				Logger::Get().Info(fmt::format("Effect parameters persisted: effect={} {}",
+					StrHelper::UTF16ToUTF8(destination.name), written));
+			}
 		}
 	}
 	mode.effects = std::move(merged);

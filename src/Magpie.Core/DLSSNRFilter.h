@@ -39,12 +39,26 @@ struct DLSSNRSettings {
 	// 新捕获上。奇数帧是真实的新画面（可与帧生成叠加），NGX 开销减半。
 	// 残差与噪点独立随机，转移后奇帧噪点幅度约 √2 倍（比无 DLSSNR 干净一半）。
 	// residualTransferMode: 0 = Copy(不挪) 1 = Global MV(全帧单向量挪)
+	//   2 = Reproject(逐像素 MV 反向重投影 + Catmull-Rom + 2x2 footprint clamp)
 	// residualTransferDomain: 0 = Residual(P0-1 残差域，转移 evenDenoised−
 	//   evenInput 的有符号残差场，底图恒为当帧原图) 1 = Legacy Denoised
 	//   (旧「整张降噪图重放」实现，仅作 A/B 对照；残影 ∝ 帧间整幅变化)。
 	bool enableFrameReuse = false;
 	uint32_t residualTransferMode = 0;
 	uint32_t residualTransferDomain = 0;
+	// P3 Fill：模式 2 下，被信任判据拒掉的像素从同表面邻居借已信任的残差补上
+	// （0 = 关闭，画面与 P2 逐位一致；1 = 两个可信邻居就补满）。
+	// 默认 0：无 depth 时「同表面」只能用色彩近似，软阴影/渐变上会把邻区的色调
+	// 搬进来（阴影移位、发白）——实测 fill>0 反而更差，故默认关闭、保留旋钮。
+	float residualFillStrength = 0.0f;
+	// P4 保护阀（各自独立，0 = 关闭该项）。
+	// 渲染帧率低于此值时暂停复用：帧间位移随帧率下降变大，挪过去的残差偏差随之
+	// 变大（拖尾）。0 = 不设最低帧率。
+	float residualMinFps = 0.0f;
+	// 「本帧没有 detail 可搬」的像素占比（百分数）超过此值时暂停复用：那是屏外
+	// 新涌入与被遮挡后露出的内容，只能拿当帧旧残差，与旁边的完整帧不一致（半帧率
+	// 边缘闪烁）。0 = 从不暂停，且不做 GPU 回读。
+	float residualMaxDropped = 0.0f;
 	// 上游 0.6.7 统一的光流请求（取代旧 motionVectorQuality NVIDIA 单选）：
 	// 支持 AMD OF / NVIDIA OF 双通道，含旧键迁移（useMotionVectors/motionVectorQuality）。
 	MotionVectorRequest motionRequest{};

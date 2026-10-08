@@ -1372,7 +1372,18 @@ void OverlayDrawer::_SyncEffectParameterValues() noexcept {
 			};
 			_appliedEffectParameterValues[i][j] = value(applied);
 			const float target = value(desired);
-			if (!ParameterValuesEqual(target, _submittedEffectParameterValues[i][j])) {
+			// 只在「三份都一致」（草稿 == 已提交 == 已应用）时才把 desired 拉进
+			// 草稿。否则会把用户刚编辑、或已提交但后端还没应用的值打回旧值——
+			// 重启类参数（RestartRequired）尤其明显：提交后会话重启期间
+			// desired 会被 Applied()（后端实际持有的值）替换，旧值就把草稿
+			// 覆盖了，表现为「改了存不住、偶尔又能存进去」。desired 里缺这个
+			// 键时 value() 会回落到默认值，同样会误覆盖，所以这里必须保守。
+			const bool settled =
+				ParameterValuesEqual(_draftEffectParameterValues[i][j],
+					_submittedEffectParameterValues[i][j]) &&
+				ParameterValuesEqual(_submittedEffectParameterValues[i][j],
+					_appliedEffectParameterValues[i][j]);
+			if (settled && !ParameterValuesEqual(target, _submittedEffectParameterValues[i][j])) {
 				_draftEffectParameterValues[i][j] = target;
 				_submittedEffectParameterValues[i][j] = target;
 			}
